@@ -1,0 +1,14 @@
+bin/
+tmp/
+*.exe
+*.test
+*.out
+*.log
+.gateway_run.env
+fix-gateway-sessions/
+**/fix-gateway-sessions/
+.git/
+.gitignore
+*.md
+scripts/
+start_gateway.bat

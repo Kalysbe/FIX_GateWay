@@ -1,0 +1,29 @@
+# Dependencies & build
+node_modules/
+dist/
+*.exe
+*.test
+*.out
+coverage.out
+
+# Secrets & local env
+.env
+.env.local
+.env.*.local
+!**/.env.example
+deploy/.env
+backend/.gateway_run.env
+
+# IDE / OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Runtime
+backend/tmp/
+backend/bin/
+**/fix-gateway-sessions/
+*.log
+gateway.out.log

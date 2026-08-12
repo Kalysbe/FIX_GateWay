@@ -1,0 +1,291 @@
+package arqa
+
+import (
+	"fmt"
+	"log/slog"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"github.com/fix-gateway/backend/internal/domain"
+	"github.com/quickfixgo/enum"
+	"github.com/quickfixgo/field"
+	"github.com/quickfixgo/quickfix"
+	"github.com/quickfixgo/tag"
+)
+
+type sessionApp struct {
+	adapterID string
+	log       *slog.Logger
+	onExec    domain.ExecutionHandler
+
+	mu         sync.RWMutex
+	loggedOn   atomic.Bool
+	sessionID  quickfix.SessionID
+	hasSession atomic.Bool
+	lastError  atomic.Value
+	msgSent    atomic.Int64
+	msgRecv    atomic.Int64
+	errCount   atomic.Int64
+	pendingRaw map[string]string // ClOrdID → outbound wire (captured in ToApp)
+
+	secDefMu   sync.Mutex
+	secDefWait *secDefWaiter
+}
+
+func newSessionApp(adapterID string, log *slog.Logger, onExec domain.ExecutionHandler) *sessionApp {
+	a := &sessionApp{
+		adapterID:  adapterID,
+		log:        log,
+		onExec:     onExec,
+		pendingRaw: map[string]string{},
+	}
+	a.lastError.Store("")
+	return a
+}
+
+func (a *sessionApp) OnCreate(sessionID quickfix.SessionID) {
+	a.mu.Lock()
+	a.sessionID = sessionID
+	a.mu.Unlock()
+	a.hasSession.Store(true)
+	a.log.Info("fix session created", "adapter_id", a.adapterID, "session", sessionID.String())
+}
+
+func (a *sessionApp) OnLogon(sessionID quickfix.SessionID) {
+	a.loggedOn.Store(true)
+	a.log.Info("fix session logon", "adapter_id", a.adapterID, "session", sessionID.String())
+}
+
+func (a *sessionApp) OnLogout(sessionID quickfix.SessionID) {
+	a.loggedOn.Store(false)
+	a.log.Info("fix session logout", "adapter_id", a.adapterID, "session", sessionID.String())
+}
+
+func (a *sessionApp) ToAdmin(msg *quickfix.Message, sessionID quickfix.SessionID) {}
+func (a *sessionApp) ToApp(msg *quickfix.Message, sessionID quickfix.SessionID) error {
+	clOrdID, err := msg.Body.GetString(tag.ClOrdID)
+	if err == nil && clOrdID != "" {
+		a.mu.Lock()
+		a.pendingRaw[clOrdID] = formatWireFIX(msg)
+		a.mu.Unlock()
+	}
+	return nil
+}
+
+func (a *sessionApp) FromAdmin(msg *quickfix.Message, sessionID quickfix.SessionID) quickfix.MessageRejectError {
+	return nil
+}
+
+func (a *sessionApp) FromApp(msg *quickfix.Message, sessionID quickfix.SessionID) quickfix.MessageRejectError {
+	a.msgRecv.Add(1)
+	msgType, err := msg.MsgType()
+	if err != nil {
+		return err
+	}
+	switch msgType {
+	case string(enum.MsgType_EXECUTION_REPORT):
+		a.handleExecutionReport(msg)
+	case string(enum.MsgType_ORDER_CANCEL_REJECT):
+		a.log.Warn("order cancel reject", "adapter_id", a.adapterID, "msg", sanitizeFIX(msg))
+	case string(enum.MsgType_SECURITY_DEFINITION):
+		a.handleSecurityDefinition(msg)
+	default:
+		a.log.Info("unhandled fix app message", "adapter_id", a.adapterID, "msg_type", msgType)
+	}
+	return nil
+}
+
+func (a *sessionApp) handleExecutionReport(msg *quickfix.Message) {
+	if a.onExec == nil {
+		return
+	}
+	get := func(t quickfix.Tag) string {
+		v, err := msg.Body.GetString(t)
+		if err != nil {
+			return ""
+		}
+		return v
+	}
+	a.onExec(domain.ExecutionReport{
+		AdapterID:    a.adapterID,
+		ClOrdID:      get(tag.ClOrdID),
+		OrderID:      get(tag.OrderID),
+		ExecID:       get(tag.ExecID),
+		ExecType:     get(tag.ExecType),
+		OrdStatus:    get(tag.OrdStatus),
+		LastQty:      get(tag.LastQty),
+		LastPx:       get(tag.LastPx),
+		CumQty:       get(tag.CumQty),
+		LeavesQty:    get(tag.LeavesQty),
+		Text:         get(tag.Text),
+		OrdRejReason: get(tag.OrdRejReason),
+		RawFIX:       formatWireFIX(msg),
+	})
+}
+
+func (a *sessionApp) send(msg *quickfix.Message) (string, error) {
+	if !a.loggedOn.Load() {
+		return "", fmt.Errorf("session not logged on")
+	}
+	clOrdID, _ := msg.Body.GetString(tag.ClOrdID)
+	a.mu.RLock()
+	sid := a.sessionID
+	a.mu.RUnlock()
+	if err := quickfix.SendToTarget(msg, sid); err != nil {
+		a.errCount.Add(1)
+		a.lastError.Store(err.Error())
+		return "", err
+	}
+	a.msgSent.Add(1)
+	raw := a.takeSentRaw(clOrdID)
+	if raw == "" {
+		raw = formatWireFIX(msg)
+	}
+	return raw, nil
+}
+
+func (a *sessionApp) takeSentRaw(clOrdID string) string {
+	if clOrdID == "" {
+		return ""
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	raw := a.pendingRaw[clOrdID]
+	delete(a.pendingRaw, clOrdID)
+	return raw
+}
+
+func (a *sessionApp) isLoggedOn() bool { return a.loggedOn.Load() }
+
+// formatWireFIX renders a FIX message as tag=value pairs separated by | (SOH replaced).
+func formatWireFIX(msg *quickfix.Message) string {
+	s := strings.ReplaceAll(msg.String(), "\x01", "|")
+	s = strings.TrimRight(s, "|")
+	if s != "" && !strings.HasSuffix(s, "|") {
+		s += "|"
+	}
+	return s
+}
+
+func sanitizeFIX(msg *quickfix.Message) string {
+	s := formatWireFIX(msg)
+	if len(s) > 500 {
+		return s[:500]
+	}
+	return s
+}
+
+// buildNewOrderSingle builds MsgType=D with the ARQA wire tag set:
+// 11, 21, 54, 60, 40, 44, 38, 1, 22=8, 48, 100, 15, 59, 109, 5018 (35 in header).
+// No Symbol (55) / SecurityExchange (207) — class code goes in ExDestination (100).
+func buildNewOrderSingle(clOrdID, account, clientID, firm, symbol, board, side, ordType, qty, price, tif, currency string) *quickfix.Message {
+	msg := quickfix.NewMessage()
+	msg.Header.SetField(tag.MsgType, field.NewMsgType(enum.MsgType_ORDER_SINGLE))
+	msg.Body.Set(field.NewClOrdID(clOrdID))
+	msg.Body.Set(field.NewHandlInst(enum.HandlInst_AUTOMATED_EXECUTION_ORDER_PRIVATE_NO_BROKER_INTERVENTION))
+	msg.Body.Set(field.NewSide(mapSide(side)))
+	msg.Body.Set(field.NewTransactTimeNoMillis(time.Now().UTC()))
+	msg.Body.Set(field.NewOrdType(mapOrdType(ordType)))
+	if ordType == "LIMIT" && price != "" {
+		msg.Body.SetString(tag.Price, price)
+	}
+	msg.Body.SetString(tag.OrderQty, qty)
+	msg.Body.Set(field.NewAccount(account))
+	// ARQA sample: SecurityIDSource=8 (Exchange Symbol) even for ISIN-shaped codes.
+	msg.Body.Set(field.NewSecurityIDSource(enum.SecurityIDSource_EXCHANGE_SYMBOL))
+	msg.Body.Set(field.NewSecurityID(symbol))
+	if board != "" {
+		msg.Body.SetString(tag.ExDestination, board)
+	}
+	if currency != "" {
+		msg.Body.Set(field.NewCurrency(currency))
+	}
+	msg.Body.Set(field.NewTimeInForce(mapTIF(tif)))
+	if clientID != "" {
+		msg.Body.Set(field.NewClientID(clientID))
+	}
+	if firm != "" {
+		// ARQA custom: firm code (код фирмы) from API token
+		msg.Body.SetField(quickfix.Tag(5018), quickfix.FIXString(firm))
+	}
+	return msg
+}
+
+func buildCancel(clOrdID, origClOrdID, orderID, symbol, side, account, clientID string) *quickfix.Message {
+	msg := quickfix.NewMessage()
+	msg.Header.SetField(tag.MsgType, field.NewMsgType(enum.MsgType_ORDER_CANCEL_REQUEST))
+	msg.Body.Set(field.NewClOrdID(clOrdID))
+	msg.Body.Set(field.NewOrigClOrdID(origClOrdID))
+	if orderID != "" {
+		msg.Body.Set(field.NewOrderID(orderID))
+	}
+	if account != "" {
+		msg.Body.Set(field.NewAccount(account))
+	}
+	if clientID != "" {
+		msg.Body.Set(field.NewClientID(clientID))
+	}
+	msg.Body.Set(field.NewSymbol(symbol))
+	msg.Body.Set(field.NewSecurityID(symbol))
+	msg.Body.Set(field.NewSecurityIDSource(securityIDSourceFor(symbol)))
+	msg.Body.Set(field.NewSide(mapSide(side)))
+	msg.Body.Set(field.NewTransactTime(time.Now().UTC()))
+	return msg
+}
+
+// securityIDSourceFor picks FIX tag 22. ISIN-shaped codes use 4; otherwise exchange symbol (8).
+func securityIDSourceFor(symbol string) enum.SecurityIDSource {
+	if looksLikeISIN(symbol) {
+		return enum.SecurityIDSource_ISIN_NUMBER
+	}
+	return enum.SecurityIDSource_EXCHANGE_SYMBOL
+}
+
+func looksLikeISIN(symbol string) bool {
+	s := strings.TrimSpace(symbol)
+	if len(s) != 12 {
+		return false
+	}
+	for i := 0; i < 2; i++ {
+		c := s[i]
+		if c < 'A' || c > 'Z' {
+			return false
+		}
+	}
+	for i := 2; i < 12; i++ {
+		c := s[i]
+		if (c < 'A' || c > 'Z') && (c < '0' || c > '9') {
+			return false
+		}
+	}
+	return true
+}
+
+func mapSide(side string) enum.Side {
+	if side == "SELL" {
+		return enum.Side_SELL
+	}
+	return enum.Side_BUY
+}
+
+func mapOrdType(t string) enum.OrdType {
+	if t == "MARKET" {
+		return enum.OrdType_MARKET
+	}
+	return enum.OrdType_LIMIT
+}
+
+func mapTIF(t string) enum.TimeInForce {
+	switch t {
+	case "IOC":
+		return enum.TimeInForce_IMMEDIATE_OR_CANCEL
+	case "FOK":
+		return enum.TimeInForce_FILL_OR_KILL
+	case "GTC":
+		return enum.TimeInForce_GOOD_TILL_CANCEL
+	default:
+		return enum.TimeInForce_DAY
+	}
+}

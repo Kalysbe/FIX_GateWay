@@ -1,0 +1,15 @@
+DROP TABLE IF EXISTS api_logs;
+DROP TABLE IF EXISTS audit_logs;
+DROP TABLE IF EXISTS outbox_events;
+DROP TABLE IF EXISTS executions;
+DROP TABLE IF EXISTS order_events;
+DROP TABLE IF EXISTS orders;
+DROP TABLE IF EXISTS adapter_events;
+DROP TABLE IF EXISTS adapters;
+DROP TABLE IF EXISTS broker_instrument_mapping;
+DROP TABLE IF EXISTS instruments;
+DROP TABLE IF EXISTS broker_accounts;
+DROP TABLE IF EXISTS api_tokens;
+DROP TABLE IF EXISTS brokers;
+DROP TABLE IF EXISTS users;
+DROP TABLE IF EXISTS roles;

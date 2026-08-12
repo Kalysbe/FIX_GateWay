@@ -1,0 +1,695 @@
+package orders
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/fix-gateway/backend/internal/domain"
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/shopspring/decimal"
+)
+
+var ErrNotFound = errors.New("order not found")
+
+type Store struct {
+	pool *pgxpool.Pool
+}
+
+func NewStore(pool *pgxpool.Pool) *Store {
+	return &Store{pool: pool}
+}
+
+func (s *Store) FindByClientOrderID(ctx context.Context, brokerID int64, clientOrderID string) (domain.Order, error) {
+	return s.scanOrder(s.pool.QueryRow(ctx, orderSelect+` WHERE o.broker_id=$1 AND o.client_order_id=$2`, brokerID, clientOrderID))
+}
+
+func (s *Store) Get(ctx context.Context, id uuid.UUID) (domain.Order, error) {
+	return s.scanOrder(s.pool.QueryRow(ctx, orderSelect+` WHERE o.id=$1`, id))
+}
+
+func (s *Store) GetForBroker(ctx context.Context, brokerID int64, id uuid.UUID) (domain.Order, error) {
+	return s.scanOrder(s.pool.QueryRow(ctx, orderSelect+` WHERE o.id=$1 AND o.broker_id=$2`, id, brokerID))
+}
+
+const orderSelect = `
+SELECT o.id, o.broker_id, COALESCE(o.account_id, 0), o.client_order_id, o.instrument_id, o.side, o.order_type,
+       o.time_in_force, o.quantity, o.price, o.filled_quantity, o.avg_price, o.status, o.adapter_id,
+       o.fix_cl_ord_id, o.quik_order_id, o.reject_reason, o.created_at, o.updated_at,
+       i.quik_symbol, COALESCE(NULLIF(o.board, ''), i.board) AS board,
+       COALESCE(NULLIF(o.fix_account, ''), a.trading_account, '') AS trading_account,
+       i.currency,
+       COALESCE(NULLIF(o.fix_firm, ''), '') AS quik_firm,
+       COALESCE(NULLIF(o.fix_client_id, ''), '') AS client_code,
+       COALESCE(NULLIF(f.firm_name, ''), NULLIF(bf.name, ''), NULLIF(b.name, ''), '') AS firm_name
+FROM orders o
+JOIN instruments i ON i.id = o.instrument_id
+LEFT JOIN brokers b ON b.id = o.broker_id
+LEFT JOIN brokers bf ON bf.code = NULLIF(o.fix_firm, '')
+LEFT JOIN quik_firms f ON f.firm_id = NULLIF(o.fix_firm, '')
+LEFT JOIN LATERAL (
+	SELECT ba.trading_account
+	FROM broker_accounts ba
+	WHERE ba.broker_id = o.broker_id
+	  AND (
+		(o.account_id IS NOT NULL AND ba.id = o.account_id)
+		OR ba.trading_account = o.fix_account
+		OR ba.code = o.fix_account
+	  )
+	ORDER BY CASE WHEN o.account_id IS NOT NULL AND ba.id = o.account_id THEN 0 ELSE 1 END
+	LIMIT 1
+) a ON true`
+
+func (s *Store) scanOrder(row pgx.Row) (domain.Order, error) {
+	var o domain.Order
+	var price *decimal.Decimal
+	err := row.Scan(
+		&o.ID, &o.BrokerID, &o.AccountID, &o.ClientOrderID, &o.InstrumentID, &o.Side, &o.OrderType,
+		&o.TimeInForce, &o.Quantity, &price, &o.FilledQuantity, &o.AvgPrice, &o.Status, &o.AdapterID,
+		&o.FixClOrdID, &o.QuikOrderID, &o.RejectReason, &o.CreatedAt, &o.UpdatedAt,
+		&o.Symbol, &o.Board, &o.TradingAccount, &o.Currency, &o.QuikFirm, &o.ClientCode, &o.FirmName,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return o, ErrNotFound
+	}
+	if err != nil {
+		return o, err
+	}
+	o.Price = price
+	return o, nil
+}
+
+type CreateInput struct {
+	BrokerID      int64
+	FixAccount    string
+	ClientCode    string // FIX tag 109 — arbitrary broker client code
+	QuikFirm      string // FIX tag 5018 — from API token
+	ClientOrderID string
+	InstrumentID  int64
+	Board         string
+	Side          domain.Side
+	OrderType     domain.OrderType
+	TimeInForce   string
+	Quantity      decimal.Decimal
+	Price         *decimal.Decimal
+}
+
+func (s *Store) CreateWithOutbox(ctx context.Context, in CreateInput) (domain.Order, bool, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return domain.Order{}, false, err
+	}
+	defer tx.Rollback(ctx)
+
+	var existingID uuid.UUID
+	err = tx.QueryRow(ctx, `SELECT id FROM orders WHERE broker_id=$1 AND client_order_id=$2`, in.BrokerID, in.ClientOrderID).Scan(&existingID)
+	if err == nil {
+		if err := tx.Commit(ctx); err != nil {
+			return domain.Order{}, false, err
+		}
+		o, err := s.Get(ctx, existingID)
+		return o, true, err
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return domain.Order{}, false, err
+	}
+
+	id := uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO orders (
+			id, broker_id, account_id, client_order_id, instrument_id, side, order_type,
+			time_in_force, quantity, price, status, fix_cl_ord_id, board, fix_account,
+			fix_client_id, fix_firm
+		) VALUES ($1,$2,NULL,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
+		id, in.BrokerID, in.ClientOrderID, in.InstrumentID, in.Side, in.OrderType,
+		in.TimeInForce, in.Quantity, in.Price, domain.OrderQueued,
+		fmt.Sprintf("G%s", id.String()[:32]), in.Board, in.FixAccount,
+		in.ClientCode, in.QuikFirm,
+	)
+	if err != nil {
+		return domain.Order{}, false, err
+	}
+
+	for _, ev := range []struct {
+		t, from, to, msg string
+	}{
+		{"ORDER_CREATED", "", string(domain.OrderReceived), "order received"},
+		{"ORDER_VALIDATED", string(domain.OrderReceived), string(domain.OrderValidated), "order validated"},
+		{"ORDER_QUEUED", string(domain.OrderValidated), string(domain.OrderQueued), "order queued for dispatch"},
+	} {
+		var from any
+		if ev.from != "" {
+			from = ev.from
+		}
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO order_events (order_id, event_type, from_status, to_status, message)
+			VALUES ($1,$2,$3,$4,$5)`, id, ev.t, from, ev.to, ev.msg); err != nil {
+			return domain.Order{}, false, err
+		}
+	}
+
+	payload, _ := json.Marshal(map[string]any{"order_id": id.String()})
+	_, err = tx.Exec(ctx, `
+		INSERT INTO outbox_events (aggregate_type, aggregate_id, event_type, payload)
+		VALUES ('order', $1, 'ORDER_SEND', $2)`, id.String(), payload)
+	if err != nil {
+		return domain.Order{}, false, err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return domain.Order{}, false, err
+	}
+	o, err := s.Get(ctx, id)
+	return o, false, err
+}
+
+func (s *Store) Transition(ctx context.Context, id uuid.UUID, to domain.OrderStatus, eventType, message string, adapterID *string) (domain.Order, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return domain.Order{}, err
+	}
+	defer tx.Rollback(ctx)
+
+	var from domain.OrderStatus
+	err = tx.QueryRow(ctx, `SELECT status FROM orders WHERE id=$1 FOR UPDATE`, id).Scan(&from)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.Order{}, ErrNotFound
+	}
+	if err != nil {
+		return domain.Order{}, err
+	}
+	if !CanTransition(from, to) {
+		return domain.Order{}, fmt.Errorf("illegal transition %s -> %s", from, to)
+	}
+	_, err = tx.Exec(ctx, `UPDATE orders SET status=$2, adapter_id=COALESCE($3, adapter_id), updated_at=now() WHERE id=$1`, id, to, adapterID)
+	if err != nil {
+		return domain.Order{}, err
+	}
+	fromStr := string(from)
+	toStr := string(to)
+	_, err = tx.Exec(ctx, `
+		INSERT INTO order_events (order_id, event_type, from_status, to_status, adapter_id, message)
+		VALUES ($1,$2,$3,$4,$5,$6)`, id, eventType, fromStr, toStr, adapterID, message)
+	if err != nil {
+		return domain.Order{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return domain.Order{}, err
+	}
+	return s.Get(ctx, id)
+}
+
+func (s *Store) AssignRoute(ctx context.Context, id uuid.UUID, adapterID, fixClOrdID string) (domain.Order, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return domain.Order{}, err
+	}
+	defer tx.Rollback(ctx)
+
+	var from domain.OrderStatus
+	var quik *string
+	err = tx.QueryRow(ctx, `SELECT status, quik_order_id FROM orders WHERE id=$1 FOR UPDATE`, id).Scan(&from, &quik)
+	if err != nil {
+		return domain.Order{}, err
+	}
+	if IsExternallyAccepted(domain.Order{Status: from, QuikOrderID: quik}) {
+		return domain.Order{}, fmt.Errorf("order already externally accepted")
+	}
+	if !CanTransition(from, domain.OrderRouting) && from != domain.OrderRouting {
+		return domain.Order{}, fmt.Errorf("cannot route from %s", from)
+	}
+	_, err = tx.Exec(ctx, `
+		UPDATE orders SET status=$2, adapter_id=$3, fix_cl_ord_id=$4, updated_at=now() WHERE id=$1`,
+		id, domain.OrderRouting, adapterID, fixClOrdID)
+	if err != nil {
+		return domain.Order{}, err
+	}
+	fromStr := string(from)
+	toStr := string(domain.OrderRouting)
+	_, err = tx.Exec(ctx, `
+		INSERT INTO order_events (order_id, event_type, from_status, to_status, adapter_id, message)
+		VALUES ($1,'ORDER_ROUTED',$2,$3,$4,$5)`, id, fromStr, toStr, adapterID, "routed to adapter "+adapterID)
+	if err != nil {
+		return domain.Order{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return domain.Order{}, err
+	}
+	return s.Get(ctx, id)
+}
+
+func (s *Store) MarkSent(ctx context.Context, id uuid.UUID, adapterID, rawFIX string) (domain.Order, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return domain.Order{}, err
+	}
+	defer tx.Rollback(ctx)
+
+	var from domain.OrderStatus
+	err = tx.QueryRow(ctx, `SELECT status FROM orders WHERE id=$1 FOR UPDATE`, id).Scan(&from)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.Order{}, ErrNotFound
+	}
+	if err != nil {
+		return domain.Order{}, err
+	}
+	to := domain.OrderSent
+	if !CanTransition(from, to) {
+		return domain.Order{}, fmt.Errorf("illegal transition %s -> %s", from, to)
+	}
+	_, err = tx.Exec(ctx, `UPDATE orders SET status=$2, adapter_id=COALESCE($3, adapter_id), updated_at=now() WHERE id=$1`, id, to, adapterID)
+	if err != nil {
+		return domain.Order{}, err
+	}
+	fromStr := string(from)
+	toStr := string(to)
+	payload := fixWirePayload(rawFIX)
+	_, err = tx.Exec(ctx, `
+		INSERT INTO order_events (order_id, event_type, from_status, to_status, adapter_id, message, payload)
+		VALUES ($1,'ORDER_SENT',$2,$3,$4,$5,$6)`,
+		id, fromStr, toStr, adapterID, "sent to FIX adapter", payload)
+	if err != nil {
+		return domain.Order{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return domain.Order{}, err
+	}
+	return s.Get(ctx, id)
+}
+
+func fixWirePayload(rawFIX string) []byte {
+	if rawFIX == "" {
+		return nil
+	}
+	b, _ := json.Marshal(map[string]string{"raw_fix": rawFIX})
+	return b
+}
+
+func (s *Store) ClearRouteForFailover(ctx context.Context, id uuid.UUID, reason string) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	var status domain.OrderStatus
+	var quik *string
+	err = tx.QueryRow(ctx, `SELECT status, quik_order_id FROM orders WHERE id=$1 FOR UPDATE`, id).Scan(&status, &quik)
+	if err != nil {
+		return err
+	}
+	if IsExternallyAccepted(domain.Order{Status: status, QuikOrderID: quik}) {
+		return fmt.Errorf("cannot failover externally accepted order")
+	}
+	_, err = tx.Exec(ctx, `
+		UPDATE orders SET status=$2, adapter_id=NULL, updated_at=now() WHERE id=$1`, id, domain.OrderQueued)
+	if err != nil {
+		return err
+	}
+	from := string(status)
+	to := string(domain.OrderQueued)
+	_, err = tx.Exec(ctx, `
+		INSERT INTO order_events (order_id, event_type, from_status, to_status, message)
+		VALUES ($1,'ORDER_FAILOVER',$2,$3,$4)`, id, from, to, reason)
+	if err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func (s *Store) ApplyExecutionReport(ctx context.Context, fixClOrdID, execID, execType, ordStatus, quikOrderID string, lastQty, lastPx, cumQty, leavesQty decimal.Decimal, adapterID, text, ordRejReason, rawFIX string) (domain.Order, *domain.Execution, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return domain.Order{}, nil, err
+	}
+	defer tx.Rollback(ctx)
+
+	var o domain.Order
+	var price *decimal.Decimal
+	err = tx.QueryRow(ctx, `
+		SELECT id, broker_id, COALESCE(account_id, 0), client_order_id, instrument_id, side, order_type,
+		       time_in_force, quantity, price, filled_quantity, avg_price, status, adapter_id,
+		       fix_cl_ord_id, quik_order_id, reject_reason, created_at, updated_at
+		FROM orders WHERE fix_cl_ord_id=$1 FOR UPDATE`, fixClOrdID,
+	).Scan(&o.ID, &o.BrokerID, &o.AccountID, &o.ClientOrderID, &o.InstrumentID, &o.Side, &o.OrderType,
+		&o.TimeInForce, &o.Quantity, &price, &o.FilledQuantity, &o.AvgPrice, &o.Status, &o.AdapterID,
+		&o.FixClOrdID, &o.QuikOrderID, &o.RejectReason, &o.CreatedAt, &o.UpdatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.Order{}, nil, ErrNotFound
+	}
+	if err != nil {
+		return domain.Order{}, nil, err
+	}
+	o.Price = price
+
+	to := mapExecStatus(execType, ordStatus, o.Status)
+	erMsg := formatExecutionMessage(execType, ordStatus, text, ordRejReason)
+	payload := fixWirePayload(rawFIX)
+	if !CanTransition(o.Status, to) && o.Status != to {
+		// still record event for audit visibility
+		_, _ = tx.Exec(ctx, `
+			INSERT INTO order_events (order_id, event_type, from_status, to_status, adapter_id, message, payload)
+			VALUES ($1,'EXECUTION_REPORT',$2,$3,$4,$5,$6)`,
+			o.ID, string(o.Status), string(to), adapterID, "ignored illegal ER transition; "+erMsg, payload)
+		if err := tx.Commit(ctx); err != nil {
+			return domain.Order{}, nil, err
+		}
+		out, err := s.Get(ctx, o.ID)
+		return out, nil, err
+	}
+
+	avg := o.AvgPrice
+	if lastQty.GreaterThan(decimal.Zero) {
+		// weighted average
+		prevNotional := o.FilledQuantity.Mul(o.AvgPrice)
+		newNotional := lastQty.Mul(lastPx)
+		totalQty := o.FilledQuantity.Add(lastQty)
+		if totalQty.GreaterThan(decimal.Zero) {
+			avg = prevNotional.Add(newNotional).Div(totalQty)
+		}
+	}
+
+	rejectReason := o.RejectReason
+	if to == domain.OrderRejected {
+		if r := composeRejectReason(text, ordRejReason); r != nil {
+			rejectReason = r
+		}
+	}
+
+	_, err = tx.Exec(ctx, `
+		UPDATE orders SET status=$2, filled_quantity=$3, avg_price=$4, quik_order_id=COALESCE(NULLIF($5,''), quik_order_id),
+		                adapter_id=COALESCE(NULLIF($6,''), adapter_id), reject_reason=$7, updated_at=now()
+		WHERE id=$1`, o.ID, to, cumQty, avg, quikOrderID, adapterID, rejectReason)
+	if err != nil {
+		return domain.Order{}, nil, err
+	}
+	fromStr := string(o.Status)
+	toStr := string(to)
+	_, err = tx.Exec(ctx, `
+		INSERT INTO order_events (order_id, event_type, from_status, to_status, adapter_id, message, payload)
+		VALUES ($1,'ORDER_EXECUTION_REPORT',$2,$3,$4,$5,$6)`,
+		o.ID, fromStr, toStr, adapterID, erMsg, payload)
+	if err != nil {
+		return domain.Order{}, nil, err
+	}
+
+	var exec *domain.Execution
+	if lastQty.GreaterThan(decimal.Zero) && execID != "" {
+		var exists bool
+		_ = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM executions WHERE exec_id=$1)`, execID).Scan(&exists)
+		if !exists {
+			eid := uuid.New()
+			_, err = tx.Exec(ctx, `
+				INSERT INTO executions (id, order_id, exec_id, last_qty, last_px, cum_qty, leaves_qty, adapter_id)
+				VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`, eid, o.ID, execID, lastQty, lastPx, cumQty, leavesQty, adapterID)
+			if err != nil {
+				return domain.Order{}, nil, err
+			}
+			exec = &domain.Execution{
+				ID: eid, OrderID: o.ID, ExecID: execID, LastQty: lastQty, LastPx: lastPx,
+				CumQty: cumQty, LeavesQty: leavesQty, AdapterID: &adapterID, CreatedAt: time.Now().UTC(),
+			}
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return domain.Order{}, nil, err
+	}
+	out, err := s.Get(ctx, o.ID)
+	return out, exec, err
+}
+
+func mapExecStatus(execType, ordStatus string, current domain.OrderStatus) domain.OrderStatus {
+	switch ordStatus {
+	case "0":
+		return domain.OrderAcknowledged
+	case "1":
+		return domain.OrderPartiallyFilled
+	case "2":
+		return domain.OrderFilled
+	case "4":
+		return domain.OrderCancelled
+	case "8":
+		return domain.OrderRejected
+	case "C":
+		return domain.OrderExpired
+	case "5":
+		return domain.OrderAcknowledged
+	}
+	switch execType {
+	case "0":
+		return domain.OrderAcknowledged
+	case "1":
+		return domain.OrderPartiallyFilled
+	case "2":
+		return domain.OrderFilled
+	case "4":
+		return domain.OrderCancelled
+	case "8":
+		return domain.OrderRejected
+	case "C":
+		return domain.OrderExpired
+	}
+	return current
+}
+
+func composeRejectReason(text, ordRejReason string) *string {
+	parts := make([]string, 0, 2)
+	if t := strings.TrimSpace(text); t != "" {
+		parts = append(parts, t)
+	}
+	if r := strings.TrimSpace(ordRejReason); r != "" {
+		parts = append(parts, "OrdRejReason="+r)
+	}
+	if len(parts) == 0 {
+		return nil
+	}
+	s := strings.Join(parts, "; ")
+	return &s
+}
+
+func formatExecutionMessage(execType, ordStatus, text, ordRejReason string) string {
+	msg := fmt.Sprintf("execType=%s ordStatus=%s", execType, ordStatus)
+	if t := strings.TrimSpace(text); t != "" {
+		msg += " text=" + t
+	}
+	if r := strings.TrimSpace(ordRejReason); r != "" {
+		msg += " ordRejReason=" + r
+	}
+	return msg
+}
+
+const tradeSelect = `
+SELECT e.id, e.order_id, e.exec_id, e.last_qty, e.last_px, e.cum_qty, e.leaves_qty, e.adapter_id, e.created_at,
+       o.broker_id, o.client_order_id, i.quik_symbol,
+       COALESCE(NULLIF(o.board, ''), i.board) AS board,
+       o.side,
+       COALESCE(NULLIF(o.fix_client_id, ''), '') AS client_code,
+       COALESCE(NULLIF(o.fix_firm, ''), '') AS quik_firm,
+       COALESCE(NULLIF(f.firm_name, ''), NULLIF(bf.name, ''), NULLIF(b.name, ''), '') AS firm_name,
+       o.fix_cl_ord_id, o.quik_order_id
+FROM executions e
+JOIN orders o ON o.id = e.order_id
+JOIN instruments i ON i.id = o.instrument_id
+LEFT JOIN brokers b ON b.id = o.broker_id
+LEFT JOIN brokers bf ON bf.code = NULLIF(o.fix_firm, '')
+LEFT JOIN quik_firms f ON f.firm_id = NULLIF(o.fix_firm, '')
+`
+
+func (s *Store) ListTrades(ctx context.Context, brokerID *int64, limit int) ([]domain.Trade, error) {
+	if limit <= 0 || limit > 500 {
+		limit = 100
+	}
+	var rows pgx.Rows
+	var err error
+	if brokerID != nil {
+		rows, err = s.pool.Query(ctx, tradeSelect+` WHERE o.broker_id=$1 ORDER BY e.created_at DESC LIMIT $2`, *brokerID, limit)
+	} else {
+		rows, err = s.pool.Query(ctx, tradeSelect+` ORDER BY e.created_at DESC LIMIT $1`, limit)
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []domain.Trade
+	for rows.Next() {
+		var t domain.Trade
+		if err := rows.Scan(
+			&t.ID, &t.OrderID, &t.ExecID, &t.LastQty, &t.LastPx, &t.CumQty, &t.LeavesQty, &t.AdapterID, &t.CreatedAt,
+			&t.BrokerID, &t.ClientOrderID, &t.Symbol, &t.Board, &t.Side,
+			&t.ClientCode, &t.QuikFirm, &t.FirmName, &t.FixClOrdID, &t.QuikOrderID,
+		); err != nil {
+			return nil, err
+		}
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) ListTradesByOrder(ctx context.Context, orderID uuid.UUID) ([]domain.Trade, error) {
+	rows, err := s.pool.Query(ctx, tradeSelect+` WHERE e.order_id=$1 ORDER BY e.created_at, e.exec_id`, orderID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []domain.Trade
+	for rows.Next() {
+		var t domain.Trade
+		if err := rows.Scan(
+			&t.ID, &t.OrderID, &t.ExecID, &t.LastQty, &t.LastPx, &t.CumQty, &t.LeavesQty, &t.AdapterID, &t.CreatedAt,
+			&t.BrokerID, &t.ClientOrderID, &t.Symbol, &t.Board, &t.Side,
+			&t.ClientCode, &t.QuikFirm, &t.FirmName, &t.FixClOrdID, &t.QuikOrderID,
+		); err != nil {
+			return nil, err
+		}
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) List(ctx context.Context, brokerID *int64, limit int) ([]domain.Order, error) {
+	if limit <= 0 || limit > 500 {
+		limit = 100
+	}
+	var rows pgx.Rows
+	var err error
+	if brokerID != nil {
+		rows, err = s.pool.Query(ctx, orderSelect+` WHERE o.broker_id=$1 ORDER BY o.created_at DESC LIMIT $2`, *brokerID, limit)
+	} else {
+		rows, err = s.pool.Query(ctx, orderSelect+` ORDER BY o.created_at DESC LIMIT $1`, limit)
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []domain.Order
+	for rows.Next() {
+		var o domain.Order
+		var price *decimal.Decimal
+		if err := rows.Scan(
+			&o.ID, &o.BrokerID, &o.AccountID, &o.ClientOrderID, &o.InstrumentID, &o.Side, &o.OrderType,
+			&o.TimeInForce, &o.Quantity, &price, &o.FilledQuantity, &o.AvgPrice, &o.Status, &o.AdapterID,
+			&o.FixClOrdID, &o.QuikOrderID, &o.RejectReason, &o.CreatedAt, &o.UpdatedAt,
+			&o.Symbol, &o.Board, &o.TradingAccount, &o.Currency, &o.QuikFirm, &o.ClientCode, &o.FirmName,
+		); err != nil {
+			return nil, err
+		}
+		o.Price = price
+		out = append(out, o)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) ListEvents(ctx context.Context, orderID uuid.UUID) ([]domain.OrderEvent, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, order_id, event_type, from_status, to_status, adapter_id, message, payload, created_at
+		FROM order_events WHERE order_id=$1 ORDER BY created_at, id`, orderID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []domain.OrderEvent
+	for rows.Next() {
+		var e domain.OrderEvent
+		if err := rows.Scan(&e.ID, &e.OrderID, &e.EventType, &e.FromStatus, &e.ToStatus, &e.AdapterID, &e.Message, &e.Payload, &e.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) ResolveInstrument(ctx context.Context, brokerID int64, brokerSymbol, board string) (domain.Instrument, error) {
+	var i domain.Instrument
+	err := s.pool.QueryRow(ctx, `
+		SELECT i.id, i.internal_symbol, i.quik_symbol, i.board, i.currency, i.security_type, i.status
+		FROM broker_instrument_mapping m
+		JOIN instruments i ON i.id = m.instrument_id
+		WHERE m.broker_id=$1 AND m.broker_symbol=$2`, brokerID, brokerSymbol,
+	).Scan(&i.ID, &i.InternalSymbol, &i.QuikSymbol, &i.Board, &i.Currency, &i.SecurityType, &i.Status)
+	if errors.Is(err, pgx.ErrNoRows) {
+		err = s.pool.QueryRow(ctx, `
+			SELECT id, internal_symbol, quik_symbol, board, currency, security_type, status
+			FROM instruments
+			WHERE status = 'ACTIVE'
+			  AND (internal_symbol=$1 OR quik_symbol=$1 OR internal_symbol LIKE '%/' || $1)
+			  AND ($2 = '' OR board = $2)
+			ORDER BY CASE WHEN board = $2 THEN 0 ELSE 1 END, id
+			LIMIT 1`, brokerSymbol, board,
+		).Scan(&i.ID, &i.InternalSymbol, &i.QuikSymbol, &i.Board, &i.Currency, &i.SecurityType, &i.Status)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return i, fmt.Errorf("instrument not found")
+		}
+	}
+	return i, err
+}
+
+func (s *Store) EnqueueCancel(ctx context.Context, orderID uuid.UUID) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	var status domain.OrderStatus
+	if err := tx.QueryRow(ctx, `SELECT status FROM orders WHERE id=$1 FOR UPDATE`, orderID).Scan(&status); err != nil {
+		return err
+	}
+	if !CanTransition(status, domain.OrderCancelPending) {
+		return fmt.Errorf("cannot cancel from status %s", status)
+	}
+	_, err = tx.Exec(ctx, `UPDATE orders SET status=$2, updated_at=now() WHERE id=$1`, orderID, domain.OrderCancelPending)
+	if err != nil {
+		return err
+	}
+	from := string(status)
+	to := string(domain.OrderCancelPending)
+	_, err = tx.Exec(ctx, `
+		INSERT INTO order_events (order_id, event_type, from_status, to_status, message)
+		VALUES ($1,'ORDER_CANCEL_REQUESTED',$2,$3,'cancel requested')`, orderID, from, to)
+	if err != nil {
+		return err
+	}
+	payload, _ := json.Marshal(map[string]any{"order_id": orderID.String()})
+	_, err = tx.Exec(ctx, `
+		INSERT INTO outbox_events (aggregate_type, aggregate_id, event_type, payload)
+		VALUES ('order', $1, 'ORDER_CANCEL', $2)`, orderID.String(), payload)
+	if err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func (s *Store) StatsToday(ctx context.Context) (map[string]int64, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT status, COUNT(*) FROM orders
+		WHERE created_at >= date_trunc('day', now())
+		GROUP BY status`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]int64{"total": 0, "filled": 0, "rejected": 0, "active": 0}
+	for rows.Next() {
+		var status string
+		var n int64
+		if err := rows.Scan(&status, &n); err != nil {
+			return nil, err
+		}
+		out["total"] += n
+		switch domain.OrderStatus(status) {
+		case domain.OrderFilled:
+			out["filled"] += n
+		case domain.OrderRejected, domain.OrderFailed:
+			out["rejected"] += n
+		case domain.OrderQueued, domain.OrderRouting, domain.OrderSent, domain.OrderAcknowledged,
+			domain.OrderPartiallyFilled, domain.OrderCancelPending:
+			out["active"] += n
+		}
+	}
+	return out, rows.Err()
+}

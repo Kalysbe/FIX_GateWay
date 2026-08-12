@@ -1,0 +1,81 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  font-family: "DM Sans", Segoe UI, sans-serif;
+  background:
+    radial-gradient(1000px 520px at 0% -10%, rgba(94, 234, 212, 0.14), transparent 55%),
+    radial-gradient(800px 420px at 100% 0%, rgba(96, 165, 250, 0.1), transparent 50%),
+    #10151c;
+}
+
+.card {
+  @apply rounded-xl border border-white/10 bg-panel/90 p-4 shadow-lg shadow-black/25;
+}
+
+.btn {
+  @apply inline-flex items-center justify-center rounded-lg bg-accent px-3 py-2 text-sm font-semibold text-ink hover:brightness-110 disabled:opacity-40;
+}
+
+.btn-muted {
+  @apply inline-flex items-center justify-center rounded-lg border border-white/15 bg-white/5 px-3 py-2 text-sm font-medium hover:bg-white/10 disabled:opacity-40;
+}
+
+.btn-danger {
+  @apply inline-flex items-center justify-center rounded-lg border border-danger/40 bg-danger/10 px-3 py-2 text-sm font-medium text-danger hover:bg-danger/20 disabled:opacity-40;
+}
+
+.input {
+  @apply w-full rounded-lg border border-white/15 bg-black/25 px-3 py-2 text-sm outline-none focus:border-accent;
+}
+
+.label {
+  @apply mb-1 block text-xs font-medium uppercase tracking-wide text-slate-400;
+}
+
+.table {
+  @apply w-full text-left text-sm;
+}
+
+.table th {
+  @apply border-b border-white/10 px-3 py-2 font-medium text-slate-400;
+}
+
+.table td {
+  @apply border-b border-white/5 px-3 py-2 align-middle;
+}
+
+.status-CONNECTED,
+.status-FILLED,
+.status-ACKNOWLEDGED {
+  color: #34d399;
+}
+.status-CONNECTING,
+.status-QUEUED,
+.status-SENT,
+.status-ROUTING,
+.status-PARTIALLY_FILLED,
+.status-CANCEL_PENDING {
+  color: #fbbf24;
+}
+.status-DISCONNECTED {
+  color: #94a3b8;
+}
+.status-REJECTED,
+.status-FAILED,
+.status-ERROR,
+.status-CANCELLED,
+.status-EXPIRED {
+  color: #f87171;
+}
+
+.dot {
+  @apply inline-block h-2 w-2 rounded-full;
+}
+.dot-CONNECTED { background: #34d399; box-shadow: 0 0 8px rgba(52, 211, 153, 0.7); }
+.dot-CONNECTING { background: #fbbf24; }
+.dot-DISCONNECTED { background: #64748b; }
+.dot-ERROR { background: #f87171; }

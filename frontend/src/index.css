@@ -1,0 +1,126 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html,
+body,
+#root {
+  margin: 0;
+  min-height: 100%;
+  color: #1a2332;
+  background-color: #f4f7f8;
+}
+
+body {
+  font-family: "IBM Plex Sans", Segoe UI, sans-serif;
+  background-image:
+    radial-gradient(1200px 600px at 10% -10%, rgba(87, 182, 192, 0.16), transparent 55%),
+    radial-gradient(900px 500px at 90% 0%, rgba(87, 182, 192, 0.08), transparent 50%);
+  background-color: #f4f7f8;
+}
+
+.card {
+  border-radius: 0.75rem;
+  border: 1px solid #e2e8f0;
+  background-color: #ffffff;
+  padding: 1rem;
+  box-shadow: 0 1px 2px rgb(15 23 42 / 0.06);
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 0.5rem;
+  background-color: #57b6c0;
+  padding: 0.5rem 0.75rem;
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: #ffffff;
+}
+
+.btn:hover {
+  filter: brightness(1.05);
+}
+
+.btn:disabled {
+  opacity: 0.5;
+}
+
+.btn-muted {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 0.5rem;
+  border: 1px solid #cbd5e1;
+  background-color: #ffffff;
+  padding: 0.5rem 0.75rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: #1a2332;
+}
+
+.btn-muted:hover {
+  border-color: #57b6c0;
+  color: #57b6c0;
+}
+
+.input {
+  width: 100%;
+  border-radius: 0.5rem;
+  border: 1px solid #cbd5e1;
+  background-color: #ffffff;
+  padding: 0.5rem 0.75rem;
+  font-size: 0.875rem;
+  color: #1a2332;
+  outline: none;
+}
+
+.input::placeholder {
+  color: #94a3b8;
+}
+
+.input:focus {
+  border-color: #57b6c0;
+}
+
+.table {
+  width: 100%;
+  text-align: left;
+  font-size: 0.875rem;
+  color: #1a2332;
+}
+
+.table th {
+  border-bottom: 1px solid #e2e8f0;
+  padding: 0.5rem 0.75rem;
+  font-weight: 600;
+  color: #475569;
+}
+
+.table td {
+  border-bottom: 1px solid #f1f5f9;
+  padding: 0.5rem 0.75rem;
+  color: #1a2332;
+}
+
+.status-ONLINE { color: #1f8a78; }
+.status-OFFLINE { color: #d6455d; }
+.status-DEGRADED { color: #c47a00; }
+.status-FILLED,
+.status-PARTIALLY_FILLED { color: #1f8a78; }
+.status-ACKNOWLEDGED,
+.status-ACTIVE { color: #57b6c0; }
+.status-REJECTED,
+.status-FAILED,
+.status-BLOCKED,
+.status-REVOKED { color: #d6455d; }
+.status-QUEUED,
+.status-SENT,
+.status-ROUTING,
+.status-EXPIRED { color: #c47a00; }
+.status-DISABLED { color: #64748b; }
+
+.text-danger { color: #d6455d; }
+.text-warn { color: #c47a00; }
+.text-accent { color: #57b6c0; }

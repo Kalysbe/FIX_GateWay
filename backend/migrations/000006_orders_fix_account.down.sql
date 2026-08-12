@@ -1,0 +1,2 @@
+ALTER TABLE orders ALTER COLUMN account_id SET NOT NULL;
+ALTER TABLE orders DROP COLUMN IF EXISTS fix_account;

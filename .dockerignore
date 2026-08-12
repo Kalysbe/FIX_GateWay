@@ -1,0 +1,15 @@
+**/node_modules/
+**/dist/
+**/.git/
+**/*.exe
+**/*.log
+**/.env
+**/.env.*
+!**/.env.example
+backend/bin/
+backend/tmp/
+**/fix-gateway-sessions/
+.idea/
+.vscode/
+*.out
+coverage.out

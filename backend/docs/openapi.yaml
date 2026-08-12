@@ -1,0 +1,395 @@
+openapi: 3.0.3
+info:
+  title: Broker FIX Gateway API
+  version: 0.2.0
+  description: |
+    Broker order routing through FIX adapters to QUIK.
+    Broker APIs authenticate with long-lived API tokens (`Authorization: Bearer sk_live_…`).
+    Tokens are stored hashed; the full secret is returned only once at creation/rotation.
+servers:
+  - url: http://localhost:8080
+paths:
+  /health:
+    get:
+      summary: Liveness
+      responses:
+        "200":
+          description: OK
+  /ready:
+    get:
+      summary: Readiness
+      responses:
+        "200":
+          description: Ready
+        "503":
+          description: Not ready
+  /api/v1/firm:
+    get:
+      summary: Firm for current API token
+      security:
+        - bearerAuth: []
+      description: |
+        Returns the firm code bound to the token (`quik_firm` → FIX tag 5018)
+        and the firm name from the local `quik_firms` reference cache (if present).
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  quik_firm:
+                    type: string
+                    description: Firm code (FIX 5018)
+                    example: "MC0031400000"
+                  firm_name:
+                    type: string
+                    description: Firm name from quik_firms; empty if not in local cache
+                    example: "ТОО Example"
+        "401":
+          description: Unauthorized
+  /api/v1/orders:
+    post:
+      summary: Create order
+      security:
+        - bearerAuth: []
+      description: |
+        Requires permission `orders:create`. broker_id берётся из токена, не из body.
+
+        Куда писать поля QUIK/FIX:
+        - **Инструмент** → `symbol` (тикер или ISIN) → FIX tag **48** SecurityID (`22=8`)
+        - **Код класса** → `board` → FIX tag **100** ExDestination
+        - **Валюта** → не в body; `instruments.currency` → FIX tag 15
+        - **Торговый счёт** → `account_id` (например `1-3101-006`) → FIX tag **1**
+        - **Код клиента** → `client_code` (произвольная строка) → FIX tag **109** ClientID
+        - **Код фирмы** → `quik_firm` **API-токена** → FIX tag **5018** (не из body)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateOrderRequest"
+            example:
+              account_id: "1-3101-006"
+              client_order_id: "TEST0003"
+              symbol: "KG0105166315"
+              board: "LISTEDSTOCKK"
+              side: "BUY"
+              order_type: "LIMIT"
+              time_in_force: "DAY"
+              quantity: "1"
+              price: "400"
+      responses:
+        "200":
+          description: Idempotent existing order
+        "201":
+          description: Created
+        "401":
+          description: Unauthorized
+        "403":
+          description: Forbidden (permissions / IP whitelist)
+        "429":
+          description: Rate limited
+    get:
+      summary: List broker orders
+      security:
+        - bearerAuth: []
+      description: Requires `orders:read`
+      responses:
+        "200":
+          description: OK
+  /api/v1/orders/{id}:
+    get:
+      summary: Get order
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: OK
+  /api/v1/orders/{id}/cancel:
+    post:
+      summary: Cancel order
+      security:
+        - bearerAuth: []
+      description: Requires `orders:cancel`
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: OK
+  /api/v1/admin/login:
+    post:
+      summary: Admin login
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                email:
+                  type: string
+                password:
+                  type: string
+      responses:
+        "200":
+          description: JWT issued
+  /api/v1/admin/brokers:
+    get:
+      summary: List brokers
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: OK
+    post:
+      summary: Create broker
+      security:
+        - bearerAuth: []
+      responses:
+        "201":
+          description: Created
+  /api/v1/admin/brokers/{id}/tokens:
+    get:
+      summary: List broker API tokens (no secrets)
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Token metadata without token or token_hash
+    post:
+      summary: Create API token (full token returned once)
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateTokenRequest"
+      responses:
+        "201":
+          description: Created; includes `token` once
+  /api/v1/admin/brokers/{id}/security:
+    get:
+      summary: Broker security dashboard stats
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: OK
+  /api/v1/admin/brokers/{id}/ip-whitelist:
+    get:
+      summary: List IP whitelist entries
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: OK
+    post:
+      summary: Add IP or CIDR to whitelist
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+      responses:
+        "201":
+          description: Created
+  /api/v1/admin/tokens/{id}/revoke:
+    post:
+      summary: Revoke token (idempotent)
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: REVOKED
+  /api/v1/admin/tokens/{id}/rotate:
+    post:
+      summary: Rotate token (old stays ACTIVE; new returned once)
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "201":
+          description: New token created
+  /api/v1/admin/adapters:
+    get:
+      summary: List adapters
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: OK
+  /api/v1/admin/orders:
+    get:
+      summary: List all orders
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: OK
+  /api/v1/admin/trades:
+    get:
+      summary: List FIX trades (ExecutionReport fills from executions table)
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: OK
+  /api/v1/admin/dashboard:
+    get:
+      summary: Dashboard stats
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: OK
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: sk_live_…
+      description: Broker API token from Admin → Brokers → Tokens. Paste token only (Swagger adds `Bearer `).
+  schemas:
+    CreateOrderRequest:
+      type: object
+      required: [account_id, client_code, client_order_id, symbol, board, side, order_type, quantity]
+      example:
+        account_id: "1-3101-006"
+        client_code: "006"
+        client_order_id: "TEST0003"
+        symbol: "KG0105166315"
+        board: "LISTEDSTOCKK"
+        side: "BUY"
+        order_type: "LIMIT"
+        time_in_force: "DAY"
+        quantity: "1"
+        price: "400"
+      properties:
+        account_id:
+          type: string
+          example: "1-3101-006"
+          description: "Торговый код счёта. FIX tag 1 Account"
+        client_code:
+          type: string
+          example: "006"
+          description: "Произвольный код клиента. FIX tag 109 ClientID"
+        client_order_id:
+          type: string
+          example: "TEST0003"
+          description: "Уникальный ID заявки у брокера (идемпотентность). FIX tag 11"
+        symbol:
+          type: string
+          example: "KG0105166315"
+          description: "Инструмент (тикер/ISIN). Список — GET /api/v1/instruments"
+        board:
+          type: string
+          example: "LISTEDSTOCKK"
+          description: "Код класса (QUIK class code). FIX tag 100 ExDestination"
+        side:
+          type: string
+          enum: [BUY, SELL]
+          example: "BUY"
+        order_type:
+          type: string
+          enum: [MARKET, LIMIT]
+          example: "LIMIT"
+        time_in_force:
+          type: string
+          enum: [DAY, IOC, FOK, GTC]
+          example: "DAY"
+          default: "DAY"
+        quantity:
+          oneOf:
+            - type: string
+            - type: number
+          example: "1"
+          description: "Количество (строка или число)"
+        price:
+          oneOf:
+            - type: string
+            - type: number
+          example: "400"
+          description: "Цена для LIMIT (строка или число)"
+    CreateTokenRequest:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        quik_firm:
+          type: string
+          description: "Код фирмы QUIK → FIX tag 5018 на всех заявках этого токена"
+          example: "FREEDOM2003"
+        expires_in_days:
+          type: integer
+          description: "30, 90, 180, 365, or 0 for no expiry. Default 180."
+          enum: [0, 30, 90, 180, 365]
+        permissions:
+          type: array
+          items:
+            type: string
+            enum:
+              - orders:create
+              - orders:read
+              - orders:cancel
+              - orders:replace
+              - trades:read
+              - positions:read
