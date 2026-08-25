@@ -10,6 +10,11 @@ export default function OrderDetailPage() {
     queryFn: () => api<{ order: any; events: any[]; trades: any[] }>(`/api/v1/admin/orders/${id}`),
     refetchInterval: 2000,
   });
+  const trace = useQuery({
+    queryKey: ["order-trace", id],
+    queryFn: () => api<{ events: any[] }>(`/api/v1/admin/orders/${id}/trace`),
+    refetchInterval: 3000,
+  });
 
   if (q.isLoading) return <div>Загрузка…</div>;
   const o = q.data?.order;
@@ -37,6 +42,8 @@ export default function OrderDetailPage() {
           <Row k="Адаптер" v={o?.adapter_id || "—"} />
           <Row k="FIX ClOrdID" v={o?.fix_cl_ord_id || "—"} />
           <Row k="QUIK OrderID" v={o?.quik_order_id || "—"} />
+          <Row k="Request ID" v={o?.request_id || "—"} />
+          <Row k="Trace ID" v={o?.trace_id || "—"} />
         </div>
         <div className="card">
           <h2 className="mb-3 font-medium">Жизненный цикл</h2>
@@ -97,6 +104,30 @@ export default function OrderDetailPage() {
               ))}
             </tbody>
           </table>
+        )}
+      </div>
+
+      <div className="card">
+        <h2 className="mb-3 font-medium">Полный trace (Gateway → FIX)</h2>
+        {(trace.data?.events || []).length === 0 ? (
+          <p className="text-sm text-slate-500">События observability появятся по мере прохождения заявки</p>
+        ) : (
+          <ol className="space-y-2">
+            {(trace.data?.events || []).slice().reverse().map((e: any) => (
+              <li key={e.id} className="rounded-lg bg-surface px-3 py-2 text-sm">
+                <div className="font-mono text-xs text-slate-500">{formatTime(e.timestamp)}</div>
+                <div className="font-medium">
+                  {e.type} · {e.subtype}
+                </div>
+                <div className="text-slate-600">
+                  {e.broker_name ? `${e.broker_name} · ` : ""}
+                  {e.client_ip || ""}
+                  {e.adapter_id ? ` · ${e.adapter_id}` : ""}
+                  {e.message ? ` · ${e.message}` : ""}
+                </div>
+              </li>
+            ))}
+          </ol>
         )}
       </div>
     </div>

@@ -13,95 +13,61 @@ body,
 
 body {
   font-family: "IBM Plex Sans", Segoe UI, sans-serif;
-  background-image:
-    radial-gradient(1200px 600px at 10% -10%, rgba(87, 182, 192, 0.16), transparent 55%),
-    radial-gradient(900px 500px at 90% 0%, rgba(87, 182, 192, 0.08), transparent 50%);
   background-color: #f4f7f8;
 }
 
-.card {
-  border-radius: 0.75rem;
-  border: 1px solid #e2e8f0;
-  background-color: #ffffff;
-  padding: 1rem;
-  box-shadow: 0 1px 2px rgb(15 23 42 / 0.06);
-}
+@layer components {
+  .card {
+    @apply rounded-xl border border-slate-200 bg-white p-4 shadow-sm;
+  }
 
-.btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 0.5rem;
-  background-color: #57b6c0;
-  padding: 0.5rem 0.75rem;
-  font-size: 0.875rem;
-  font-weight: 600;
-  color: #ffffff;
-}
+  .btn {
+    @apply inline-flex items-center justify-center rounded-lg bg-accent px-3 py-2 text-sm font-semibold text-white transition hover:brightness-105 disabled:opacity-50;
+  }
 
-.btn:hover {
-  filter: brightness(1.05);
-}
+  .btn-muted {
+    @apply inline-flex items-center justify-center rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-ink transition hover:border-accent hover:text-accent;
+  }
 
-.btn:disabled {
-  opacity: 0.5;
-}
+  .icon-btn {
+    @apply inline-flex h-9 w-9 items-center justify-center rounded-lg text-slate-500 transition hover:bg-slate-100 hover:text-ink;
+  }
 
-.btn-muted {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 0.5rem;
-  border: 1px solid #cbd5e1;
-  background-color: #ffffff;
-  padding: 0.5rem 0.75rem;
-  font-size: 0.875rem;
-  font-weight: 500;
-  color: #1a2332;
-}
+  .input {
+    @apply w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-ink outline-none placeholder:text-slate-400 focus:border-accent;
+  }
 
-.btn-muted:hover {
-  border-color: #57b6c0;
-  color: #57b6c0;
-}
+  .table {
+    @apply w-full text-left text-sm text-ink;
+  }
 
-.input {
-  width: 100%;
-  border-radius: 0.5rem;
-  border: 1px solid #cbd5e1;
-  background-color: #ffffff;
-  padding: 0.5rem 0.75rem;
-  font-size: 0.875rem;
-  color: #1a2332;
-  outline: none;
-}
+  .table th {
+    @apply border-b border-slate-100 px-4 py-2.5 text-xs font-semibold uppercase tracking-wide text-slate-500;
+  }
 
-.input::placeholder {
-  color: #94a3b8;
-}
+  .table td {
+    @apply border-b border-slate-50 px-4 py-3 text-ink;
+  }
 
-.input:focus {
-  border-color: #57b6c0;
-}
+  .badge-success {
+    @apply inline-flex items-center rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-semibold text-emerald-700;
+  }
 
-.table {
-  width: 100%;
-  text-align: left;
-  font-size: 0.875rem;
-  color: #1a2332;
-}
+  .badge-danger {
+    @apply inline-flex items-center rounded-full bg-rose-50 px-2 py-0.5 text-xs font-semibold text-rose-700;
+  }
 
-.table th {
-  border-bottom: 1px solid #e2e8f0;
-  padding: 0.5rem 0.75rem;
-  font-weight: 600;
-  color: #475569;
-}
+  .badge-warn {
+    @apply inline-flex items-center rounded-full bg-amber-50 px-2 py-0.5 text-xs font-semibold text-amber-700;
+  }
 
-.table td {
-  border-bottom: 1px solid #f1f5f9;
-  padding: 0.5rem 0.75rem;
-  color: #1a2332;
+  .badge-info {
+    @apply inline-flex items-center rounded-full bg-sky-50 px-2 py-0.5 text-xs font-semibold text-sky-700;
+  }
+
+  .badge-muted {
+    @apply inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-600;
+  }
 }
 
 .status-ONLINE { color: #1f8a78; }

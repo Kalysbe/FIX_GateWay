@@ -46,7 +46,8 @@ SELECT o.id, o.broker_id, COALESCE(o.account_id, 0), o.client_order_id, o.instru
        i.currency,
        COALESCE(NULLIF(o.fix_firm, ''), '') AS quik_firm,
        COALESCE(NULLIF(o.fix_client_id, ''), '') AS client_code,
-       COALESCE(NULLIF(f.firm_name, ''), NULLIF(bf.name, ''), NULLIF(b.name, ''), '') AS firm_name
+       COALESCE(NULLIF(f.firm_name, ''), NULLIF(bf.name, ''), NULLIF(b.name, ''), '') AS firm_name,
+       COALESCE(o.request_id, ''), COALESCE(o.trace_id, '')
 FROM orders o
 JOIN instruments i ON i.id = o.instrument_id
 LEFT JOIN brokers b ON b.id = o.broker_id
@@ -73,6 +74,7 @@ func (s *Store) scanOrder(row pgx.Row) (domain.Order, error) {
 		&o.TimeInForce, &o.Quantity, &price, &o.FilledQuantity, &o.AvgPrice, &o.Status, &o.AdapterID,
 		&o.FixClOrdID, &o.QuikOrderID, &o.RejectReason, &o.CreatedAt, &o.UpdatedAt,
 		&o.Symbol, &o.Board, &o.TradingAccount, &o.Currency, &o.QuikFirm, &o.ClientCode, &o.FirmName,
+		&o.RequestID, &o.TraceID,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return o, ErrNotFound
@@ -87,8 +89,8 @@ func (s *Store) scanOrder(row pgx.Row) (domain.Order, error) {
 type CreateInput struct {
 	BrokerID      int64
 	FixAccount    string
-	ClientCode    string // FIX tag 109 — arbitrary broker client code
-	QuikFirm      string // FIX tag 5018 — from API token
+	ClientCode    string // FIX tag 109 вЂ” arbitrary broker client code
+	QuikFirm      string // FIX tag 5018 вЂ” from API token
 	ClientOrderID string
 	InstrumentID  int64
 	Board         string
@@ -97,6 +99,8 @@ type CreateInput struct {
 	TimeInForce   string
 	Quantity      decimal.Decimal
 	Price         *decimal.Decimal
+	RequestID     string
+	TraceID       string
 }
 
 func (s *Store) CreateWithOutbox(ctx context.Context, in CreateInput) (domain.Order, bool, error) {
@@ -124,12 +128,12 @@ func (s *Store) CreateWithOutbox(ctx context.Context, in CreateInput) (domain.Or
 		INSERT INTO orders (
 			id, broker_id, account_id, client_order_id, instrument_id, side, order_type,
 			time_in_force, quantity, price, status, fix_cl_ord_id, board, fix_account,
-			fix_client_id, fix_firm
-		) VALUES ($1,$2,NULL,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
+			fix_client_id, fix_firm, request_id, trace_id
+		) VALUES ($1,$2,NULL,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)`,
 		id, in.BrokerID, in.ClientOrderID, in.InstrumentID, in.Side, in.OrderType,
 		in.TimeInForce, in.Quantity, in.Price, domain.OrderQueued,
 		fmt.Sprintf("G%s", id.String()[:32]), in.Board, in.FixAccount,
-		in.ClientCode, in.QuikFirm,
+		in.ClientCode, in.QuikFirm, nullIfEmpty(in.RequestID), nullIfEmpty(in.TraceID),
 	)
 	if err != nil {
 		return domain.Order{}, false, err
@@ -153,7 +157,7 @@ func (s *Store) CreateWithOutbox(ctx context.Context, in CreateInput) (domain.Or
 		}
 	}
 
-	payload, _ := json.Marshal(map[string]any{"order_id": id.String()})
+	payload, _ := json.Marshal(map[string]any{"order_id": id.String(), "request_id": in.RequestID, "trace_id": in.TraceID})
 	_, err = tx.Exec(ctx, `
 		INSERT INTO outbox_events (aggregate_type, aggregate_id, event_type, payload)
 		VALUES ('order', $1, 'ORDER_SEND', $2)`, id.String(), payload)
@@ -322,30 +326,122 @@ func (s *Store) ClearRouteForFailover(ctx context.Context, id uuid.UUID, reason 
 	return tx.Commit(ctx)
 }
 
-func (s *Store) ApplyExecutionReport(ctx context.Context, fixClOrdID, execID, execType, ordStatus, quikOrderID string, lastQty, lastPx, cumQty, leavesQty decimal.Decimal, adapterID, text, ordRejReason, rawFIX string) (domain.Order, *domain.Execution, error) {
+const orderLockSelect = `
+		SELECT id, broker_id, COALESCE(account_id, 0), client_order_id, instrument_id, side, order_type,
+		       time_in_force, quantity, price, filled_quantity, avg_price, status, adapter_id,
+		       fix_cl_ord_id, quik_order_id, reject_reason, created_at, updated_at
+		FROM orders `
+
+func scanLockedOrder(row pgx.Row) (domain.Order, error) {
+	var o domain.Order
+	var price *decimal.Decimal
+	err := row.Scan(&o.ID, &o.BrokerID, &o.AccountID, &o.ClientOrderID, &o.InstrumentID, &o.Side, &o.OrderType,
+		&o.TimeInForce, &o.Quantity, &price, &o.FilledQuantity, &o.AvgPrice, &o.Status, &o.AdapterID,
+		&o.FixClOrdID, &o.QuikOrderID, &o.RejectReason, &o.CreatedAt, &o.UpdatedAt)
+	if err != nil {
+		return o, err
+	}
+	o.Price = price
+	return o, nil
+}
+
+func uniqueNonEmpty(vals ...string) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, v := range vals {
+		v = strings.TrimSpace(v)
+		if v == "" || seen[v] {
+			continue
+		}
+		seen[v] = true
+		out = append(out, v)
+	}
+	return out
+}
+
+func clOrdLookupKeys(clOrdID, origClOrdID string) []string {
+	keys := uniqueNonEmpty(clOrdID, origClOrdID)
+	if i := strings.LastIndex(clOrdID, "-C"); i > 0 {
+		keys = uniqueNonEmpty(append(keys, clOrdID[:i])...)
+	}
+	return keys
+}
+
+func lockOrderForFIX(ctx context.Context, tx pgx.Tx, clOrdID, origClOrdID, quikOrderID string) (domain.Order, error) {
+	for _, k := range clOrdLookupKeys(clOrdID, origClOrdID) {
+		o, err := scanLockedOrder(tx.QueryRow(ctx, orderLockSelect+` WHERE fix_cl_ord_id=$1 FOR UPDATE`, k))
+		if err == nil {
+			return o, nil
+		}
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return domain.Order{}, err
+		}
+	}
+	if strings.TrimSpace(quikOrderID) != "" {
+		o, err := scanLockedOrder(tx.QueryRow(ctx, orderLockSelect+` WHERE quik_order_id=$1 FOR UPDATE`, quikOrderID))
+		if err == nil {
+			return o, nil
+		}
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return domain.Order{}, err
+		}
+	}
+	return domain.Order{}, ErrNotFound
+}
+
+func (s *Store) ApplyCancelReject(ctx context.Context, clOrdID, origClOrdID, quikOrderID, adapterID, reason, rawFIX string) (domain.Order, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return domain.Order{}, err
+	}
+	defer tx.Rollback(ctx)
+	o, err := lockOrderForFIX(ctx, tx, clOrdID, origClOrdID, quikOrderID)
+	if err != nil {
+		return domain.Order{}, err
+	}
+	to := o.Status
+	if o.Status == domain.OrderCancelPending {
+		if o.FilledQuantity.GreaterThan(decimal.Zero) {
+			to = domain.OrderPartiallyFilled
+		} else {
+			to = domain.OrderAcknowledged
+		}
+	}
+	msg := "cancel rejected"
+	if strings.TrimSpace(reason) != "" {
+		msg = "cancel rejected: " + reason
+	}
+	if to != o.Status {
+		_, err = tx.Exec(ctx, `UPDATE orders SET status=$2, updated_at=now() WHERE id=$1`, o.ID, to)
+		if err != nil {
+			return domain.Order{}, err
+		}
+	}
+	payload := fixWirePayload(rawFIX)
+	_, err = tx.Exec(ctx, `
+		INSERT INTO order_events (order_id, event_type, from_status, to_status, adapter_id, message, payload)
+		VALUES ($1,'ORDER_CANCEL_REJECTED',$2,$3,$4,$5,$6)`,
+		o.ID, string(o.Status), string(to), adapterID, msg, payload)
+	if err != nil {
+		return domain.Order{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return domain.Order{}, err
+	}
+	return s.Get(ctx, o.ID)
+}
+
+func (s *Store) ApplyExecutionReport(ctx context.Context, fixClOrdID, origClOrdID, execID, execType, ordStatus, quikOrderID string, lastQty, lastPx, cumQty, leavesQty decimal.Decimal, adapterID, text, ordRejReason, rawFIX string) (domain.Order, *domain.Execution, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return domain.Order{}, nil, err
 	}
 	defer tx.Rollback(ctx)
 
-	var o domain.Order
-	var price *decimal.Decimal
-	err = tx.QueryRow(ctx, `
-		SELECT id, broker_id, COALESCE(account_id, 0), client_order_id, instrument_id, side, order_type,
-		       time_in_force, quantity, price, filled_quantity, avg_price, status, adapter_id,
-		       fix_cl_ord_id, quik_order_id, reject_reason, created_at, updated_at
-		FROM orders WHERE fix_cl_ord_id=$1 FOR UPDATE`, fixClOrdID,
-	).Scan(&o.ID, &o.BrokerID, &o.AccountID, &o.ClientOrderID, &o.InstrumentID, &o.Side, &o.OrderType,
-		&o.TimeInForce, &o.Quantity, &price, &o.FilledQuantity, &o.AvgPrice, &o.Status, &o.AdapterID,
-		&o.FixClOrdID, &o.QuikOrderID, &o.RejectReason, &o.CreatedAt, &o.UpdatedAt)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return domain.Order{}, nil, ErrNotFound
-	}
+	o, err := lockOrderForFIX(ctx, tx, fixClOrdID, origClOrdID, quikOrderID)
 	if err != nil {
 		return domain.Order{}, nil, err
 	}
-	o.Price = price
 
 	to := mapExecStatus(execType, ordStatus, o.Status)
 	erMsg := formatExecutionMessage(execType, ordStatus, text, ordRejReason)
@@ -569,17 +665,10 @@ func (s *Store) List(ctx context.Context, brokerID *int64, limit int) ([]domain.
 	defer rows.Close()
 	var out []domain.Order
 	for rows.Next() {
-		var o domain.Order
-		var price *decimal.Decimal
-		if err := rows.Scan(
-			&o.ID, &o.BrokerID, &o.AccountID, &o.ClientOrderID, &o.InstrumentID, &o.Side, &o.OrderType,
-			&o.TimeInForce, &o.Quantity, &price, &o.FilledQuantity, &o.AvgPrice, &o.Status, &o.AdapterID,
-			&o.FixClOrdID, &o.QuikOrderID, &o.RejectReason, &o.CreatedAt, &o.UpdatedAt,
-			&o.Symbol, &o.Board, &o.TradingAccount, &o.Currency, &o.QuikFirm, &o.ClientCode, &o.FirmName,
-		); err != nil {
+		o, err := s.scanOrder(rows)
+		if err != nil {
 			return nil, err
 		}
-		o.Price = price
 		out = append(out, o)
 	}
 	return out, rows.Err()
@@ -629,22 +718,49 @@ func (s *Store) ResolveInstrument(ctx context.Context, brokerID int64, brokerSym
 	return i, err
 }
 
-func (s *Store) EnqueueCancel(ctx context.Context, orderID uuid.UUID) error {
+func (s *Store) EnqueueCancel(ctx context.Context, orderID uuid.UUID) (already bool, err error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
-		return err
+		return false, err
 	}
 	defer tx.Rollback(ctx)
 	var status domain.OrderStatus
 	if err := tx.QueryRow(ctx, `SELECT status FROM orders WHERE id=$1 FOR UPDATE`, orderID).Scan(&status); err != nil {
-		return err
+		return false, err
+	}
+	if status == domain.OrderCancelled {
+		return true, nil
+	}
+	var last *time.Time
+	if err := tx.QueryRow(ctx, `
+		SELECT MAX(created_at)
+		FROM outbox_events WHERE aggregate_id=$1 AND event_type='ORDER_CANCEL'`, orderID.String()).Scan(&last); err != nil {
+		return false, err
+	}
+	// Client pollers retry HTTP cancel ~every 250ms. After QUIK reject the
+	// order returns to ACKNOWLEDGED, which would otherwise enqueue a new FIX F.
+	if last != nil && time.Since(*last) < 2*time.Second {
+		return true, nil
+	}
+	if status == domain.OrderCancelPending {
+		if last != nil && time.Since(*last) < 30*time.Second {
+			return true, nil
+		}
+		payload, _ := json.Marshal(map[string]any{"order_id": orderID.String()})
+		_, err = tx.Exec(ctx, `
+			INSERT INTO outbox_events (aggregate_type, aggregate_id, event_type, payload)
+			VALUES ('order', $1, 'ORDER_CANCEL', $2)`, orderID.String(), payload)
+		if err != nil {
+			return false, err
+		}
+		return false, tx.Commit(ctx)
 	}
 	if !CanTransition(status, domain.OrderCancelPending) {
-		return fmt.Errorf("cannot cancel from status %s", status)
+		return false, fmt.Errorf("cannot cancel from status %s", status)
 	}
 	_, err = tx.Exec(ctx, `UPDATE orders SET status=$2, updated_at=now() WHERE id=$1`, orderID, domain.OrderCancelPending)
 	if err != nil {
-		return err
+		return false, err
 	}
 	from := string(status)
 	to := string(domain.OrderCancelPending)
@@ -652,16 +768,16 @@ func (s *Store) EnqueueCancel(ctx context.Context, orderID uuid.UUID) error {
 		INSERT INTO order_events (order_id, event_type, from_status, to_status, message)
 		VALUES ($1,'ORDER_CANCEL_REQUESTED',$2,$3,'cancel requested')`, orderID, from, to)
 	if err != nil {
-		return err
+		return false, err
 	}
 	payload, _ := json.Marshal(map[string]any{"order_id": orderID.String()})
 	_, err = tx.Exec(ctx, `
 		INSERT INTO outbox_events (aggregate_type, aggregate_id, event_type, payload)
 		VALUES ('order', $1, 'ORDER_CANCEL', $2)`, orderID.String(), payload)
 	if err != nil {
-		return err
+		return false, err
 	}
-	return tx.Commit(ctx)
+	return false, tx.Commit(ctx)
 }
 
 func (s *Store) StatsToday(ctx context.Context) (map[string]int64, error) {
@@ -692,4 +808,122 @@ func (s *Store) StatsToday(ctx context.Context) (map[string]int64, error) {
 		}
 	}
 	return out, rows.Err()
+}
+
+type DayCount struct {
+	Date   string `json:"date"`
+	Orders int64  `json:"orders"`
+}
+
+type BrokerPeriodStats struct {
+	Orders   int64 `json:"orders"`
+	Filled   int64 `json:"filled"`
+	Rejected int64 `json:"rejected"`
+	Active   int64 `json:"active"`
+}
+
+type BrokerStats struct {
+	Days     int               `json:"days"`
+	Today    BrokerPeriodStats `json:"today"`
+	Period   BrokerPeriodStats `json:"period"`
+	Previous BrokerPeriodStats `json:"previous"`
+	Series   []DayCount        `json:"series"`
+}
+
+func (s *Store) periodStats(ctx context.Context, brokerID int64, from, to time.Time) (BrokerPeriodStats, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT status, COUNT(*) FROM orders
+		WHERE broker_id=$1 AND created_at >= $2 AND created_at < $3
+		GROUP BY status`, brokerID, from, to)
+	if err != nil {
+		return BrokerPeriodStats{}, err
+	}
+	defer rows.Close()
+	var st BrokerPeriodStats
+	for rows.Next() {
+		var status string
+		var n int64
+		if err := rows.Scan(&status, &n); err != nil {
+			return BrokerPeriodStats{}, err
+		}
+		st.Orders += n
+		switch domain.OrderStatus(status) {
+		case domain.OrderFilled:
+			st.Filled += n
+		case domain.OrderRejected, domain.OrderFailed:
+			st.Rejected += n
+		case domain.OrderQueued, domain.OrderRouting, domain.OrderSent, domain.OrderAcknowledged,
+			domain.OrderPartiallyFilled, domain.OrderCancelPending:
+			st.Active += n
+		}
+	}
+	return st, rows.Err()
+}
+
+func (s *Store) StatsForBroker(ctx context.Context, brokerID int64, days int) (BrokerStats, error) {
+	if days <= 0 {
+		days = 7
+	}
+	if days > 90 {
+		days = 90
+	}
+	now := time.Now()
+	dayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+	periodStart := dayStart.AddDate(0, 0, -(days - 1))
+	prevStart := periodStart.AddDate(0, 0, -days)
+	end := dayStart.AddDate(0, 0, 1)
+
+	out := BrokerStats{Days: days, Series: []DayCount{}}
+	var err error
+	out.Today, err = s.periodStats(ctx, brokerID, dayStart, end)
+	if err != nil {
+		return out, err
+	}
+	out.Period, err = s.periodStats(ctx, brokerID, periodStart, end)
+	if err != nil {
+		return out, err
+	}
+	out.Previous, err = s.periodStats(ctx, brokerID, prevStart, periodStart)
+	if err != nil {
+		return out, err
+	}
+
+	_, offsetSec := now.Zone()
+	rows, err := s.pool.Query(ctx, `
+		SELECT to_char(o.created_at + make_interval(secs => $4), 'YYYY-MM-DD') AS d, COUNT(*)
+		FROM orders o
+		WHERE o.broker_id=$1
+		  AND o.created_at >= $2
+		  AND o.created_at < $3
+		GROUP BY d
+		ORDER BY d`, brokerID, periodStart, end, offsetSec)
+	if err != nil {
+		return out, err
+	}
+	counts := map[string]int64{}
+	for rows.Next() {
+		var d string
+		var n int64
+		if err := rows.Scan(&d, &n); err != nil {
+			rows.Close()
+			return out, err
+		}
+		counts[d] = n
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return out, err
+	}
+	for d := periodStart; !d.After(dayStart); d = d.AddDate(0, 0, 1) {
+		key := d.Format("2006-01-02")
+		out.Series = append(out.Series, DayCount{Date: key, Orders: counts[key]})
+	}
+	return out, nil
+}
+
+func nullIfEmpty(s string) any {
+	if s == "" {
+		return nil
+	}
+	return s
 }

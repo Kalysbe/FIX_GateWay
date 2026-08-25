@@ -158,6 +158,28 @@ func (s *Store) ListFirms(ctx context.Context) ([]Firm, error) {
 	return out, rows.Err()
 }
 
+func (s *Store) ListActiveInstruments(ctx context.Context) ([]domain.SecurityRef, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT quik_symbol, board, currency, security_type
+		FROM instruments
+		WHERE status='ACTIVE' AND board <> '' AND board <> 'UNKNOWN'
+		ORDER BY board, quik_symbol`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []domain.SecurityRef
+	for rows.Next() {
+		var r domain.SecurityRef
+		if err := rows.Scan(&r.Symbol, &r.Board, &r.Currency, &r.SecurityType); err != nil {
+			return nil, err
+		}
+		r.SecurityID = r.Symbol
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
 // GetFirmByID returns a firm from the local quik_firms cache.
 // ok=false if firm_id is empty or not found (not an error).
 func (s *Store) GetFirmByID(ctx context.Context, firmID string) (Firm, bool, error) {

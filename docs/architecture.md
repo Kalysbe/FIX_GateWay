@@ -42,6 +42,7 @@ Broker → REST API → Order Service → PostgreSQL (+ outbox) → Worker
 
 ## Related docs
 
+- [Broker API guide (stage 1)](./broker-api-guide.md)
 - [ARQA requirements checklist](./arqa-requirements-checklist.md)
 - [ARQA FIX contract](./arqa-fix-contract.md)
 - [Deployment](./deployment.md)

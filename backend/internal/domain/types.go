@@ -78,16 +78,16 @@ const (
 )
 
 type Broker struct {
-	ID                   int64        `json:"id"`
-	Code                 string       `json:"code"`
-	Name                 string       `json:"name"`
-	Description          string       `json:"description"`
-	Status               BrokerStatus `json:"status"`
-	IPWhitelistEnabled   bool         `json:"ip_whitelist_enabled"`
-	RateLimitRPS         int          `json:"rate_limit_rps"`
-	RateLimitOrdersPerSec int         `json:"rate_limit_orders_per_sec"`
-	CreatedAt            time.Time    `json:"created_at"`
-	UpdatedAt            time.Time    `json:"updated_at"`
+	ID                    int64        `json:"id"`
+	Code                  string       `json:"code"`
+	Name                  string       `json:"name"`
+	Description           string       `json:"description"`
+	Status                BrokerStatus `json:"status"`
+	IPWhitelistEnabled    bool         `json:"ip_whitelist_enabled"`
+	RateLimitRPS          int          `json:"rate_limit_rps"`
+	RateLimitOrdersPerSec int          `json:"rate_limit_orders_per_sec"`
+	CreatedAt             time.Time    `json:"created_at"`
+	UpdatedAt             time.Time    `json:"updated_at"`
 }
 
 type BrokerIPAllow struct {
@@ -195,6 +195,8 @@ type Order struct {
 	ClientCode     string `json:"client_code,omitempty"` // FIX tag 109
 	QuikFirm       string `json:"quik_firm,omitempty"`   // FIX tag 5018
 	FirmName       string `json:"firm_name,omitempty"`   // from quik_firms
+	RequestID      string `json:"request_id,omitempty"`
+	TraceID        string `json:"trace_id,omitempty"`
 }
 
 type OrderEvent struct {
@@ -279,9 +281,49 @@ type HealthDetails struct {
 	Message         string
 }
 
+// PositionQuery filters a FIX Request For Positions (35=AN).
+// ARQA §2.31 / HowTo: parties only when used — then exactly 2 (Client+Firm or Account+Firm).
+// Empty parties = snapshot of all clients.
+type PositionQuery struct {
+	Firm                 string // PartyRole=13
+	ClientCode           string // PartyRole=3 (spot cash/instrument)
+	Account              string // PartyRole=38 on request (futures trading account)
+	SubscriptionType     string // 263: 0=SNAPSHOT (default), 1=SNAPSHOT+UPDATES, 2=DISABLE
+	ClearingBusinessDate string // metadata only — not sent on ARQA AN
+}
+
+// FIXPosition is one position block from Position Report (35=AP), ARQA §2.33.
+// Spot money = PosType ML; spot instrument = DL; futures limit/pos = FL/FP.
+type FIXPosition struct {
+	AdapterID     string            `json:"adapter_id"`
+	PosMaintRptID string            `json:"pos_maint_rpt_id"`
+	PosReqID      string            `json:"pos_req_id"`
+	ClearingDate  string            `json:"clearing_date"`
+	Kind          string            `json:"kind"` // INSTRUMENT | CASH | FUTURES
+	FirmID        string            `json:"firm_id"`
+	ClientCode    string            `json:"client_code"`
+	AccountCode   string            `json:"account_code"`
+	Symbol        string            `json:"symbol"`
+	SecurityID    string            `json:"security_id"`
+	Board         string            `json:"board"`
+	Currency      string            `json:"currency"`
+	PosType       string            `json:"pos_type"`        // ML | DL | FL | FP
+	UpdateAction  string            `json:"update_action"`   // 5024: 0 New / 1 Change / 2 Delete
+	Keys          map[string]string `json:"keys,omitempty"`  // 5026/5027 PosKey*
+	Items         map[string]string `json:"items,omitempty"` // 5029/5030 PosItem*
+	LongQty       decimal.Decimal   `json:"long_qty"`
+	ShortQty      decimal.Decimal   `json:"short_qty"`
+	NetQty        decimal.Decimal   `json:"net_qty"`
+	PosAmtType    string            `json:"pos_amt_type"`
+	PosAmt        decimal.Decimal   `json:"pos_amt"`
+	SettlPrice    decimal.Decimal   `json:"settl_price"`
+	RawFIX        string            `json:"raw_fix,omitempty"`
+}
+
 type ExecutionReport struct {
 	AdapterID    string
 	ClOrdID      string
+	OrigClOrdID  string // FIX tag 41 — original order id on cancel/replace reports
 	OrderID      string
 	ExecID       string
 	ExecType     string
@@ -292,7 +334,58 @@ type ExecutionReport struct {
 	LeavesQty    string
 	Text         string // FIX tag 58
 	OrdRejReason string // FIX tag 103
+	CxlRejReason string // FIX tag 102 on 35=9
+	CancelReject bool
 	RawFIX       string // wire format with | separators (8=FIX.4.2|9=…|35=8|…)
 }
 
 type ExecutionHandler func(report ExecutionReport)
+
+// MarketDataQuery filters a FIX Market Data Request (35=V), ARQA §2.19 / HowTo.
+// Empty Symbol+Instruments = snapshot of all quotes the session is allowed to see.
+type MarketDataQuery struct {
+	Symbol           string        // SecurityID (48)
+	Board            string        // ExDestination (100) class code
+	Instruments      []SecurityRef // optional list for NoRelatedSym (146)
+	SubscriptionType string        // 263: 0=SNAPSHOT, 1=SNAPSHOT+UPDATES, 2=DISABLE
+}
+
+type MarketDataHandler func(quotes []MarketQuote)
+
+// MarketQuote is one row of QUIK «Текущие торги», built from Market Data Snapshot (35=W)
+// / Incremental Refresh (35=X). Best bid/offer (top of book) plus last/OHLC/VWAP.
+type MarketQuote struct {
+	AdapterID         string            `json:"adapter_id"`
+	MDReqID           string            `json:"md_req_id"`
+	Symbol            string            `json:"symbol"`
+	SecurityID        string            `json:"security_id"`
+	Board             string            `json:"board"`
+	Currency          string            `json:"currency"`
+	Name              string            `json:"name,omitempty"`
+	TradeDate         string            `json:"trade_date"`
+	TradingStatus     string            `json:"trading_status"`      // 326
+	TradingSessionID  string            `json:"trading_session_id"`  // 336
+	TradingSessionSub string            `json:"trading_session_sub"` // 625
+	Bid               string            `json:"bid"`                 // 269=0
+	BidSize           string            `json:"bid_size"`
+	Offer             string            `json:"offer"` // 269=1
+	OfferSize         string            `json:"offer_size"`
+	Last              string            `json:"last"` // 269=2
+	LastSize          string            `json:"last_size"`
+	LastTime          string            `json:"last_time"`
+	Open              string            `json:"open"`  // 269=4
+	High              string            `json:"high"`  // 269=7
+	Low               string            `json:"low"`   // 269=8
+	Close             string            `json:"close"` // 269=5
+	WAPR              string            `json:"wapr"`  // 269=9
+	Settle            string            `json:"settle"`
+	CurrentPrice      string            `json:"current_price"`  // 269=o
+	OfficialPrice     string            `json:"official_price"` // 269=O
+	Volume            string            `json:"volume"`         // 387 TotalVolumeTraded
+	Value             string            `json:"value"`          // 6143 TotalValueTraded
+	Entries           map[string]string `json:"entries,omitempty"`
+	RawFIX            string            `json:"raw_fix,omitempty"`
+	UpdatedAt         time.Time         `json:"updated_at,omitempty"`
+	DeltaVolume       string            `json:"-"` // last-trade qty in this FIX message, when 387 absent
+	DeltaValue        string            `json:"-"` // last-trade notional, when 6143 absent
+}

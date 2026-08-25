@@ -7,12 +7,14 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/fix-gateway/backend/internal/domain"
 	"github.com/quickfixgo/quickfix"
 	"github.com/quickfixgo/quickfix/store/file"
+	"github.com/shopspring/decimal"
 )
 
 // Adapter implements the Adapter interface using QuickFIX/Go against ARQA or a FIX.4.4 simulator.
@@ -27,13 +29,36 @@ type Adapter struct {
 	processed atomic.Int64
 	errors    atomic.Int64
 	storeDir  string
+
+	subMu       sync.Mutex
+	lastMDQuery domain.MarketDataQuery
 }
 
-func New(meta domain.Adapter, log *slog.Logger, onExec domain.ExecutionHandler, storeDir string) *Adapter {
+func New(meta domain.Adapter, log *slog.Logger, onExec domain.ExecutionHandler, onMD domain.MarketDataHandler, storeDir string) *Adapter {
 	a := &Adapter{meta: meta, log: log, onExec: onExec, storeDir: storeDir}
 	a.status.Store(domain.AdapterUnknown)
 	a.app = newSessionApp(meta.ID, log, onExec)
+	a.app.onMD = onMD
+	a.app.onLogon = func() {
+		a.subMu.Lock()
+		q := a.lastMDQuery
+		a.subMu.Unlock()
+		if q.Symbol == "" && len(q.Instruments) == 0 {
+			return
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		if _, _, err := a.SubscribeMarketData(ctx, q); err != nil {
+			a.log.Warn("market data resubscribe failed", "adapter_id", a.meta.ID, "error", err)
+		}
+	}
 	return a
+}
+
+func (a *Adapter) SetFIXHandler(fn func(kind, sessionID, msgType, direction, clOrdID, reason string, seq int)) {
+	if a.app != nil {
+		a.app.onFIX = fn
+	}
 }
 
 func (a *Adapter) ID() string   { return a.meta.ID }
@@ -98,6 +123,7 @@ func (a *Adapter) Start(ctx context.Context) error {
 
 func (a *Adapter) Stop(ctx context.Context) error {
 	a.status.Store(domain.AdapterStopping)
+	_ = a.UnsubscribeMarketData(ctx)
 	if a.initiator != nil {
 		a.initiator.Stop()
 	}
@@ -167,7 +193,11 @@ func (a *Adapter) CancelOrder(ctx context.Context, order domain.Order) error {
 	if order.QuikOrderID != nil {
 		quik = *order.QuikOrderID
 	}
-	msg := buildCancel(orig+"-C", orig, quik, order.Symbol, string(order.Side), order.TradingAccount, order.ClientCode)
+	qty := order.Quantity.String()
+	if leaves := order.Quantity.Sub(order.FilledQuantity); leaves.GreaterThan(decimal.Zero) {
+		qty = leaves.String()
+	}
+	msg := buildCancel(orig+"-C", orig, quik, order.Symbol, order.Board, string(order.Side), order.TradingAccount, order.ClientCode, order.QuikFirm, qty)
 	if _, err := a.app.send(msg); err != nil {
 		a.errors.Add(1)
 		return err

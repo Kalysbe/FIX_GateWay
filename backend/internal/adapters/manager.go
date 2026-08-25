@@ -15,14 +15,17 @@ import (
 type StatusListener func(adapterID string, status domain.AdapterStatus)
 
 type Manager struct {
-	store         *Store
-	log           *slog.Logger
-	balancer      routing.Balancer
-	onExec        ExecutionHandler
-	onStatus      StatusListener
-	storeDir      string
-	interval      time.Duration
-	hostOverride  string
+	store        *Store
+	log          *slog.Logger
+	balancer     routing.Balancer
+	onExec       ExecutionHandler
+	onStatus     StatusListener
+	onMD         domain.MarketDataHandler
+	storeDir     string
+	interval     time.Duration
+	hostOverride string
+	onFIX        func(kind, adapterID, sessionID, msgType, direction, clOrdID, reason string, seq int)
+	onObs        func(eventType, subtype, adapterID, message string)
 
 	mu       sync.RWMutex
 	adapters map[string]Adapter
@@ -42,6 +45,16 @@ func (m *Manager) SetHostOverride(host string) { m.hostOverride = host }
 
 func (m *Manager) SetStatusListener(fn StatusListener) { m.onStatus = fn }
 
+func (m *Manager) SetMarketDataListener(fn domain.MarketDataHandler) { m.onMD = fn }
+
+func (m *Manager) SetFIXHandler(fn func(kind, adapterID, sessionID, msgType, direction, clOrdID, reason string, seq int)) {
+	m.onFIX = fn
+}
+
+func (m *Manager) SetObserver(fn func(eventType, subtype, adapterID, message string)) {
+	m.onObs = fn
+}
+
 func (m *Manager) StartAll(ctx context.Context) error {
 	list, err := m.store.List(ctx)
 	if err != nil {
@@ -55,6 +68,9 @@ func (m *Manager) StartAll(ctx context.Context) error {
 			m.log.Error("adapter start failed", "adapter_id", meta.ID, "error", err)
 			_ = m.store.UpdateStatus(ctx, meta.ID, domain.AdapterOffline, false)
 			_ = m.store.AddEvent(ctx, meta.ID, "START_FAILED", err.Error())
+			if m.onObs != nil {
+				m.onObs("ADAPTER", "ADAPTER_ERROR", meta.ID, err.Error())
+			}
 		}
 	}
 	go m.healthLoop(ctx)
@@ -75,15 +91,24 @@ func (m *Manager) startOne(ctx context.Context, meta domain.Adapter) error {
 	var ad Adapter
 	switch meta.Type {
 	case "arqa", "simulator":
-		ad = arqa.New(meta, m.log, m.onExec, m.storeDir)
+		ad = arqa.New(meta, m.log, m.onExec, m.onMD, m.storeDir)
 	default:
 		return fmt.Errorf("unknown adapter type %s", meta.Type)
+	}
+	if impl, ok := ad.(*arqa.Adapter); ok && m.onFIX != nil {
+		id := meta.ID
+		impl.SetFIXHandler(func(kind, sessionID, msgType, direction, clOrdID, reason string, seq int) {
+			m.onFIX(kind, id, sessionID, msgType, direction, clOrdID, reason, seq)
+		})
 	}
 	if err := ad.Start(ctx); err != nil {
 		return err
 	}
 	m.adapters[meta.ID] = ad
 	_ = m.store.AddEvent(ctx, meta.ID, "STARTED", "adapter started")
+	if m.onObs != nil {
+		m.onObs("ADAPTER", "ADAPTER_STARTED", meta.ID, "adapter started")
+	}
 	return nil
 }
 
@@ -139,6 +164,13 @@ func (m *Manager) checkAll(ctx context.Context) {
 		if prev != status && m.onStatus != nil {
 			m.onStatus(id, status)
 			_ = m.store.AddEvent(ctx, id, "STATUS_CHANGED", string(status))
+			if m.onObs != nil {
+				sub := "ADAPTER_CONNECTED"
+				if status == domain.AdapterOffline {
+					sub = "ADAPTER_DISCONNECTED"
+				}
+				m.onObs("ADAPTER", sub, id, string(status))
+			}
 		}
 	}
 }
@@ -221,6 +253,9 @@ func (m *Manager) Disable(ctx context.Context, id string) error {
 		delete(m.adapters, id)
 	}
 	m.mu.Unlock()
+	if m.onObs != nil {
+		m.onObs("ADAPTER", "ADAPTER_STOPPED", id, "adapter disabled")
+	}
 	return m.store.UpdateStatus(ctx, id, domain.AdapterOffline, false)
 }
 

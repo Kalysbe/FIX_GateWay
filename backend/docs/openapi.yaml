@@ -1,10 +1,11 @@
 openapi: 3.0.3
 info:
   title: Broker FIX Gateway API
-  version: 0.2.0
+  version: 0.4.0
   description: |
     Broker order routing through FIX adapters to QUIK.
-    Broker APIs authenticate with long-lived API tokens (`Authorization: Bearer sk_live_…`).
+    Broker APIs authenticate with long-lived API tokens (`Authorization: Bearer sk_test_…` / `sk_live_…`).
+    Admin APIs authenticate with JWT from `POST /api/v1/admin/login`.
     Tokens are stored hashed; the full secret is returned only once at creation/rotation.
 servers:
   - url: http://localhost:8080
@@ -23,6 +24,13 @@ paths:
           description: Ready
         "503":
           description: Not ready
+  /metrics:
+    get:
+      tags: [Ops]
+      summary: Prometheus metrics
+      responses:
+        "200":
+          description: Prometheus text exposition
   /api/v1/firm:
     get:
       summary: Firm for current API token
@@ -130,6 +138,121 @@ paths:
       responses:
         "200":
           description: OK
+  /api/v1/accounts:
+    get:
+      tags: [Broker]
+      summary: List accounts of the current broker
+      security:
+        - bearerAuth: []
+      description: Requires `orders:read`. Accounts belong to the broker bound to the token.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  accounts:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/BrokerAccount"
+        "401":
+          description: Unauthorized
+  /api/v1/instruments:
+    get:
+      tags: [Broker]
+      summary: List active instruments
+      security:
+        - bearerAuth: []
+      description: Requires `orders:read`. Use `quik_symbol` + `board` in order create.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  instruments:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Instrument"
+        "401":
+          description: Unauthorized
+  /api/v1/trades:
+    get:
+      tags: [Broker]
+      summary: List fills of the current broker
+      security:
+        - bearerAuth: []
+      description: Requires `trades:read`. Up to 100 latest executions for this broker.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  trades:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Trade"
+        "401":
+          description: Unauthorized
+        "403":
+          description: Missing `trades:read`
+  /api/v1/positions:
+    get:
+      tags: [Broker]
+      summary: Latest FIX position snapshot for the current broker
+      security:
+        - bearerAuth: []
+      description: |
+        Requires `positions:read`.
+
+        Token → broker. Broker `code` (например `2040` у Freedom) — это код фирмы
+        в снимке QUIK (колонка «Фирма» / FIX PartyRole 13). Отдаются только позиции
+        этой фирмы: инструменты (DL/FP) и деньги (ML). Чужие фирмы не возвращаются.
+
+        Это кэш последнего успешного Request For Positions, не live-стрим.
+        Если снимка ещё нет, `instruments` и `cash` пустые, в `note` будет пояснение.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PositionsResponse"
+              example:
+                source: fix
+                firm_id: "2040"
+                snapshot:
+                  adapter_id: quik-fix-1
+                  pos_req_id: POS963157-296
+                  clearing_date: "20260817"
+                  status: OK
+                  report_count: 6
+                instruments:
+                  - kind: INSTRUMENT
+                    firm_id: "2040"
+                    client_code: kalys
+                    account_code: "1-3101-2040"
+                    symbol: KG0105166315
+                    pos_type: DL
+                    net_qty: "1000000"
+                cash:
+                  - kind: CASH
+                    firm_id: "2040"
+                    client_code: kalys
+                    symbol: EQTV
+                    pos_type: ML
+                    net_qty: "10000000"
+        "401":
+          description: Unauthorized
+        "403":
+          description: Missing `positions:read`
   /api/v1/admin/login:
     post:
       summary: Admin login
@@ -268,12 +391,21 @@ paths:
           description: New token created
   /api/v1/admin/adapters:
     get:
+      tags: [Admin]
       summary: List adapters
       security:
         - bearerAuth: []
       responses:
         "200":
           description: OK
+    post:
+      tags: [Admin]
+      summary: Create adapter
+      security:
+        - bearerAuth: []
+      responses:
+        "201":
+          description: Created
   /api/v1/admin/orders:
     get:
       summary: List all orders
@@ -282,6 +414,57 @@ paths:
       responses:
         "200":
           description: OK
+  /api/v1/admin/emitents/{symbol}/orders:
+    get:
+      tags: [Admin]
+      summary: QUIK Quotes by emitent trading symbol
+      description: |
+        Takes a 4-character trading symbol, looks it up in `emitents.symbol`,
+        reads `emitents.code` (4 chars), then returns rows from QUIK `"Orders"`
+        where characters 7–10 of `SecCode` equal that code
+        (`substring(SecCode from 7 for 4)`), joined with `"Securities"` for
+        `SecShortName` and `SecFullName`.
+
+        Calls PostgreSQL function `"Quotes"` on the QUIK export database:
+        `SELECT * FROM public."Quotes"('MAIR')`.
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: symbol
+          required: true
+          schema:
+            type: string
+            minLength: 4
+            maxLength: 4
+            example: MAIR
+          description: Trading symbol, exactly 4 characters
+      responses:
+        "200":
+          description: Emitent found; `quotes` may be empty
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EmitentOrdersResponse"
+              example:
+                symbol: MAIR
+                code: "1663"
+                count: 0
+                emitent:
+                  id: 344
+                  name: ОАО Аэропорты Кыргызстана
+                  name_eng: ""
+                  code: "1663"
+                  symbol: MAIR
+                quotes: []
+        "400":
+          description: Symbol is not exactly 4 characters
+        "401":
+          description: Unauthorized
+        "404":
+          description: Emitent with this symbol not found
+        "503":
+          description: QUIK export database is not configured
   /api/v1/admin/trades:
     get:
       summary: List FIX trades (ExecutionReport fills from executions table)
@@ -292,19 +475,584 @@ paths:
           description: OK
   /api/v1/admin/dashboard:
     get:
+      tags: [Admin]
       summary: Dashboard stats
       security:
         - bearerAuth: []
       responses:
         "200":
           description: OK
+  /api/v1/admin/brokers/{id}:
+    get:
+      tags: [Admin]
+      summary: Get broker
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/BrokerID"
+      responses:
+        "200":
+          description: OK
+    patch:
+      tags: [Admin]
+      summary: Update broker
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/BrokerID"
+      responses:
+        "200":
+          description: OK
+  /api/v1/admin/brokers/{id}/stats:
+    get:
+      tags: [Admin]
+      summary: Broker order stats
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/BrokerID"
+      responses:
+        "200":
+          description: OK
+  /api/v1/admin/brokers/{id}/accounts:
+    get:
+      tags: [Admin]
+      summary: List broker accounts
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/BrokerID"
+      responses:
+        "200":
+          description: OK
+    post:
+      tags: [Admin]
+      summary: Create broker account
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/BrokerID"
+      responses:
+        "201":
+          description: Created
+  /api/v1/admin/brokers/{id}/ip-whitelist/{entry_id}:
+    delete:
+      tags: [Admin]
+      summary: Remove IP whitelist entry
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/BrokerID"
+        - in: path
+          name: entry_id
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Removed
+  /api/v1/admin/brokers/{id}/logs:
+    get:
+      tags: [Observability]
+      summary: Logs for one broker
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/BrokerID"
+        - $ref: "#/components/parameters/LogLimit"
+        - $ref: "#/components/parameters/LogCursor"
+      responses:
+        "200":
+          description: OK
+  /api/v1/admin/brokers/{id}/statistics:
+    get:
+      tags: [Observability]
+      summary: Broker observability statistics
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/BrokerID"
+      responses:
+        "200":
+          description: OK
+  /api/v1/admin/brokers/{id}/statistics/daily:
+    get:
+      tags: [Observability]
+      summary: Daily broker statistics series
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/BrokerID"
+      responses:
+        "200":
+          description: OK
+  /api/v1/admin/brokers/{id}/statistics/weekly:
+    get:
+      tags: [Observability]
+      summary: Weekly broker statistics series
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/BrokerID"
+      responses:
+        "200":
+          description: OK
+  /api/v1/admin/brokers/{id}/statistics/monthly:
+    get:
+      tags: [Observability]
+      summary: Monthly broker statistics series
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/BrokerID"
+      responses:
+        "200":
+          description: OK
+  /api/v1/admin/tokens/{id}:
+    delete:
+      tags: [Admin]
+      summary: Revoke token
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/TokenID"
+      responses:
+        "200":
+          description: REVOKED
+    patch:
+      tags: [Admin]
+      summary: Update token metadata
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/TokenID"
+      responses:
+        "200":
+          description: OK
+  /api/v1/admin/orders/{id}:
+    get:
+      tags: [Admin]
+      summary: Get order
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/OrderID"
+      responses:
+        "200":
+          description: OK
+  /api/v1/admin/orders/{id}/trace:
+    get:
+      tags: [Observability]
+      summary: Order trace (correlated events)
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/OrderID"
+      responses:
+        "200":
+          description: OK
+  /api/v1/admin/positions:
+    get:
+      tags: [Admin]
+      summary: Latest FIX position snapshot
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: query
+          name: firm_id
+          schema:
+            type: string
+        - in: query
+          name: broker_id
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: OK
+  /api/v1/admin/positions/sync:
+    post:
+      tags: [Admin]
+      summary: Request FIX positions now
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Sync result
+  /api/v1/admin/market-data:
+    get:
+      tags: [Admin]
+      summary: Latest market data snapshot
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: OK
+  /api/v1/admin/market-data/sync:
+    post:
+      tags: [Admin]
+      summary: Subscribe / refresh FIX market data
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Sync result
+  /api/v1/admin/adapters/{id}:
+    patch:
+      tags: [Admin]
+      summary: Update adapter
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/AdapterID"
+      responses:
+        "200":
+          description: OK
+  /api/v1/admin/adapters/{id}/enable:
+    post:
+      tags: [Admin]
+      summary: Enable adapter
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/AdapterID"
+      responses:
+        "200":
+          description: OK
+  /api/v1/admin/adapters/{id}/disable:
+    post:
+      tags: [Admin]
+      summary: Disable adapter
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/AdapterID"
+      responses:
+        "200":
+          description: OK
+  /api/v1/admin/adapters/{id}/restart:
+    post:
+      tags: [Admin]
+      summary: Restart adapter session
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/AdapterID"
+      responses:
+        "200":
+          description: OK
+  /api/v1/admin/instruments:
+    get:
+      tags: [Admin]
+      summary: List local instruments
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: OK
+  /api/v1/admin/instruments/sync:
+    post:
+      tags: [Admin]
+      summary: Sync instruments via FIX Security Definition
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Sync result
+  /api/v1/admin/quik/sync:
+    post:
+      tags: [Admin]
+      summary: Alias of instruments/sync
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Sync result
+  /api/v1/admin/firms:
+    get:
+      tags: [Admin]
+      summary: List cached QUIK firms
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: OK
+  /api/v1/admin/users:
+    get:
+      tags: [Admin]
+      summary: List admin users
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: OK
+  /api/v1/admin/audit:
+    get:
+      tags: [Admin]
+      summary: Legacy audit log
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: OK
+  /api/v1/admin/logs:
+    get:
+      tags: [Observability]
+      summary: Observability events
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/LogLimit"
+        - $ref: "#/components/parameters/LogCursor"
+        - $ref: "#/components/parameters/LogKind"
+        - in: query
+          name: type
+          schema:
+            type: string
+        - in: query
+          name: severity
+          schema:
+            type: string
+        - in: query
+          name: from
+          schema:
+            type: string
+            format: date-time
+        - in: query
+          name: to
+          schema:
+            type: string
+            format: date-time
+        - in: query
+          name: broker_id
+          schema:
+            type: integer
+        - in: query
+          name: error_code
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Page of events (`logs`, `next_cursor`, `total`)
+  /api/v1/admin/logs/{id}:
+    get:
+      tags: [Observability]
+      summary: Get one observability event
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: OK
+  /api/v1/admin/logs/export:
+    get:
+      tags: [Observability]
+      summary: Export logs (csv/json; may be async)
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: query
+          name: format
+          schema:
+            type: string
+            enum: [csv, json]
+      responses:
+        "200":
+          description: File or accepted job
+  /api/v1/admin/logs/export/{id}:
+    get:
+      tags: [Observability]
+      summary: Export job status
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ExportJobID"
+      responses:
+        "200":
+          description: OK
+  /api/v1/admin/logs/export/{id}/download:
+    get:
+      tags: [Observability]
+      summary: Download finished export
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ExportJobID"
+      responses:
+        "200":
+          description: File
+  /api/v1/admin/errors:
+    get:
+      tags: [Observability]
+      summary: Error events
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/LogLimit"
+        - $ref: "#/components/parameters/LogCursor"
+      responses:
+        "200":
+          description: OK
+  /api/v1/admin/events:
+    get:
+      tags: [Observability]
+      summary: Business events
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/LogLimit"
+        - $ref: "#/components/parameters/LogCursor"
+      responses:
+        "200":
+          description: OK
+  /api/v1/admin/obs-audit:
+    get:
+      tags: [Observability]
+      summary: Observability audit events
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/LogLimit"
+        - $ref: "#/components/parameters/LogCursor"
+      responses:
+        "200":
+          description: OK
+  /api/v1/admin/notifications:
+    get:
+      tags: [Observability]
+      summary: Notifications (paginated, max 20)
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 20
+            default: 20
+        - in: query
+          name: page
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - in: query
+          name: offset
+          schema:
+            type: integer
+            minimum: 0
+        - in: query
+          name: unread
+          schema:
+            type: boolean
+      responses:
+        "200":
+          description: "`notifications`, `unread`, `total`, `page`, `has_more`"
+  /api/v1/admin/notifications/read-all:
+    post:
+      tags: [Observability]
+      summary: Mark all notifications read
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: OK
+  /api/v1/admin/notifications/{id}/read:
+    post:
+      tags: [Observability]
+      summary: Mark one notification read
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: OK
+  /api/v1/admin/ws:
+    get:
+      tags: [Observability]
+      summary: Admin WebSocket (query token=JWT)
+      description: Real-time `obs.event`, `notification.new`, `order.updated`, `adapter.status_changed`.
+      parameters:
+        - in: query
+          name: token
+          required: true
+          schema:
+            type: string
+      responses:
+        "101":
+          description: Switching Protocols
 components:
   securitySchemes:
     bearerAuth:
       type: http
       scheme: bearer
-      bearerFormat: sk_live_…
-      description: Broker API token from Admin → Brokers → Tokens. Paste token only (Swagger adds `Bearer `).
+      bearerFormat: JWT or sk_test_…
+      description: Broker token (`sk_test_…`) or admin JWT from `/api/v1/admin/login`. Paste token only (Swagger adds `Bearer `).
+  parameters:
+    BrokerID:
+      in: path
+      name: id
+      required: true
+      schema:
+        type: integer
+    TokenID:
+      in: path
+      name: id
+      required: true
+      schema:
+        type: string
+        format: uuid
+    OrderID:
+      in: path
+      name: id
+      required: true
+      schema:
+        type: string
+        format: uuid
+    AdapterID:
+      in: path
+      name: id
+      required: true
+      schema:
+        type: string
+    ExportJobID:
+      in: path
+      name: id
+      required: true
+      schema:
+        type: string
+        format: uuid
+    LogLimit:
+      in: query
+      name: limit
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 200
+        default: 20
+    LogCursor:
+      in: query
+      name: cursor
+      schema:
+        type: string
+    LogKind:
+      in: query
+      name: kind
+      schema:
+        type: string
+        enum: [all, api, orders, business, errors, auth, fix, system, audit]
   schemas:
     CreateOrderRequest:
       type: object
@@ -387,9 +1135,207 @@ components:
           items:
             type: string
             enum:
-              - orders:create
-              - orders:read
-              - orders:cancel
-              - orders:replace
-              - trades:read
-              - positions:read
+              - "orders:create"
+              - "orders:read"
+              - "orders:cancel"
+              - "orders:replace"
+              - "trades:read"
+              - "positions:read"
+    BrokerAccount:
+      type: object
+      properties:
+        id:
+          type: integer
+        broker_id:
+          type: integer
+        code:
+          type: string
+        name:
+          type: string
+        quik_firm:
+          type: string
+        trading_account:
+          type: string
+          example: "1-3101-2040"
+        status:
+          type: string
+          example: ACTIVE
+    Instrument:
+      type: object
+      properties:
+        id:
+          type: integer
+        internal_symbol:
+          type: string
+        quik_symbol:
+          type: string
+          example: KG0105166315
+        board:
+          type: string
+          example: LISTEDSTOCKK
+        currency:
+          type: string
+          example: KZT
+        security_type:
+          type: string
+        status:
+          type: string
+          example: ACTIVE
+    Trade:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        order_id:
+          type: string
+          format: uuid
+        exec_id:
+          type: string
+        last_qty:
+          type: string
+        last_px:
+          type: string
+        cum_qty:
+          type: string
+        leaves_qty:
+          type: string
+        client_order_id:
+          type: string
+        symbol:
+          type: string
+        board:
+          type: string
+        side:
+          type: string
+        client_code:
+          type: string
+        quik_firm:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+    Position:
+      type: object
+      properties:
+        kind:
+          type: string
+          enum: [INSTRUMENT, CASH, FUTURES]
+        firm_id:
+          type: string
+          description: Код фирмы = код брокера (например 2040)
+          example: "2040"
+        client_code:
+          type: string
+          example: kalys
+        account_code:
+          type: string
+          example: "1-3101-2040"
+        symbol:
+          type: string
+        security_id:
+          type: string
+        board:
+          type: string
+        currency:
+          type: string
+        pos_type:
+          type: string
+          description: ML деньги, DL инструмент, FL/FP фьючерсы
+          example: DL
+        long_qty:
+          type: string
+        short_qty:
+          type: string
+        net_qty:
+          type: string
+        settl_price:
+          type: string
+        keys:
+          type: object
+          additionalProperties:
+            type: string
+        items:
+          type: object
+          additionalProperties:
+            type: string
+    PositionSnapshot:
+      type: object
+      properties:
+        id:
+          type: integer
+        adapter_id:
+          type: string
+          example: quik-fix-1
+        pos_req_id:
+          type: string
+        clearing_date:
+          type: string
+        requested_at:
+          type: string
+          format: date-time
+        completed_at:
+          type: string
+          format: date-time
+        status:
+          type: string
+          example: OK
+        report_count:
+          type: integer
+    PositionsResponse:
+      type: object
+      properties:
+        source:
+          type: string
+          example: fix
+        firm_id:
+          type: string
+          description: Код брокера, по которому отфильтрован снимок
+          example: "2040"
+        snapshot:
+          $ref: "#/components/schemas/PositionSnapshot"
+        instruments:
+          type: array
+          items:
+            $ref: "#/components/schemas/Position"
+        cash:
+          type: array
+          items:
+            $ref: "#/components/schemas/Position"
+        note:
+          type: string
+          description: Пояснение, если снимка ещё нет
+    EmitentOrdersResponse:
+      type: object
+      properties:
+        symbol:
+          type: string
+          example: MAIR
+        code:
+          type: string
+          description: emitents.code used to match SecCode[7:10]
+          example: "1663"
+        count:
+          type: integer
+          example: 0
+        emitent:
+          type: object
+          properties:
+            id:
+              type: integer
+              format: int64
+            name:
+              type: string
+            name_eng:
+              type: string
+            code:
+              type: string
+            symbol:
+              type: string
+        quotes:
+          type: array
+          description: QUIK Orders rows plus Securities.SecShortName and SecFullName
+          items:
+            type: object
+            additionalProperties: true
+

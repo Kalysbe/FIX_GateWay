@@ -21,6 +21,7 @@ Copy `deploy/.env.example` → `deploy/.env` to override secrets.
 
 ## Docs
 
+- [Broker API guide (stage 1)](docs/broker-api-guide.md)
 - [Architecture](docs/architecture.md)
 - [Deployment](docs/deployment.md)
 - [ARQA requirements checklist](docs/arqa-requirements-checklist.md)

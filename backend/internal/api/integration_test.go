@@ -56,7 +56,7 @@ func TestOrderIdempotencyIntegration(t *testing.T) {
 	outboxStore := outbox.NewStore(pool)
 	hub := realtime.NewHub()
 	manager := adapters.NewManager(adapterStore, log, routing.New(cfg.LBStrategy), nil, t.TempDir(), time.Second)
-	srv := api.NewServer(cfg, log, pool, brokerStore, orderSvc, orderStore, adapterStore, manager, outboxStore, auditStore, users, hub)
+	srv := api.NewServer(cfg, log, pool, brokerStore, orderSvc, orderStore, adapterStore, manager, outboxStore, auditStore, users, hub, nil)
 
 	b, err := brokerStore.CreateBroker(ctx, "ITEST", "Integration", "")
 	if err != nil {

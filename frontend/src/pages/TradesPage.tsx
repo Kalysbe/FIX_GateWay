@@ -1,16 +1,4 @@
 import { useQuery } from "@tanstack/react-query";
-import {
-  flexRender,
-  getCoreRowModel,
-  getFilteredRowModel,
-  getPaginationRowModel,
-  getSortedRowModel,
-  type ColumnDef,
-  type ColumnFiltersState,
-  type FilterFn,
-  type SortingState,
-  useReactTable,
-} from "@tanstack/react-table";
 import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api";
@@ -37,35 +25,28 @@ type Trade = {
   quik_order_id?: string | null;
 };
 
-const globalFilterFn: FilterFn<Trade> = (row, _columnId, filterValue) => {
-  const q = String(filterValue || "").trim().toLowerCase();
-  if (!q) return true;
-  const t = row.original;
-  const hay = [
-    t.exec_id,
-    t.client_order_id,
-    t.order_id,
-    t.firm_name,
-    t.quik_firm,
-    t.client_code,
-    t.symbol,
-    t.board,
-    t.side,
-    t.adapter_id,
-    t.fix_cl_ord_id,
-    t.quik_order_id,
-    String(t.last_qty),
-    String(t.last_px),
-  ]
-    .filter(Boolean)
-    .join(" ")
-    .toLowerCase();
-  return hay.includes(q);
+type Deal = {
+  key: string;
+  label: string;
+  trades: Trade[];
+  paired: boolean;
+  createdAt: number;
+  symbol: string;
+  board: string;
+  lastQty: string | number;
+  lastPx: string | number;
 };
 
-function num(v: string | number | null | undefined): number {
-  const n = Number(v);
-  return Number.isFinite(n) ? n : 0;
+/** KASE/QUIK: LISTEDSTOCKK-4g-B-1-1-N ↔ LISTEDSTOCKK-4g-S-1-1-N */
+function matchKeyFromExecId(execId: string): string {
+  const id = String(execId || "").trim();
+  if (!id) return "";
+  const normalized = id.replace(/-([BS])-/i, "-*-");
+  return normalized || id;
+}
+
+function dealLabelFromMatchKey(key: string): string {
+  return key.replace("-*-", "-");
 }
 
 function SideBadge({ side }: { side?: string }) {
@@ -81,6 +62,85 @@ function SideBadge({ side }: { side?: string }) {
   );
 }
 
+function groupDeals(trades: Trade[]): Deal[] {
+  const map = new Map<string, Trade[]>();
+  for (const t of trades) {
+    const key = matchKeyFromExecId(t.exec_id) || `solo:${t.id}`;
+    const list = map.get(key) || [];
+    list.push(t);
+    map.set(key, list);
+  }
+
+  const deals: Deal[] = [];
+  for (const [key, legs] of map) {
+    const sorted = [...legs].sort((a, b) => {
+      const sa = (a.side || "").toUpperCase() === "BUY" ? 0 : 1;
+      const sb = (b.side || "").toUpperCase() === "BUY" ? 0 : 1;
+      if (sa !== sb) return sa - sb;
+      return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
+    });
+    const sides = new Set(sorted.map((t) => (t.side || "").toUpperCase()));
+    const paired = sides.has("BUY") && sides.has("SELL") && sorted.length >= 2;
+    const sample = sorted[0];
+    deals.push({
+      key,
+      label: dealLabelFromMatchKey(key.startsWith("solo:") ? sample.exec_id : key),
+      trades: sorted,
+      paired,
+      createdAt: Math.max(...sorted.map((t) => new Date(t.created_at).getTime())),
+      symbol: sample.symbol || "",
+      board: sample.board || "",
+      lastQty: sample.last_qty,
+      lastPx: sample.last_px,
+    });
+  }
+
+  return deals.sort((a, b) => b.createdAt - a.createdAt);
+}
+
+function dealMatchesQuery(deal: Deal, q: string): boolean {
+  if (!q) return true;
+  const hay = deal.trades
+    .flatMap((t) => [
+      t.exec_id,
+      t.client_order_id,
+      t.order_id,
+      t.firm_name,
+      t.quik_firm,
+      t.client_code,
+      t.symbol,
+      t.board,
+      t.side,
+      t.adapter_id,
+      t.fix_cl_ord_id,
+      t.quik_order_id,
+      String(t.last_qty),
+      String(t.last_px),
+      deal.label,
+      deal.key,
+    ])
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+  return hay.includes(q);
+}
+
+function dealPassesFilters(
+  deal: Deal,
+  filters: { side: string; firm: string; symbol: string; adapter: string },
+): boolean {
+  return deal.trades.some((t) => {
+    if (filters.side && t.side !== filters.side) return false;
+    if (filters.firm) {
+      const label = t.firm_name || t.quik_firm || "";
+      if (label !== filters.firm) return false;
+    }
+    if (filters.symbol && t.symbol !== filters.symbol) return false;
+    if (filters.adapter && t.adapter_id !== filters.adapter) return false;
+    return true;
+  });
+}
+
 export default function TradesPage() {
   const q = useQuery({
     queryKey: ["admin-trades"],
@@ -89,11 +149,15 @@ export default function TradesPage() {
   });
 
   const data = q.data?.trades || [];
-  const [sorting, setSorting] = useState<SortingState>([{ id: "created_at", desc: true }]);
-  const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([]);
   const [globalFilter, setGlobalFilter] = useState("");
+  const [sideFilter, setSideFilter] = useState("");
+  const [firmFilter, setFirmFilter] = useState("");
+  const [symbolFilter, setSymbolFilter] = useState("");
+  const [adapterFilter, setAdapterFilter] = useState("");
   const [pageIndex, setPageIndex] = useState(0);
-  const [pageSize, setPageSize] = useState(25);
+  const [pageSize, setPageSize] = useState(20);
+
+  const allDeals = useMemo(() => groupDeals(data), [data]);
 
   const firmOptions = useMemo(() => {
     const set = new Set<string>();
@@ -120,172 +184,41 @@ export default function TradesPage() {
     return Array.from(set).sort();
   }, [data]);
 
-  const columns = useMemo<ColumnDef<Trade>[]>(
-    () => [
-      {
-        id: "created_at",
-        accessorFn: (r) => new Date(r.created_at).getTime(),
-        header: "Время",
-        cell: ({ row }) => (
-          <span className="whitespace-nowrap font-mono text-[11px] text-slate-600">
-            {formatDateTime(row.original.created_at)}
-          </span>
-        ),
-      },
-      {
-        accessorKey: "exec_id",
-        header: "ExecID",
-        cell: ({ getValue }) => (
-          <span className="block max-w-[160px] truncate font-mono text-[11px]" title={String(getValue() || "")}>
-            {String(getValue() || "—")}
-          </span>
-        ),
-      },
-      {
-        accessorKey: "client_order_id",
-        header: "Ордер",
-        cell: ({ row }) => (
-          <Link
-            className="font-mono text-xs text-accent hover:underline"
-            to={`/orders/${row.original.order_id}`}
-            title={row.original.client_order_id || row.original.order_id}
-          >
-            {row.original.client_order_id || String(row.original.order_id).slice(0, 8)}
-          </Link>
-        ),
-      },
-      {
-        id: "firm",
-        accessorFn: (r) => r.firm_name || r.quik_firm || "",
-        header: "Фирма",
-        cell: ({ row }) => (
-          <div>
-            <div className="text-sm">{row.original.firm_name || "—"}</div>
-            {row.original.quik_firm ? (
-              <div className="font-mono text-[11px] text-slate-500">{row.original.quik_firm}</div>
-            ) : null}
-          </div>
-        ),
-        filterFn: (row, _id, value) => {
-          if (!value) return true;
-          const label = row.original.firm_name || row.original.quik_firm || "";
-          return label === value;
-        },
-      },
-      {
-        accessorKey: "client_code",
-        header: "Клиент",
-        cell: ({ getValue }) => <span className="font-mono text-xs">{String(getValue() || "—")}</span>,
-      },
-      {
-        accessorKey: "symbol",
-        header: "Инструмент",
-        cell: ({ row }) => (
-          <div>
-            <div className="font-mono text-xs">{row.original.symbol || "—"}</div>
-            {row.original.board ? <div className="text-[11px] text-slate-500">{row.original.board}</div> : null}
-          </div>
-        ),
-        filterFn: (row, _id, value) => !value || row.original.symbol === value,
-      },
-      {
-        accessorKey: "side",
-        header: "Сторона",
-        cell: ({ row }) => <SideBadge side={row.original.side} />,
-        filterFn: (row, _id, value) => !value || row.original.side === value,
-      },
-      {
-        id: "last_qty",
-        accessorFn: (r) => num(r.last_qty),
-        header: "Кол-во",
-        cell: ({ row }) => <span className="font-mono text-sm tabular-nums">{row.original.last_qty}</span>,
-      },
-      {
-        id: "last_px",
-        accessorFn: (r) => num(r.last_px),
-        header: "Цена",
-        cell: ({ row }) => <span className="font-mono text-sm tabular-nums">{row.original.last_px}</span>,
-      },
-      {
-        id: "cum_qty",
-        accessorFn: (r) => num(r.cum_qty),
-        header: "Накоплено",
-        cell: ({ row }) => (
-          <span className="font-mono text-xs tabular-nums text-slate-600">{row.original.cum_qty}</span>
-        ),
-      },
-      {
-        id: "leaves_qty",
-        accessorFn: (r) => num(r.leaves_qty),
-        header: "Остаток",
-        cell: ({ row }) => (
-          <span className="font-mono text-xs tabular-nums text-slate-600">{row.original.leaves_qty}</span>
-        ),
-      },
-      {
-        accessorKey: "adapter_id",
-        header: "Адаптер",
-        cell: ({ getValue }) => (
-          <span className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[11px] text-slate-600">
-            {String(getValue() || "—")}
-          </span>
-        ),
-        filterFn: (row, _id, value) => !value || row.original.adapter_id === value,
-      },
-    ],
-    [],
-  );
+  const filteredDeals = useMemo(() => {
+    const query = globalFilter.trim().toLowerCase();
+    const filters = {
+      side: sideFilter,
+      firm: firmFilter,
+      symbol: symbolFilter,
+      adapter: adapterFilter,
+    };
+    return allDeals.filter(
+      (d) => dealMatchesQuery(d, query) && dealPassesFilters(d, filters),
+    );
+  }, [allDeals, globalFilter, sideFilter, firmFilter, symbolFilter, adapterFilter]);
 
-  const table = useReactTable({
-    data,
-    columns,
-    state: {
-      sorting,
-      columnFilters,
-      globalFilter,
-      pagination: { pageIndex, pageSize },
-    },
-    onSortingChange: setSorting,
-    onColumnFiltersChange: (updater) => {
-      setColumnFilters(updater);
-      setPageIndex(0);
-    },
-    onGlobalFilterChange: (v) => {
-      setGlobalFilter(String(v ?? ""));
-      setPageIndex(0);
-    },
-    onPaginationChange: (updater) => {
-      const next = typeof updater === "function" ? updater({ pageIndex, pageSize }) : updater;
-      setPageIndex(next.pageIndex);
-      setPageSize(next.pageSize);
-    },
-    globalFilterFn,
-    getCoreRowModel: getCoreRowModel(),
-    getSortedRowModel: getSortedRowModel(),
-    getFilteredRowModel: getFilteredRowModel(),
-    getPaginationRowModel: getPaginationRowModel(),
-  });
+  const pageCount = Math.max(1, Math.ceil(filteredDeals.length / pageSize));
+  const safePage = Math.min(pageIndex, pageCount - 1);
+  const pageDeals = filteredDeals.slice(safePage * pageSize, (safePage + 1) * pageSize);
 
-  const filtered = table.getFilteredRowModel().rows.length;
-  const total = data.length;
-  const pageCount = Math.max(1, table.getPageCount());
+  const totalLegs = data.length;
 
-  const sideFilter = (columnFilters.find((f) => f.id === "side")?.value as string) || "";
-  const firmFilter = (columnFilters.find((f) => f.id === "firm")?.value as string) || "";
-  const symbolFilter = (columnFilters.find((f) => f.id === "symbol")?.value as string) || "";
-  const adapterFilter = (columnFilters.find((f) => f.id === "adapter_id")?.value as string) || "";
-
-  function setFilter(id: string, value: string) {
-    setColumnFilters((prev) => {
-      const rest = prev.filter((f) => f.id !== id);
-      return value ? [...rest, { id, value }] : rest;
-    });
+  function resetFilters() {
+    setGlobalFilter("");
+    setSideFilter("");
+    setFirmFilter("");
+    setSymbolFilter("");
+    setAdapterFilter("");
     setPageIndex(0);
   }
 
   function exportCsv() {
-    const rows = table.getFilteredRowModel().rows.map((r) => r.original);
+    const rows = filteredDeals.flatMap((d) =>
+      d.trades.map((t) => ({ ...t, deal_id: d.label, paired: d.paired ? "yes" : "no" })),
+    );
     const header = [
+      "deal_id",
+      "paired",
       "created_at",
       "exec_id",
       "client_order_id",
@@ -321,12 +254,6 @@ export default function TradesPage() {
     URL.revokeObjectURL(url);
   }
 
-  const buyCount = useMemo(
-    () => data.filter((t) => (t.side || "").toUpperCase() === "BUY").length,
-    [data],
-  );
-  const sellCount = total - buyCount;
-
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-end justify-between gap-3">
@@ -337,10 +264,9 @@ export default function TradesPage() {
           </p>
         </div>
         <div className="flex flex-wrap gap-2 text-xs">
-          <StatPill label="Всего" value={total} />
-          <StatPill label="Покупка" value={buyCount} tone="buy" />
-          <StatPill label="Продажа" value={sellCount} tone="sell" />
-          <StatPill label="После фильтра" value={filtered} />
+          <StatPill label="Всего" value={totalLegs} />
+          <StatPill label="Сделок" value={allDeals.length} />
+          <StatPill label="После фильтра" value={filteredDeals.length} />
         </div>
       </div>
 
@@ -349,7 +275,7 @@ export default function TradesPage() {
           <div className="relative min-w-[240px] flex-1">
             <input
               className="input pl-9"
-              placeholder="Поиск: ExecID, ордер, фирма, клиент, инструмент…"
+              placeholder="Поиск: ExecID, сделка, ордер, фирма, клиент…"
               value={globalFilter}
               onChange={(e) => {
                 setGlobalFilter(e.target.value);
@@ -358,12 +284,26 @@ export default function TradesPage() {
             />
             <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400">⌕</span>
           </div>
-          <select className="input w-auto" value={sideFilter} onChange={(e) => setFilter("side", e.target.value)}>
+          <select
+            className="input w-auto"
+            value={sideFilter}
+            onChange={(e) => {
+              setSideFilter(e.target.value);
+              setPageIndex(0);
+            }}
+          >
             <option value="">Сторона: все</option>
             <option value="BUY">Покупка</option>
             <option value="SELL">Продажа</option>
           </select>
-          <select className="input w-auto max-w-[180px]" value={firmFilter} onChange={(e) => setFilter("firm", e.target.value)}>
+          <select
+            className="input w-auto max-w-[180px]"
+            value={firmFilter}
+            onChange={(e) => {
+              setFirmFilter(e.target.value);
+              setPageIndex(0);
+            }}
+          >
             <option value="">Фирма: все</option>
             {firmOptions.map((f) => (
               <option key={f} value={f}>
@@ -374,7 +314,10 @@ export default function TradesPage() {
           <select
             className="input w-auto max-w-[180px]"
             value={symbolFilter}
-            onChange={(e) => setFilter("symbol", e.target.value)}
+            onChange={(e) => {
+              setSymbolFilter(e.target.value);
+              setPageIndex(0);
+            }}
           >
             <option value="">Инструмент: все</option>
             {symbolOptions.map((s) => (
@@ -386,7 +329,10 @@ export default function TradesPage() {
           <select
             className="input w-auto max-w-[160px]"
             value={adapterFilter}
-            onChange={(e) => setFilter("adapter_id", e.target.value)}
+            onChange={(e) => {
+              setAdapterFilter(e.target.value);
+              setPageIndex(0);
+            }}
           >
             <option value="">Адаптер: все</option>
             {adapterOptions.map((a) => (
@@ -395,20 +341,13 @@ export default function TradesPage() {
               </option>
             ))}
           </select>
-          <button
-            className="btn-muted"
-            onClick={() => {
-              setGlobalFilter("");
-              setColumnFilters([]);
-              setPageIndex(0);
-            }}
-          >
+          <button className="btn-muted" onClick={resetFilters}>
             Сбросить
           </button>
           <button className="btn-muted" onClick={() => void q.refetch()}>
             Обновить
           </button>
-          <button className="btn" onClick={exportCsv} disabled={filtered === 0}>
+          <button className="btn" onClick={exportCsv} disabled={filteredDeals.length === 0}>
             CSV
           </button>
         </div>
@@ -416,61 +355,120 @@ export default function TradesPage() {
         <div className="overflow-x-auto rounded-lg border border-slate-200">
           <table className="w-full min-w-[1100px] text-left text-sm">
             <thead className="sticky top-0 z-10 bg-slate-50">
-              {table.getHeaderGroups().map((hg) => (
-                <tr key={hg.id} className="border-b border-slate-200">
-                  {hg.headers.map((h) => {
-                    const sorted = h.column.getIsSorted();
-                    return (
-                      <th
-                        key={h.id}
-                        className="select-none px-3 py-2.5 text-xs font-semibold uppercase tracking-wide text-slate-500"
-                      >
-                        {h.isPlaceholder ? null : (
-                          <button
-                            type="button"
-                            className={`inline-flex items-center gap-1 ${
-                              h.column.getCanSort() ? "hover:text-accent" : ""
-                            }`}
-                            onClick={h.column.getToggleSortingHandler()}
-                          >
-                            {flexRender(h.column.columnDef.header, h.getContext())}
-                            <span className="font-mono text-[10px] text-slate-400">
-                              {sorted === "asc" ? "↑" : sorted === "desc" ? "↓" : "↕"}
-                            </span>
-                          </button>
-                        )}
-                      </th>
-                    );
-                  })}
-                </tr>
-              ))}
+              <tr className="border-b border-slate-200">
+                {[
+                  "Время",
+                  "ExecID",
+                  "Ордер",
+                  "Фирма",
+                  "Клиент",
+                  "Инструмент",
+                  "Сторона",
+                  "Кол-во",
+                  "Цена",
+                  "Накоплено",
+                  "Остаток",
+                  "Адаптер",
+                ].map((h) => (
+                  <th
+                    key={h}
+                    className="border-b border-slate-200 px-3 py-2.5 text-xs font-semibold uppercase tracking-wide text-slate-500"
+                  >
+                    {h}
+                  </th>
+                ))}
+              </tr>
             </thead>
             <tbody>
               {q.isLoading && (
                 <tr>
-                  <td colSpan={columns.length} className="px-3 py-10 text-center text-slate-500">
+                  <td colSpan={12} className="px-3 py-10 text-center text-slate-500">
                     Загрузка сделок…
                   </td>
                 </tr>
               )}
-              {!q.isLoading && table.getRowModel().rows.length === 0 && (
+              {!q.isLoading && pageDeals.length === 0 && (
                 <tr>
-                  <td colSpan={columns.length} className="px-3 py-10 text-center text-slate-500">
-                    {total === 0
+                  <td colSpan={12} className="px-3 py-10 text-center text-slate-500">
+                    {totalLegs === 0
                       ? "Нет сделок — появятся после FILL/PARTIAL из FIX"
                       : "Ничего не найдено по текущим фильтрам"}
                   </td>
                 </tr>
               )}
-              {table.getRowModel().rows.map((row) => (
-                <tr key={row.id} className="border-b border-slate-100 transition-colors hover:bg-[#f0fafb]">
-                  {row.getVisibleCells().map((cell) => (
-                    <td key={cell.id} className="px-3 py-2 align-middle">
-                      {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                    </td>
-                  ))}
-                </tr>
-              ))}
+              {pageDeals.map((deal, dealIdx) => {
+                // paired buy/sell share one gray block; alternate shade between deals
+                const bg =
+                  dealIdx % 2 === 0 ? "bg-slate-100/90" : "bg-slate-50";
+
+                return deal.trades.map((t, legIdx) => {
+                  const isLast = legIdx === deal.trades.length - 1;
+                  return (
+                    <tr
+                      key={t.id}
+                      className={`${bg} transition-colors hover:bg-slate-200/60 ${
+                        isLast ? "border-b border-slate-200" : "border-b border-slate-100/80"
+                      }`}
+                    >
+                      <td className="px-3 py-2 align-middle">
+                        <span className="whitespace-nowrap font-mono text-[11px] text-slate-600">
+                          {formatDateTime(t.created_at)}
+                        </span>
+                      </td>
+                      <td className="px-3 py-2 align-middle">
+                        <span
+                          className="block max-w-[160px] truncate font-mono text-[11px]"
+                          title={t.exec_id}
+                        >
+                          {t.exec_id || "—"}
+                        </span>
+                      </td>
+                      <td className="px-3 py-2 align-middle">
+                        <Link
+                          className="font-mono text-xs text-accent hover:underline"
+                          to={`/orders/${t.order_id}`}
+                          title={t.client_order_id || t.order_id}
+                        >
+                          {t.client_order_id || String(t.order_id).slice(0, 8)}
+                        </Link>
+                      </td>
+                      <td className="px-3 py-2 align-middle">
+                        <div className="text-sm">{t.firm_name || "—"}</div>
+                        {t.quik_firm ? (
+                          <div className="font-mono text-[11px] text-slate-500">{t.quik_firm}</div>
+                        ) : null}
+                      </td>
+                      <td className="px-3 py-2 align-middle">
+                        <span className="font-mono text-xs">{t.client_code || "—"}</span>
+                      </td>
+                      <td className="px-3 py-2 align-middle">
+                        <div className="font-mono text-xs">{t.symbol || "—"}</div>
+                        {t.board ? <div className="text-[11px] text-slate-500">{t.board}</div> : null}
+                      </td>
+                      <td className="px-3 py-2 align-middle">
+                        <SideBadge side={t.side} />
+                      </td>
+                      <td className="px-3 py-2 align-middle">
+                        <span className="font-mono text-sm tabular-nums">{t.last_qty}</span>
+                      </td>
+                      <td className="px-3 py-2 align-middle">
+                        <span className="font-mono text-sm tabular-nums">{t.last_px}</span>
+                      </td>
+                      <td className="px-3 py-2 align-middle">
+                        <span className="font-mono text-xs tabular-nums text-slate-600">{t.cum_qty}</span>
+                      </td>
+                      <td className="px-3 py-2 align-middle">
+                        <span className="font-mono text-xs tabular-nums text-slate-600">{t.leaves_qty}</span>
+                      </td>
+                      <td className="px-3 py-2 align-middle">
+                        <span className="rounded bg-white/70 px-1.5 py-0.5 font-mono text-[11px] text-slate-600">
+                          {t.adapter_id || "—"}
+                        </span>
+                      </td>
+                    </tr>
+                  );
+                });
+              })}
             </tbody>
           </table>
         </div>
@@ -479,9 +477,10 @@ export default function TradesPage() {
           <div className="text-slate-500">
             Показано{" "}
             <span className="font-mono text-ink">
-              {filtered === 0 ? 0 : pageIndex * pageSize + 1}–{Math.min((pageIndex + 1) * pageSize, filtered)}
+              {filteredDeals.length === 0 ? 0 : safePage * pageSize + 1}–
+              {Math.min((safePage + 1) * pageSize, filteredDeals.length)}
             </span>{" "}
-            из <span className="font-mono text-ink">{filtered}</span>
+            из <span className="font-mono text-ink">{filteredDeals.length}</span>
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <label className="flex items-center gap-2 text-slate-500">
@@ -503,32 +502,32 @@ export default function TradesPage() {
             </label>
             <button
               className="btn-muted px-2 py-1"
-              disabled={!table.getCanPreviousPage()}
-              onClick={() => table.setPageIndex(0)}
+              disabled={safePage <= 0}
+              onClick={() => setPageIndex(0)}
             >
               «
             </button>
             <button
               className="btn-muted px-2 py-1"
-              disabled={!table.getCanPreviousPage()}
-              onClick={() => table.previousPage()}
+              disabled={safePage <= 0}
+              onClick={() => setPageIndex((p) => Math.max(0, p - 1))}
             >
               ‹
             </button>
             <span className="min-w-[7rem] text-center font-mono text-xs text-slate-600">
-              {pageIndex + 1} / {pageCount}
+              {safePage + 1} / {pageCount}
             </span>
             <button
               className="btn-muted px-2 py-1"
-              disabled={!table.getCanNextPage()}
-              onClick={() => table.nextPage()}
+              disabled={safePage >= pageCount - 1}
+              onClick={() => setPageIndex((p) => Math.min(pageCount - 1, p + 1))}
             >
               ›
             </button>
             <button
               className="btn-muted px-2 py-1"
-              disabled={!table.getCanNextPage()}
-              onClick={() => table.setPageIndex(pageCount - 1)}
+              disabled={safePage >= pageCount - 1}
+              onClick={() => setPageIndex(pageCount - 1)}
             >
               »
             </button>
@@ -542,20 +541,12 @@ export default function TradesPage() {
 function StatPill({
   label,
   value,
-  tone,
 }: {
   label: string;
   value: number;
-  tone?: "buy" | "sell";
 }) {
-  const color =
-    tone === "buy"
-      ? "border-emerald-200 bg-emerald-50 text-emerald-800"
-      : tone === "sell"
-        ? "border-rose-200 bg-rose-50 text-rose-800"
-        : "border-slate-200 bg-white text-ink";
   return (
-    <div className={`rounded-lg border px-3 py-1.5 ${color}`}>
+    <div className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-ink">
       <span className="mr-2 text-slate-500">{label}</span>
       <span className="font-mono font-semibold">{value}</span>
     </div>

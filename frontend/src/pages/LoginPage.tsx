@@ -1,6 +1,7 @@
 import { FormEvent, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api, setToken } from "../api";
+import { Icons } from "../components/icons";
 
 export default function LoginPage() {
   const nav = useNavigate();
@@ -28,18 +29,23 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center px-4">
-      <form onSubmit={onSubmit} className="card w-full max-w-md space-y-4">
-        <div>
-          <h1 className="font-display text-2xl font-bold text-accent">FIX Gateway</h1>
-          <p className="text-sm text-slate-500">Вход в админ-консоль</p>
+    <div className="flex min-h-screen items-center justify-center bg-surface px-4">
+      <form onSubmit={onSubmit} className="card w-full max-w-md space-y-4 shadow-md">
+        <div className="flex items-center gap-3">
+          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-accent text-white">
+            <Icons.logo size={18} />
+          </div>
+          <div>
+            <h1 className="text-xl font-semibold">FIX Gateway</h1>
+            <p className="text-sm text-slate-500">Broker CRM · вход в админ-консоль</p>
+          </div>
         </div>
         <label className="block space-y-1 text-sm">
-          <span>Email</span>
+          <span className="text-slate-500">Email</span>
           <input className="input" value={email} onChange={(e) => setEmail(e.target.value)} />
         </label>
         <label className="block space-y-1 text-sm">
-          <span>Пароль</span>
+          <span className="text-slate-500">Пароль</span>
           <input className="input" type="password" value={password} onChange={(e) => setPassword(e.target.value)} />
         </label>
         {error && <div className="text-sm text-danger">{error}</div>}

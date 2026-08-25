@@ -32,6 +32,17 @@ type sessionApp struct {
 
 	secDefMu   sync.Mutex
 	secDefWait *secDefWaiter
+
+	posMu   sync.Mutex
+	posWait *posWaiter
+
+	mdMu     sync.Mutex
+	mdWait   *mdWaiter
+	mdBook   map[string]domain.MarketQuote
+	mdSubIDs map[string]struct{}
+	onMD     domain.MarketDataHandler
+	onLogon  func()
+	onFIX    func(kind, sessionID, msgType, direction, clOrdID, reason string, seq int)
 }
 
 func newSessionApp(adapterID string, log *slog.Logger, onExec domain.ExecutionHandler) *sessionApp {
@@ -40,6 +51,8 @@ func newSessionApp(adapterID string, log *slog.Logger, onExec domain.ExecutionHa
 		log:        log,
 		onExec:     onExec,
 		pendingRaw: map[string]string{},
+		mdBook:     map[string]domain.MarketQuote{},
+		mdSubIDs:   map[string]struct{}{},
 	}
 	a.lastError.Store("")
 	return a
@@ -51,16 +64,22 @@ func (a *sessionApp) OnCreate(sessionID quickfix.SessionID) {
 	a.mu.Unlock()
 	a.hasSession.Store(true)
 	a.log.Info("fix session created", "adapter_id", a.adapterID, "session", sessionID.String())
+	a.emitFIX("FIX_SESSION_CREATED", sessionID.String(), "", "", "", "", 0)
 }
 
 func (a *sessionApp) OnLogon(sessionID quickfix.SessionID) {
 	a.loggedOn.Store(true)
 	a.log.Info("fix session logon", "adapter_id", a.adapterID, "session", sessionID.String())
+	a.emitFIX("FIX_SESSION_CONNECTED", sessionID.String(), "A", "IN", "", "", 0)
+	if a.onLogon != nil {
+		go a.onLogon()
+	}
 }
 
 func (a *sessionApp) OnLogout(sessionID quickfix.SessionID) {
 	a.loggedOn.Store(false)
 	a.log.Info("fix session logout", "adapter_id", a.adapterID, "session", sessionID.String())
+	a.emitFIX("FIX_SESSION_DISCONNECTED", sessionID.String(), "5", "IN", "", "logout", 0)
 }
 
 func (a *sessionApp) ToAdmin(msg *quickfix.Message, sessionID quickfix.SessionID) {}
@@ -71,6 +90,20 @@ func (a *sessionApp) ToApp(msg *quickfix.Message, sessionID quickfix.SessionID) 
 		a.pendingRaw[clOrdID] = formatWireFIX(msg)
 		a.mu.Unlock()
 	}
+	msgType, _ := msg.MsgType()
+	seq := 0
+	if n, err := msg.Header.GetInt(tag.MsgSeqNum); err == nil {
+		seq = int(n)
+	}
+	kind := "FIX_MESSAGE_SENT"
+	switch msgType {
+	case string(enum.MsgType_ORDER_SINGLE), string(enum.MsgType_ORDER_CANCEL_REQUEST), string(enum.MsgType_ORDER_CANCEL_REPLACE_REQUEST):
+		kind = "FIX_ORDER_SENT"
+	}
+	if clOrdID == "" {
+		clOrdID, _ = msg.Body.GetString(tag.ClOrdID)
+	}
+	a.emitFIX(kind, sessionID.String(), msgType, "OUT", clOrdID, "", seq)
 	return nil
 }
 
@@ -87,10 +120,24 @@ func (a *sessionApp) FromApp(msg *quickfix.Message, sessionID quickfix.SessionID
 	switch msgType {
 	case string(enum.MsgType_EXECUTION_REPORT):
 		a.handleExecutionReport(msg)
+		a.emitAppFIX("FIX_EXECUTION_REPORT", msg, sessionID)
 	case string(enum.MsgType_ORDER_CANCEL_REJECT):
-		a.log.Warn("order cancel reject", "adapter_id", a.adapterID, "msg", sanitizeFIX(msg))
+		a.handleOrderCancelReject(msg)
+		a.emitAppFIX("FIX_REJECT", msg, sessionID)
+	case string(enum.MsgType_REJECT):
+		a.emitAppFIX("FIX_REJECT", msg, sessionID)
 	case string(enum.MsgType_SECURITY_DEFINITION):
 		a.handleSecurityDefinition(msg)
+	case string(enum.MsgType_POSITION_REPORT):
+		a.handlePositionReport(msg)
+	case string(enum.MsgType_REQUEST_FOR_POSITIONS_ACK):
+		a.handleRequestForPositionsAck(msg)
+	case string(enum.MsgType_MARKET_DATA_SNAPSHOT_FULL_REFRESH):
+		a.handleMarketDataSnapshot(msg)
+	case string(enum.MsgType_MARKET_DATA_INCREMENTAL_REFRESH):
+		a.handleMarketDataIncremental(msg)
+	case string(enum.MsgType_MARKET_DATA_REQUEST_REJECT):
+		a.handleMarketDataReject(msg)
 	default:
 		a.log.Info("unhandled fix app message", "adapter_id", a.adapterID, "msg_type", msgType)
 	}
@@ -111,6 +158,7 @@ func (a *sessionApp) handleExecutionReport(msg *quickfix.Message) {
 	a.onExec(domain.ExecutionReport{
 		AdapterID:    a.adapterID,
 		ClOrdID:      get(tag.ClOrdID),
+		OrigClOrdID:  get(tag.OrigClOrdID),
 		OrderID:      get(tag.OrderID),
 		ExecID:       get(tag.ExecID),
 		ExecType:     get(tag.ExecType),
@@ -121,6 +169,30 @@ func (a *sessionApp) handleExecutionReport(msg *quickfix.Message) {
 		LeavesQty:    get(tag.LeavesQty),
 		Text:         get(tag.Text),
 		OrdRejReason: get(tag.OrdRejReason),
+		RawFIX:       formatWireFIX(msg),
+	})
+}
+
+func (a *sessionApp) handleOrderCancelReject(msg *quickfix.Message) {
+	if a.onExec == nil {
+		return
+	}
+	get := func(t quickfix.Tag) string {
+		v, err := msg.Body.GetString(t)
+		if err != nil {
+			return ""
+		}
+		return v
+	}
+	a.log.Warn("order cancel reject", "adapter_id", a.adapterID, "msg", sanitizeFIX(msg))
+	a.onExec(domain.ExecutionReport{
+		AdapterID:    a.adapterID,
+		ClOrdID:      get(tag.ClOrdID),
+		OrigClOrdID:  get(tag.OrigClOrdID),
+		OrderID:      get(tag.OrderID),
+		Text:         get(tag.Text),
+		CxlRejReason: get(tag.CxlRejReason),
+		CancelReject: true,
 		RawFIX:       formatWireFIX(msg),
 	})
 }
@@ -213,7 +285,7 @@ func buildNewOrderSingle(clOrdID, account, clientID, firm, symbol, board, side, 
 	return msg
 }
 
-func buildCancel(clOrdID, origClOrdID, orderID, symbol, side, account, clientID string) *quickfix.Message {
+func buildCancel(clOrdID, origClOrdID, orderID, symbol, board, side, account, clientID, firm, qty string) *quickfix.Message {
 	msg := quickfix.NewMessage()
 	msg.Header.SetField(tag.MsgType, field.NewMsgType(enum.MsgType_ORDER_CANCEL_REQUEST))
 	msg.Body.Set(field.NewClOrdID(clOrdID))
@@ -227,11 +299,20 @@ func buildCancel(clOrdID, origClOrdID, orderID, symbol, side, account, clientID 
 	if clientID != "" {
 		msg.Body.Set(field.NewClientID(clientID))
 	}
-	msg.Body.Set(field.NewSymbol(symbol))
-	msg.Body.Set(field.NewSecurityID(symbol))
-	msg.Body.Set(field.NewSecurityIDSource(securityIDSourceFor(symbol)))
 	msg.Body.Set(field.NewSide(mapSide(side)))
-	msg.Body.Set(field.NewTransactTime(time.Now().UTC()))
+	msg.Body.Set(field.NewTransactTimeNoMillis(time.Now().UTC()))
+	// Same instrument identification as NewOrderSingle — no tag 55 Symbol.
+	msg.Body.Set(field.NewSecurityIDSource(enum.SecurityIDSource_EXCHANGE_SYMBOL))
+	msg.Body.Set(field.NewSecurityID(symbol))
+	if board != "" {
+		msg.Body.SetString(tag.ExDestination, board)
+	}
+	if qty != "" {
+		msg.Body.SetString(tag.OrderQty, qty)
+	}
+	if firm != "" {
+		msg.Body.SetField(quickfix.Tag(5018), quickfix.FIXString(firm))
+	}
 	return msg
 }
 
@@ -288,4 +369,21 @@ func mapTIF(t string) enum.TimeInForce {
 	default:
 		return enum.TimeInForce_DAY
 	}
+}
+
+func (a *sessionApp) emitFIX(kind, sessionID, msgType, direction, clOrdID, reason string, seq int) {
+	if a.onFIX == nil {
+		return
+	}
+	a.onFIX(kind, sessionID, msgType, direction, clOrdID, reason, seq)
+}
+
+func (a *sessionApp) emitAppFIX(kind string, msg *quickfix.Message, sessionID quickfix.SessionID) {
+	msgType, _ := msg.MsgType()
+	seq := 0
+	if n, err := msg.Header.GetInt(tag.MsgSeqNum); err == nil {
+		seq = int(n)
+	}
+	clOrdID, _ := msg.Body.GetString(tag.ClOrdID)
+	a.emitFIX(kind, sessionID.String(), msgType, "IN", clOrdID, "", seq)
 }

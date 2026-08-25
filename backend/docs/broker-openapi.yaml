@@ -1,0 +1,570 @@
+openapi: 3.0.3
+info:
+  title: Кыргыз Фондулук Биржасы — Broker API
+  version: 1.0.0
+  description: |
+    REST API для брокеров Кыргызской Фондовой Биржи.
+
+    Авторизация: `Authorization: Bearer sk_live_…`
+    Токен выдаётся оператором. `broker_id` определяется по токену автоматически.
+
+    Руководство: [Broker API Guide](/docs/broker-api-guide.md)
+  contact:
+    name: KSE Gateway Support
+servers:
+  - url: http://localhost:8080
+    description: Local development
+tags:
+  - name: Проверка связи
+    description: Health и readiness
+  - name: Фирма
+    description: Код фирмы текущего токена
+  - name: Справочники
+    description: Инструменты и счета
+  - name: Заявки
+    description: Создание, просмотр и снятие заявок
+  - name: Сделки
+    description: Список сделок (fills)
+  - name: Позиции
+    description: Снимок позиций из QUIK
+paths:
+  /health:
+    get:
+      tags: [Проверка связи]
+      summary: Liveness
+      description: Возвращает 200 если процесс жив.
+      responses:
+        "200":
+          description: OK
+  /ready:
+    get:
+      tags: [Проверка связи]
+      summary: Readiness
+      description: Возвращает 200 если есть хотя бы один рабочий FIX-адаптер.
+      responses:
+        "200":
+          description: Ready
+        "503":
+          description: Not ready
+  /api/v1/firm:
+    get:
+      tags: [Фирма]
+      summary: Код фирмы текущего токена
+      security:
+        - bearerAuth: []
+      description: |
+        Возвращает код фирмы, привязанный к токену (`quik_firm` → FIX tag 5018),
+        и название фирмы из локального кэша (если есть).
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  quik_firm:
+                    type: string
+                    description: Код фирмы (FIX 5018)
+                    example: "MC0031400000"
+                  firm_name:
+                    type: string
+                    description: Название фирмы
+                    example: "ТОО Example"
+        "401":
+          description: Unauthorized
+  /api/v1/instruments:
+    get:
+      tags: [Справочники]
+      summary: Список активных инструментов
+      security:
+        - bearerAuth: []
+      description: |
+        Требует `orders:read`. Используйте `quik_symbol` + `board` при создании заявки.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  instruments:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Instrument"
+        "401":
+          description: Unauthorized
+  /api/v1/accounts:
+    get:
+      tags: [Справочники]
+      summary: Счета текущего брокера
+      security:
+        - bearerAuth: []
+      description: |
+        Требует `orders:read`. В `account_id` заявки передавайте `trading_account`.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  accounts:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/BrokerAccount"
+        "401":
+          description: Unauthorized
+  /api/v1/orders:
+    post:
+      tags: [Заявки]
+      summary: Создать заявку
+      security:
+        - bearerAuth: []
+      description: |
+        Требует `orders:create`. `broker_id` и `quik_firm` берутся из токена.
+
+        Поля для QUIK/FIX:
+        - `symbol` → FIX tag 48 SecurityID
+        - `board` → FIX tag 100 ExDestination
+        - `account_id` → FIX tag 1 Account
+        - `client_code` → FIX tag 109 ClientID
+
+        Идемпотентность: повтор с тем же `client_order_id` возвращает `200` + существующую заявку.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateOrderRequest"
+            example:
+              account_id: "1-3101-006"
+              client_code: "006"
+              client_order_id: "ORD-20260818-0001"
+              symbol: "KG0105166315"
+              board: "LISTEDSTOCKK"
+              side: "BUY"
+              order_type: "LIMIT"
+              time_in_force: "DAY"
+              quantity: "1"
+              price: "400"
+      responses:
+        "201":
+          description: Заявка создана
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CreateOrderResponse"
+        "200":
+          description: Идемпотентный повтор — заявка уже существует
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CreateOrderResponse"
+        "400":
+          description: Ошибка валидации
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Unauthorized
+        "403":
+          description: Forbidden (нет права или IP не в whitelist)
+        "429":
+          description: Rate limited
+    get:
+      tags: [Заявки]
+      summary: Список заявок брокера
+      security:
+        - bearerAuth: []
+      description: Требует `orders:read`. Последние 100 заявок.
+      responses:
+        "200":
+          description: OK
+        "401":
+          description: Unauthorized
+  /api/v1/orders/{id}:
+    get:
+      tags: [Заявки]
+      summary: Детали заявки
+      security:
+        - bearerAuth: []
+      description: |
+        Требует `orders:read`. Возвращает заявку, журнал событий и сделки.
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: UUID заявки из ответа шлюза (`order.id`)
+      responses:
+        "200":
+          description: OK
+        "401":
+          description: Unauthorized
+        "404":
+          description: Заявка не найдена или принадлежит другому брокеру
+  /api/v1/orders/{id}/cancel:
+    post:
+      tags: [Заявки]
+      summary: Снять заявку
+      security:
+        - bearerAuth: []
+      description: |
+        Требует `orders:cancel`. Тело не нужно.
+        Снять можно из `ACKNOWLEDGED` и `PARTIALLY_FILLED`.
+        Ответ `200` — запрос принят, дождитесь статуса `CANCELLED`.
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Запрос на снятие принят
+        "400":
+          description: Нельзя снять из текущего статуса
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Unauthorized
+        "404":
+          description: Заявка не найдена
+  /api/v1/trades:
+    get:
+      tags: [Сделки]
+      summary: Список сделок брокера
+      security:
+        - bearerAuth: []
+      description: Требует `trades:read`. Последние 100 сделок.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  trades:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Trade"
+        "401":
+          description: Unauthorized
+        "403":
+          description: Нет права `trades:read`
+  /api/v1/positions:
+    get:
+      tags: [Позиции]
+      summary: Снимок позиций брокера
+      security:
+        - bearerAuth: []
+      description: |
+        Требует `positions:read`.
+
+        Токен определяет брокера. Код брокера — это код фирмы в снимке QUIK.
+        Отдаются только позиции этой фирмы: инструменты и деньги.
+
+        Это кэш последнего Request For Positions, не live-стрим.
+        Если снимка ещё нет, списки пустые, в `note` — пояснение.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PositionsResponse"
+              example:
+                source: fix
+                firm_id: "2040"
+                snapshot:
+                  adapter_id: quik-fix-1
+                  pos_req_id: POS963157-296
+                  clearing_date: "20260817"
+                  status: OK
+                  report_count: 6
+                instruments:
+                  - kind: INSTRUMENT
+                    firm_id: "2040"
+                    client_code: kalys
+                    account_code: "1-3101-2040"
+                    symbol: KG0105166315
+                    pos_type: DL
+                    net_qty: "1000000"
+                cash:
+                  - kind: CASH
+                    firm_id: "2040"
+                    client_code: kalys
+                    symbol: EQTV
+                    pos_type: ML
+                    net_qty: "10000000"
+        "401":
+          description: Unauthorized
+        "403":
+          description: Нет права `positions:read`
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: sk_live_…
+      description: |
+        API-токен брокера, выданный оператором.
+        Вставьте только токен — Swagger автоматически добавит `Bearer `.
+  schemas:
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+        details:
+          type: object
+    CreateOrderRequest:
+      type: object
+      required: [account_id, client_code, client_order_id, symbol, board, side, order_type, quantity]
+      properties:
+        account_id:
+          type: string
+          example: "1-3101-006"
+          description: "Торговый код счёта → FIX tag 1 Account"
+        client_code:
+          type: string
+          example: "006"
+          description: "Код клиента → FIX tag 109 ClientID"
+        client_order_id:
+          type: string
+          example: "ORD-20260818-0001"
+          description: "Ваш уникальный ID заявки (идемпотентность) → FIX tag 11"
+        symbol:
+          type: string
+          example: "KG0105166315"
+          description: "Инструмент (тикер/ISIN) из GET /api/v1/instruments"
+        board:
+          type: string
+          example: "LISTEDSTOCKK"
+          description: "Код класса → FIX tag 100 ExDestination"
+        side:
+          type: string
+          enum: [BUY, SELL]
+          example: "BUY"
+        order_type:
+          type: string
+          enum: [MARKET, LIMIT]
+          example: "LIMIT"
+        time_in_force:
+          type: string
+          enum: [DAY, IOC, FOK, GTC]
+          example: "DAY"
+          default: "DAY"
+        quantity:
+          oneOf:
+            - type: string
+            - type: number
+          example: "1"
+          description: "Количество (строка или число)"
+        price:
+          oneOf:
+            - type: string
+            - type: number
+          example: "400"
+          description: "Цена для LIMIT (строка или число)"
+    CreateOrderResponse:
+      type: object
+      properties:
+        order:
+          type: object
+          properties:
+            id:
+              type: string
+              format: uuid
+            client_order_id:
+              type: string
+            status:
+              type: string
+              enum: [QUEUED, ROUTING, SENT, ACKNOWLEDGED, PARTIALLY_FILLED, FILLED, CANCEL_PENDING, CANCELLED, REJECTED, EXPIRED, FAILED]
+            symbol:
+              type: string
+            board:
+              type: string
+            side:
+              type: string
+            quantity:
+              type: string
+            price:
+              type: string
+            filled_quantity:
+              type: string
+            quik_firm:
+              type: string
+            request_id:
+              type: string
+        idempotent:
+          type: boolean
+    BrokerAccount:
+      type: object
+      properties:
+        id:
+          type: integer
+        broker_id:
+          type: integer
+        code:
+          type: string
+        name:
+          type: string
+        quik_firm:
+          type: string
+        trading_account:
+          type: string
+          example: "1-3101-2040"
+        status:
+          type: string
+          example: ACTIVE
+    Instrument:
+      type: object
+      properties:
+        id:
+          type: integer
+        internal_symbol:
+          type: string
+        quik_symbol:
+          type: string
+          example: KG0105166315
+        board:
+          type: string
+          example: LISTEDSTOCKK
+        currency:
+          type: string
+          example: KZT
+        security_type:
+          type: string
+        status:
+          type: string
+          example: ACTIVE
+    Trade:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        order_id:
+          type: string
+          format: uuid
+        exec_id:
+          type: string
+        last_qty:
+          type: string
+        last_px:
+          type: string
+        cum_qty:
+          type: string
+        leaves_qty:
+          type: string
+        client_order_id:
+          type: string
+        symbol:
+          type: string
+        board:
+          type: string
+        side:
+          type: string
+        client_code:
+          type: string
+        quik_firm:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+    Position:
+      type: object
+      properties:
+        kind:
+          type: string
+          enum: [INSTRUMENT, CASH, FUTURES]
+        firm_id:
+          type: string
+          example: "2040"
+        client_code:
+          type: string
+        account_code:
+          type: string
+        symbol:
+          type: string
+        security_id:
+          type: string
+        board:
+          type: string
+        currency:
+          type: string
+        pos_type:
+          type: string
+          description: ML деньги, DL инструмент, FL/FP фьючерсы
+        long_qty:
+          type: string
+        short_qty:
+          type: string
+        net_qty:
+          type: string
+        settl_price:
+          type: string
+        keys:
+          type: object
+          additionalProperties:
+            type: string
+        items:
+          type: object
+          additionalProperties:
+            type: string
+    PositionSnapshot:
+      type: object
+      properties:
+        id:
+          type: integer
+        adapter_id:
+          type: string
+        pos_req_id:
+          type: string
+        clearing_date:
+          type: string
+        requested_at:
+          type: string
+          format: date-time
+        completed_at:
+          type: string
+          format: date-time
+        status:
+          type: string
+          example: OK
+        report_count:
+          type: integer
+    PositionsResponse:
+      type: object
+      properties:
+        source:
+          type: string
+          example: fix
+        firm_id:
+          type: string
+          description: Код брокера, по которому отфильтрован снимок
+          example: "2040"
+        snapshot:
+          $ref: "#/components/schemas/PositionSnapshot"
+        instruments:
+          type: array
+          items:
+            $ref: "#/components/schemas/Position"
+        cash:
+          type: array
+          items:
+            $ref: "#/components/schemas/Position"
+        note:
+          type: string
+          description: Пояснение, если снимка ещё нет
