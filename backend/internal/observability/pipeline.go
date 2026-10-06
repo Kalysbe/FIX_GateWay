@@ -4,10 +4,12 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/fix-gateway/backend/internal/metrics"
 	"github.com/fix-gateway/backend/internal/realtime"
 	"github.com/google/uuid"
 )
@@ -46,8 +48,11 @@ type Pipeline struct {
 	settings Settings
 	ch       chan Event
 
-	mu      sync.Mutex
-	rateKey map[string]time.Time
+	mu       sync.Mutex
+	rateKey  map[string]time.Time
+	notifyMu sync.Mutex
+	pending  map[string]Notification
+	fallback chan struct{}
 }
 
 func NewPipeline(store *Store, log *slog.Logger, hub *realtime.Hub, settings Settings) *Pipeline {
@@ -59,8 +64,10 @@ func NewPipeline(store *Store, log *slog.Logger, hub *realtime.Hub, settings Set
 	}
 	return &Pipeline{
 		store: store, log: log, hub: hub, settings: settings,
-		ch:      make(chan Event, settings.ChannelSize),
-		rateKey: map[string]time.Time{},
+		ch:       make(chan Event, settings.ChannelSize),
+		rateKey:  map[string]time.Time{},
+		pending:  map[string]Notification{},
+		fallback: make(chan struct{}, 1),
 	}
 }
 
@@ -69,6 +76,9 @@ func (p *Pipeline) Store() *Store { return p.store }
 func (p *Pipeline) Settings() Settings { return p.settings }
 
 func (p *Pipeline) Run(ctx context.Context) {
+	notifyDone := make(chan struct{})
+	go func() { defer close(notifyDone); p.runNotifications(ctx) }()
+	defer func() { <-notifyDone }()
 	_ = p.store.EnsurePartitions(ctx)
 	{
 		c, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
@@ -95,8 +105,13 @@ func (p *Pipeline) Run(ctx context.Context) {
 		batch := buf
 		buf = make([]Event, 0, 128)
 		c, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		if err := p.store.InsertBatch(c, batch); err != nil && p.log != nil {
-			p.log.Error("obs insert failed", "error", err, "n", len(batch))
+		if err := p.store.InsertBatch(c, batch); err != nil {
+			metrics.ObsDropped.WithLabelValues("persist_failed").Add(float64(len(batch)))
+			if p.log != nil {
+				p.log.Error("obs insert failed", "error", err, "n", len(batch))
+			}
+			cancel()
+			return
 		}
 		cancel()
 		for i := range batch {
@@ -109,6 +124,7 @@ func (p *Pipeline) Run(ctx context.Context) {
 			for {
 				select {
 				case e := <-p.ch:
+					metrics.ObsQueueSize.Set(float64(len(p.ch)))
 					buf = append(buf, e)
 				default:
 					flush()
@@ -116,6 +132,7 @@ func (p *Pipeline) Run(ctx context.Context) {
 				}
 			}
 		case e := <-p.ch:
+			metrics.ObsQueueSize.Set(float64(len(p.ch)))
 			buf = append(buf, e)
 			if len(buf) >= 64 {
 				flush()
@@ -138,20 +155,39 @@ func (p *Pipeline) Run(ctx context.Context) {
 
 func (p *Pipeline) Emit(e Event) {
 	e.Normalize()
+	if !keepEvent(e) {
+		return
+	}
 	select {
 	case p.ch <- e:
+		metrics.ObsQueueSize.Set(float64(len(p.ch)))
 	default:
 		if e.Type == TypeBusiness || e.Severity == SeverityCritical {
+			// Only one diagnostic fallback may compete for DB capacity. Trading
+			// durability belongs to the canonical order/outbox transaction.
+			select {
+			case p.fallback <- struct{}{}:
+				defer func() { <-p.fallback }()
+			default:
+				metrics.ObsDropped.WithLabelValues("fallback_busy").Inc()
+				return
+			}
 			c, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
-			if err := p.store.Insert(c, e); err != nil && p.log != nil {
-				p.log.Error("obs sync insert failed", "error", err, "type", e.Type, "subtype", e.Subtype)
+			if err := p.store.Insert(c, e); err != nil {
+				metrics.ObsDropped.WithLabelValues("fallback_persist_failed").Inc()
+				if p.log != nil && !p.Throttled("obs.fallback_failed", 10*time.Second) {
+					p.log.Error("obs sync insert failed", "error", err, "type", e.Type, "subtype", e.Subtype)
+				}
+				cancel()
+				return
 			}
 			cancel()
 			p.afterPersist(e)
 			return
 		}
-		if p.log != nil {
-			p.log.Warn("obs channel full, dropping event", "type", e.Type, "subtype", e.Subtype)
+		metrics.ObsDropped.WithLabelValues("queue_full").Inc()
+		if p.log != nil && !p.Throttled("obs.queue_full", 10*time.Second) {
+			p.log.Warn("obs channel full, dropping diagnostic event", "type", e.Type, "subtype", e.Subtype)
 		}
 	}
 }
@@ -196,7 +232,7 @@ func (p *Pipeline) maybeNotify(e Event) {
 	if code == "" {
 		code = e.Subtype
 	}
-	fp := strings.Join([]string{e.Severity, e.Type, e.Subtype, code, fmt.Sprintf("%v", e.BrokerID)}, "|")
+	fp := strings.Join([]string{e.Severity, e.Type, e.Subtype, code, brokerFingerprint(e.BrokerID)}, "|")
 	title := e.Message
 	if title == "" {
 		title = e.Subtype
@@ -215,17 +251,59 @@ func (p *Pipeline) maybeNotify(e Event) {
 	if n.Message == "" {
 		n.Message = e.Message
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	out, created, err := p.store.UpsertNotification(ctx, n, p.settings.AlertWindow)
-	if err != nil {
-		if p.log != nil {
-			p.log.Warn("obs notification failed", "error", err)
+	p.notifyMu.Lock()
+	defer p.notifyMu.Unlock()
+	if previous, ok := p.pending[fp]; ok {
+		n.Count = previous.Count + 1
+	} else {
+		if len(p.pending) >= 128 {
+			metrics.ObsDropped.WithLabelValues("notification_queue_full").Inc()
+			return
 		}
-		return
+		n.Count = 1
 	}
-	if p.hub != nil && (created || out.Count == 10 || out.Count == 100 || out.Count%100 == 0) {
-		p.hub.Broadcast("notification.new", out)
+	p.pending[fp] = n
+}
+
+func brokerFingerprint(id *int64) string {
+	if id == nil {
+		return ""
+	}
+	return strconv.FormatInt(*id, 10)
+}
+
+// Notification summaries are isolated from diagnostic event persistence.
+func (p *Pipeline) runNotifications(ctx context.Context) {
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			p.notifyMu.Lock()
+			pending := p.pending
+			p.pending = map[string]Notification{}
+			p.notifyMu.Unlock()
+			for _, n := range pending {
+				if ctx.Err() != nil {
+					return
+				}
+				c, cancel := context.WithTimeout(ctx, 2*time.Second)
+				out, created, err := p.store.UpsertNotification(c, n, p.settings.AlertWindow)
+				cancel()
+				if err != nil {
+					metrics.ObsDropped.WithLabelValues("notification_persist_failed").Add(float64(n.Count))
+					if p.log != nil && !p.Throttled("obs.notification_failed", 10*time.Second) {
+						p.log.Warn("obs notification failed", "error", err)
+					}
+					continue
+				}
+				if p.hub != nil && (created || n.Count > 1 || out.Count%100 == 0) {
+					p.hub.Broadcast("notification.new", out)
+				}
+			}
+		}
 	}
 }
 

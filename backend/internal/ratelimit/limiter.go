@@ -54,6 +54,34 @@ func (l *Limiter) Allow(key string) bool {
 	return true
 }
 
+// Update changes policy without refilling exhausted buckets. Existing tokens are
+// accrued under the old rate first, so repeatedly refreshing policy cannot bypass it.
+func (l *Limiter) Update(ratePerSec, burst int) {
+	if ratePerSec <= 0 {
+		ratePerSec = 100
+	}
+	if burst <= 0 {
+		burst = ratePerSec
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.rate == float64(ratePerSec) && l.burst == float64(burst) {
+		return
+	}
+	now := time.Now()
+	for _, b := range l.buckets {
+		b.tokens += now.Sub(b.last).Seconds() * l.rate
+		if b.tokens > l.burst {
+			b.tokens = l.burst
+		}
+		if b.tokens > float64(burst) {
+			b.tokens = float64(burst)
+		}
+		b.last = now
+	}
+	l.rate, l.burst = float64(ratePerSec), float64(burst)
+}
+
 // SlidingWindow counts events in a time window (for auth failure throttling).
 type SlidingWindow struct {
 	mu      sync.Mutex

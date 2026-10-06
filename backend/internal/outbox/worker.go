@@ -3,27 +3,40 @@ package outbox
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
 
 	"github.com/fix-gateway/backend/internal/adapters"
 	"github.com/fix-gateway/backend/internal/domain"
+	"github.com/fix-gateway/backend/internal/metrics"
 	"github.com/fix-gateway/backend/internal/observability"
 	"github.com/fix-gateway/backend/internal/orders"
 	"github.com/google/uuid"
 )
 
+type eventStore interface {
+	ClaimBatch(context.Context, string, int) ([]domain.OutboxEvent, error)
+	MarkDone(context.Context, int64) error
+	MarkRetry(context.Context, int64, string, time.Duration) error
+	MarkFailed(context.Context, int64, string) error
+	ReclaimStale(context.Context, time.Duration) (int64, error)
+	PendingCount(context.Context) (int64, error)
+}
+
+var errReconciliationRequired = errors.New("RECONCILIATION_REQUIRED")
+
 type Worker struct {
-	store    *Store
+	store    eventStore
 	orders   *orders.Store
 	manager  *adapters.Manager
 	log      *slog.Logger
 	workerID string
 	interval time.Duration
 	batch    int
-	maxRetry int
 	obs      observability.Emitter
+	wake     chan struct{}
 }
 
 func NewWorker(store *Store, orderStore *orders.Store, manager *adapters.Manager, log *slog.Logger, workerID string, interval time.Duration, batch int) *Worker {
@@ -35,48 +48,108 @@ func NewWorker(store *Store, orderStore *orders.Store, manager *adapters.Manager
 	}
 	return &Worker{
 		store: store, orders: orderStore, manager: manager, log: log,
-		workerID: workerID, interval: interval, batch: batch, maxRetry: 20,
+		workerID: workerID, interval: interval, batch: batch,
+		wake: make(chan struct{}, 1),
 	}
 }
 
 func (w *Worker) Run(ctx context.Context) {
+	if reconciler, ok := w.store.(interface {
+		ReconcileConfirmed(context.Context, int) (int, error)
+	}); ok {
+		reconcileCtx, stop := context.WithCancel(ctx)
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			t := time.NewTicker(5 * time.Second)
+			defer t.Stop()
+			for {
+				attemptCtx, cancel := context.WithTimeout(reconcileCtx, 2*time.Second)
+				n, err := reconciler.ReconcileConfirmed(attemptCtx, 20)
+				cancel()
+				if err != nil && reconcileCtx.Err() == nil {
+					w.log.Error("automatic FIX reconciliation failed", "resolved", n, "error", err)
+				} else if n > 0 {
+					w.log.Info("automatically reconciled FIX outcomes", "count", n)
+				}
+				select {
+				case <-reconcileCtx.Done():
+					return
+				case <-t.C:
+				}
+			}
+		}()
+		defer func() { stop(); <-done }()
+	}
 	t := time.NewTicker(w.interval)
 	defer t.Stop()
+	w.Notify()
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-t.C:
 			w.tick(ctx)
+		case <-w.wake:
+			w.tick(ctx)
 		}
 	}
 }
 
+// This is only a latency hint. The durable DB queue and periodic scan remain
+// authoritative when notifications coalesce or the process restarts.
+func (w *Worker) Notify() {
+	select {
+	case w.wake <- struct{}{}:
+	default:
+	}
+}
+
 func (w *Worker) tick(ctx context.Context) {
+	defer func() {
+		if count, err := w.store.PendingCount(ctx); err == nil {
+			metrics.OutboxQueueSize.Set(float64(count))
+		}
+	}()
+	if n, err := w.store.ReclaimStale(ctx, DefaultStaleAfter); err != nil {
+		w.log.Error("outbox reclaim failed", "error", err)
+	} else if n > 0 {
+		w.log.Warn("reclaimed stale outbox events", "count", n)
+	}
 	events, err := w.store.ClaimBatch(ctx, w.workerID, w.batch)
 	if err != nil {
 		w.log.Error("outbox claim failed", "error", err)
 		return
 	}
 	for _, ev := range events {
-		if err := w.process(ctx, ev); err != nil {
-			w.log.Error("outbox process failed", "event_id", ev.ID, "error", err)
-			w.emit(observability.Event{
-				Type: observability.TypeError, Subtype: observability.ErrQueue, ErrorCode: "OUTBOX_PROCESS_FAILED",
-				ErrorMessage: err.Error(), FailureStage: "outbox", Message: err.Error(),
-			})
-			if ev.Attempts >= w.maxRetry {
-				_ = w.store.MarkFailed(ctx, ev.ID, err.Error())
-				continue
-			}
-			delay := time.Duration(ev.Attempts) * time.Second
-			if delay > 30*time.Second {
-				delay = 30 * time.Second
-			}
-			_ = w.store.MarkRetry(ctx, ev.ID, err.Error(), delay)
-			continue
+		w.finish(ctx, ev, w.process(ctx, ev))
+	}
+	if len(events) == w.batch && ctx.Err() == nil {
+		w.Notify()
+	}
+}
+
+// Pre-send failures remain retryable indefinitely. Uncertain wire outcomes
+// remain durably parked for reconciliation, never automatically resent.
+func (w *Worker) finish(ctx context.Context, ev domain.OutboxEvent, processErr error) {
+	persistCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	var err error
+	if processErr == nil {
+		err = w.store.MarkDone(persistCtx, ev.ID)
+	} else {
+		w.log.Error("outbox process failed", "event_id", ev.ID, "error", processErr)
+		w.emit(observability.Event{Type: observability.TypeError, Subtype: observability.ErrQueue, ErrorCode: "OUTBOX_PROCESS_FAILED", ErrorMessage: processErr.Error(), FailureStage: "outbox", Message: processErr.Error()})
+		if errors.Is(processErr, errReconciliationRequired) {
+			err = w.store.MarkFailed(persistCtx, ev.ID, processErr.Error())
+		} else {
+			delay := time.Duration(min(max(ev.Attempts, 1), 30)) * time.Second
+			err = w.store.MarkRetry(persistCtx, ev.ID, processErr.Error(), delay)
 		}
-		_ = w.store.MarkDone(ctx, ev.ID)
+	}
+	if err != nil {
+		w.log.Error("outbox outcome persistence failed; event retained for reconciliation", "event_id", ev.ID, "error", err)
+		w.emit(observability.Event{Type: observability.TypeError, Subtype: observability.ErrQueue, ErrorCode: "OUTBOX_PERSIST_FAILED", ErrorMessage: err.Error(), FailureStage: "outbox", Message: fmt.Sprintf("event %d outcome could not be persisted: %v", ev.ID, err)})
 	}
 }
 
@@ -110,14 +183,10 @@ func (w *Worker) process(ctx context.Context, ev domain.OutboxEvent) error {
 }
 
 func (w *Worker) processSend(ctx context.Context, order domain.Order) error {
-	if orders.IsTerminal(order.Status) {
-		return nil
-	}
-	if orders.IsExternallyAccepted(order) {
-		return nil
-	}
-	if order.Status == domain.OrderSent {
-		// Already sent — do not duplicate ClOrdID send.
+	if !orders.ShouldAttemptFIXSend(order) {
+		if order.FixSendAttemptedAt != nil && !orders.IsExternallyAccepted(order) && !orders.IsTerminal(order.Status) {
+			return fmt.Errorf("%w: order %s has prior wire attempt without venue confirmation", errReconciliationRequired, order.ID)
+		}
 		return nil
 	}
 
@@ -163,19 +232,29 @@ func (w *Worker) processSend(ctx context.Context, order domain.Order) error {
 	}
 	w.emitOrder(routed, observability.TypeBusiness, observability.BizOrderRouted, "", "routed to "+ad.ID(), "load_balancer")
 	w.emitOrder(routed, observability.TypeBusiness, observability.BizOrderAssigned, "", "assigned "+ad.ID(), "load_balancer")
+
+	if err := w.orders.FenceSendAttempt(ctx, routed.ID); err != nil {
+		if errors.Is(err, orders.ErrSendAlreadyAttempted) {
+			return fmt.Errorf("%w: order %s send already fenced", errReconciliationRequired, routed.ID)
+		}
+		w.emitOrder(routed, observability.TypeError, observability.ErrDatabase, "SEND_FENCE_FAILED", err.Error(), "order_service")
+		return err
+	}
+
+	metrics.AdapterRequests.WithLabelValues(ad.ID()).Inc()
 	rawFIX, err := ad.SendOrder(ctx, routed)
 	if err != nil {
-		_ = w.orders.ClearRouteForFailover(ctx, order.ID, "send failed: "+err.Error())
+		metrics.AdapterErrors.WithLabelValues(ad.ID()).Inc()
 		w.emitOrder(routed, observability.TypeError, observability.ErrFIX, "FIX_SEND_FAILED", err.Error(), "fix_adapter")
-		w.emitOrder(routed, observability.TypeBusiness, observability.BizOrderFailed, "FIX_SEND_FAILED", err.Error(), "fix_adapter")
-		return err
+		return fmt.Errorf("%w: FIX send for order %s: %v", errReconciliationRequired, routed.ID, err)
 	}
 	sent, err := w.orders.MarkSent(ctx, order.ID, ad.ID(), rawFIX)
 	if err != nil {
 		w.emitOrder(routed, observability.TypeError, observability.ErrDatabase, "MARK_SENT_FAILED", err.Error(), "order_service")
-		return err
+		return fmt.Errorf("%w: FIX sent but order update failed: %v", errReconciliationRequired, err)
 	}
 	w.emitOrder(sent, observability.TypeBusiness, observability.BizOrderSent, "", "sent to FIX adapter", "fix_adapter")
+	metrics.OrdersProcessed.Inc()
 	w.emitOrder(sent, observability.TypeFIX, "FIX_ORDER_SENT", "", "NewOrderSingle", "fix_adapter")
 	return nil
 }
@@ -192,9 +271,11 @@ func (w *Worker) processCancel(ctx context.Context, order domain.Order) error {
 		w.emitOrder(order, observability.TypeError, observability.ErrAdapter, "CANCEL_ADAPTER_MISSING", err.Error(), "fix_adapter")
 		return err
 	}
+	metrics.AdapterRequests.WithLabelValues(ad.ID()).Inc()
 	if err := ad.CancelOrder(ctx, order); err != nil {
+		metrics.AdapterErrors.WithLabelValues(ad.ID()).Inc()
 		w.emitOrder(order, observability.TypeError, observability.ErrFIX, "FIX_CANCEL_FAILED", err.Error(), "fix_adapter")
-		return err
+		return fmt.Errorf("%w: cancel result for order %s: %v", errReconciliationRequired, order.ID, err)
 	}
 	w.emitOrder(order, observability.TypeFIX, "FIX_ORDER_SENT", "", "OrderCancelRequest", "fix_adapter")
 	return nil

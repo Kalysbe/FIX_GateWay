@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import { api } from "../api";
 import { statusLabel } from "../labels";
+import { PageHeader } from "../components/PageHeader";
 
 type Instrument = {
   id: number;
@@ -78,17 +79,15 @@ export default function ReferencePage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-wrap items-end justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-semibold">Справочник</h1>
-          <p className="text-sm text-slate-500">
-            Инструменты синхронизируются по FIX Security Definition (`35=c` → `35=d`)
-          </p>
-        </div>
-        <button className="btn" disabled={sync.isPending} onClick={() => sync.mutate()}>
-          {sync.isPending ? "Запрос по FIX…" : "Синхронизировать по FIX"}
-        </button>
-      </div>
+      <PageHeader
+        title="Справочник"
+        subtitle="Инструменты синхронизируются по FIX Security Definition (`35=c` → `35=d`)"
+        actions={
+          <button className="btn" disabled={sync.isPending} onClick={() => sync.mutate()}>
+            {sync.isPending ? "Запрос по FIX…" : "Синхронизировать по FIX"}
+          </button>
+        }
+      />
 
       {sync.isSuccess && (
         <div className="text-sm text-accent">

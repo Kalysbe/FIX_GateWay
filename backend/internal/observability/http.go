@@ -75,9 +75,8 @@ func (w *captureWriter) Flush() {
 func (w *captureWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
 
 func (p *Pipeline) HTTPMiddleware(cfg HTTPConfig, next http.Handler) http.Handler {
-	skipHosts := skipHTTPHosts(cfg.SkipOrigins)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if SkipHTTPLog(r.URL.Path) || IsInternalUIRequest(r, skipHosts) {
+		if SkipHTTPLog(r.URL.Path) {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -159,7 +158,8 @@ func (p *Pipeline) HTTPMiddleware(cfg HTTPConfig, next http.Handler) http.Handle
 			p.Emit(Event{
 				Type: TypeError, Subtype: ErrorSubtypeForStatus(status, class.Subtype),
 				RequestID: e.RequestID, TraceID: e.TraceID, BrokerID: e.BrokerID, BrokerName: e.BrokerName,
-				TokenID: e.TokenID, ClientIP: ip, Endpoint: e.Endpoint, HTTPMethod: e.HTTPMethod,
+				TokenID: e.TokenID, ClientIP: ip, ForwardedFor: xff, UserAgent: e.UserAgent,
+				Endpoint: e.Endpoint, HTTPMethod: e.HTTPMethod,
 				StatusCode: &status, OrderID: e.OrderID, ClientOrderID: e.ClientOrderID, AdapterID: e.AdapterID,
 				ErrorCode: firstNonEmpty(e.ErrorCode, strconv.Itoa(status)), ErrorMessage: e.ErrorMessage,
 				FailureStage: firstNonEmpty(e.FailureStage, "api"), Message: e.ErrorMessage,
@@ -256,6 +256,10 @@ func skipHTTPHosts(origins []string) map[string]bool {
 // IsInternalUIRequest is true for the admin console (Vite :5173), including
 // same-origin requests proxied to the gateway. Broker-app (:5174) is not skipped.
 func IsInternalUIRequest(r *http.Request, skipHosts map[string]bool) bool {
+	// API logging must never depend on caller-controlled browser/proxy headers.
+	if strings.HasPrefix(r.URL.Path, "/api/") {
+		return false
+	}
 	if len(skipHosts) == 0 {
 		skipHosts = skipHTTPHosts(nil)
 	}

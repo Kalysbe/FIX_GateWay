@@ -1,0 +1,202 @@
+{
+  "refresh": "10s",
+  "tags": [
+    "gateway",
+    "rate-limits"
+  ],
+  "__inputs": [
+    {
+      "type": "datasource",
+      "pluginName": "Prometheus",
+      "pluginId": "prometheus",
+      "label": "Prometheus",
+      "name": "DS_PROMETHEUS"
+    }
+  ],
+  "version": 1,
+  "uid": "gateway-rate-limits",
+  "title": "Gateway Rate Limits",
+  "time": {
+    "from": "now-30m",
+    "to": "now"
+  },
+  "schemaVersion": 39,
+  "panels": [
+    {
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "rate(grpc_rate_limit_requests_total{scope=\"broker\"}[1m])",
+          "legendFormat": "{{scope}} / {{broker_id}} / {{method}}"
+        }
+      ],
+      "id": 1,
+      "datasource": {
+        "uid": "${DS_PROMETHEUS}",
+        "type": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "w": 12,
+        "h": 8,
+        "y": 0
+      },
+      "type": "timeseries",
+      "title": "Broker traffic / requests per second"
+    },
+    {
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "rate(grpc_rate_limit_allowed_total{scope=\"broker\"}[1m])",
+          "legendFormat": "{{scope}} / {{broker_id}} / {{method}}"
+        }
+      ],
+      "id": 2,
+      "datasource": {
+        "uid": "${DS_PROMETHEUS}",
+        "type": "prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "w": 12,
+        "h": 8,
+        "y": 0
+      },
+      "type": "timeseries",
+      "title": "Allowed per second"
+    },
+    {
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "rate(grpc_rate_limit_rejected_total{scope=\"broker\"}[1m])",
+          "legendFormat": "{{scope}} / {{broker_id}} / {{method}}"
+        }
+      ],
+      "id": 3,
+      "datasource": {
+        "uid": "${DS_PROMETHEUS}",
+        "type": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "w": 12,
+        "h": 8,
+        "y": 8
+      },
+      "type": "timeseries",
+      "title": "Rejected per second"
+    },
+    {
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "grpc_rate_limit_concurrent{scope=\"broker\"}",
+          "legendFormat": "{{scope}} / {{broker_id}} / {{method}}"
+        }
+      ],
+      "id": 4,
+      "datasource": {
+        "uid": "${DS_PROMETHEUS}",
+        "type": "prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "w": 12,
+        "h": 8,
+        "y": 8
+      },
+      "type": "timeseries",
+      "title": "Current concurrency"
+    },
+    {
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "grpc_rate_limit_configured_rps{scope=\"broker\"}",
+          "legendFormat": "{{scope}} / {{broker_id}} / {{method}}"
+        }
+      ],
+      "id": 5,
+      "datasource": {
+        "uid": "${DS_PROMETHEUS}",
+        "type": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "w": 12,
+        "h": 8,
+        "y": 16
+      },
+      "type": "timeseries",
+      "title": "Configured limit per second"
+    },
+    {
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "100 * rate(grpc_rate_limit_requests_total{scope=\"broker\"}[1m]) / grpc_rate_limit_configured_rps{scope=\"broker\"}",
+          "legendFormat": "{{scope}} / {{broker_id}} / {{method}}"
+        }
+      ],
+      "id": 6,
+      "datasource": {
+        "uid": "${DS_PROMETHEUS}",
+        "type": "prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "w": 12,
+        "h": 8,
+        "y": 16
+      },
+      "type": "timeseries",
+      "title": "Utilization percent"
+    },
+    {
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "rate(grpc_rate_limit_requests_total{scope=\"global\"}[1m])",
+          "legendFormat": "{{scope}} / {{broker_id}} / {{method}}"
+        }
+      ],
+      "id": 7,
+      "datasource": {
+        "uid": "${DS_PROMETHEUS}",
+        "type": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "w": 12,
+        "h": 8,
+        "y": 24
+      },
+      "type": "timeseries",
+      "title": "Global traffic"
+    },
+    {
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.99, rate(grpc_rate_limit_latency_seconds_bucket[5m]))",
+          "legendFormat": "{{scope}} / {{broker_id}} / {{method}}"
+        }
+      ],
+      "id": 8,
+      "datasource": {
+        "uid": "${DS_PROMETHEUS}",
+        "type": "prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "w": 12,
+        "h": 8,
+        "y": 24
+      },
+      "type": "timeseries",
+      "title": "Limiter p99 latency"
+    }
+  ]
+}

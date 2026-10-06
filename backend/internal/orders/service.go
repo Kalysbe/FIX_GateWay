@@ -2,6 +2,7 @@ package orders
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -10,21 +11,28 @@ import (
 	"github.com/fix-gateway/backend/internal/domain"
 	"github.com/fix-gateway/backend/internal/observability"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/shopspring/decimal"
 )
 
 type Service struct {
-	store   *Store
-	brokers *brokers.Store
-	audit   *audit.Store
-	obs     observability.Emitter
+	store    *Store
+	brokers  *brokers.Store
+	audit    *audit.Store
+	obs      observability.Emitter
+	onQueued func()
 }
+
+var ErrPersistenceUnavailable = errors.New("order storage unavailable")
 
 func NewService(store *Store, brokers *brokers.Store, auditStore *audit.Store) *Service {
 	return &Service{store: store, brokers: brokers, audit: auditStore}
 }
 
 func (s *Service) SetObserver(obs observability.Emitter) { s.obs = obs }
+
+// Configure before serving requests. Notifications never replace durable enqueueing.
+func (s *Service) SetQueueNotifier(fn func()) { s.onQueued = fn }
 
 type CreateOrderRequest struct {
 	AccountID     string           `json:"account_id"`  // торговый код → FIX tag 1
@@ -99,8 +107,30 @@ func (s *Service) Create(ctx context.Context, broker domain.Broker, ip string, r
 		req.TimeInForce = "DAY"
 	}
 
+	acc, err := s.brokers.ResolveActiveAccount(ctx, broker.ID, req.AccountID)
+	if err != nil {
+		msg := fmt.Errorf("account_id %q не найден среди активных счетов брокера", req.AccountID)
+		if !errors.Is(err, brokers.ErrNotFound) {
+			return domain.Order{}, false, fmt.Errorf("%w: %w", ErrPersistenceUnavailable, err)
+		}
+		s.emit(ctx, observability.Event{
+			Type: observability.TypeError, Subtype: observability.ErrValidation, BrokerID: &broker.ID,
+			BrokerCode: broker.Code, BrokerName: broker.Name, ClientOrderID: req.ClientOrderID,
+			ErrorCode: "ACCOUNT_NOT_ALLOWED", ErrorMessage: msg.Error(), FailureStage: "validation",
+			Message: msg.Error(), AccountID: req.AccountID, Instrument: req.Symbol, Side: string(req.Side),
+		})
+		return domain.Order{}, false, msg
+	}
+	fixAccount := strings.TrimSpace(acc.TradingAccount)
+	if fixAccount == "" {
+		fixAccount = acc.Code
+	}
+
 	instr, err := s.store.ResolveInstrument(ctx, broker.ID, req.Symbol, req.Board)
 	if err != nil {
+		if !errors.Is(err, pgx.ErrNoRows) && !errors.Is(err, ErrInstrumentNotFound) {
+			return domain.Order{}, false, fmt.Errorf("%w: %w", ErrPersistenceUnavailable, err)
+		}
 		msg := fmt.Errorf("instrument %q не найден: добавьте в справочник instruments (symbol + board/код класса + currency) или укажите существующий символ из GET /api/v1/instruments", req.Symbol)
 		s.emit(ctx, observability.Event{
 			Type: observability.TypeError, Subtype: observability.ErrValidation, BrokerID: &broker.ID,
@@ -111,19 +141,28 @@ func (s *Service) Create(ctx context.Context, broker domain.Broker, ip string, r
 	}
 
 	order, idempotent, err := s.store.CreateWithOutbox(ctx, CreateInput{
-		BrokerID: broker.ID, FixAccount: req.AccountID, ClientCode: req.ClientCode, QuikFirm: strings.TrimSpace(quikFirm),
+		BrokerID: broker.ID, FixAccount: fixAccount, ClientCode: req.ClientCode, QuikFirm: strings.TrimSpace(quikFirm),
 		ClientOrderID: req.ClientOrderID,
 		InstrumentID:  instr.ID, Board: req.Board, Side: req.Side, OrderType: req.OrderType,
 		TimeInForce: req.TimeInForce, Quantity: req.Quantity, Price: req.Price,
 		RequestID: observability.RequestIDFrom(ctx), TraceID: observability.TraceIDFrom(ctx),
 	})
 	if err != nil {
+		var risk *RiskRejected
+		if errors.As(err, &risk) {
+			s.emit(ctx, observability.Event{Type: observability.TypeError, Subtype: observability.ErrValidation, BrokerID: &broker.ID,
+				ClientOrderID: req.ClientOrderID, ErrorCode: risk.Code, ErrorMessage: risk.Message, FailureStage: "risk", Message: risk.Message})
+			return order, false, err
+		}
 		s.emit(ctx, observability.Event{
 			Type: observability.TypeError, Subtype: observability.ErrDatabase, BrokerID: &broker.ID,
 			BrokerCode: broker.Code, BrokerName: broker.Name, ClientOrderID: req.ClientOrderID,
 			ErrorCode: "ORDER_PERSIST_FAILED", ErrorMessage: err.Error(), FailureStage: "order_service", Message: err.Error(),
 		})
-		return order, false, err
+		return order, false, fmt.Errorf("%w: %w", ErrPersistenceUnavailable, err)
+	}
+	if s.onQueued != nil {
+		s.onQueued()
 	}
 	_ = s.audit.Write(ctx, audit.Entry{
 		ActorType: "broker", ActorID: fmt.Sprintf("%d", broker.ID), BrokerID: &broker.ID,
@@ -168,10 +207,16 @@ func (s *Service) ListForBroker(ctx context.Context, brokerID int64, limit int) 
 func (s *Service) Cancel(ctx context.Context, brokerID int64, id uuid.UUID, ip string) (domain.Order, error) {
 	order, err := s.store.GetForBroker(ctx, brokerID, id)
 	if err != nil {
+		if !errors.Is(err, ErrNotFound) {
+			return order, fmt.Errorf("%w: %w", ErrPersistenceUnavailable, err)
+		}
 		return order, err
 	}
 	already, err := s.store.EnqueueCancel(ctx, order.ID)
 	if err != nil {
+		if !errors.Is(err, ErrInvalidCancel) {
+			return order, fmt.Errorf("%w: %w", ErrPersistenceUnavailable, err)
+		}
 		s.emit(ctx, observability.Event{
 			Type: observability.TypeError, Subtype: observability.ErrValidation, BrokerID: &brokerID,
 			OrderID: &id, ClientOrderID: order.ClientOrderID, ErrorCode: "CANCEL_REJECTED",
@@ -181,6 +226,9 @@ func (s *Service) Cancel(ctx context.Context, brokerID int64, id uuid.UUID, ip s
 	}
 	if already {
 		return s.store.Get(ctx, id)
+	}
+	if s.onQueued != nil {
+		s.onQueued()
 	}
 	_ = s.audit.Write(ctx, audit.Entry{
 		ActorType: "broker", ActorID: fmt.Sprintf("%d", brokerID), BrokerID: &brokerID,

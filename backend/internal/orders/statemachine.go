@@ -24,10 +24,15 @@ var transitions = map[domain.OrderStatus]map[domain.OrderStatus]bool{
 		domain.OrderCancelled: true,
 	},
 	domain.OrderRouting: {
-		domain.OrderSent:    true,
-		domain.OrderQueued:  true, // failover requeue
-		domain.OrderFailed:  true,
-		domain.OrderRejected: true,
+		domain.OrderSent:            true,
+		domain.OrderQueued:          true, // pre-send failover only
+		domain.OrderFailed:          true,
+		domain.OrderRejected:        true,
+		domain.OrderAcknowledged:    true, // venue ER can beat MarkSent
+		domain.OrderPartiallyFilled: true,
+		domain.OrderFilled:          true,
+		domain.OrderCancelled:       true,
+		domain.OrderExpired:         true,
 	},
 	domain.OrderSent: {
 		domain.OrderAcknowledged:    true,
@@ -93,4 +98,24 @@ func IsExternallyAccepted(o domain.Order) bool {
 	default:
 		return false
 	}
+}
+
+// ShouldAttemptFIXSend is the at-most-once guard: once a send is fenced or the
+// order is already on the wire / terminal, the worker must not call SendOrder.
+func ShouldAttemptFIXSend(o domain.Order) bool {
+	if IsTerminal(o.Status) || IsExternallyAccepted(o) || o.Status == domain.OrderSent {
+		return false
+	}
+	if o.FixSendAttemptedAt != nil {
+		return false
+	}
+	return true
+}
+
+// CanClearRouteForFailover allows picking another adapter only before the wire send.
+func CanClearRouteForFailover(o domain.Order) bool {
+	if !ShouldAttemptFIXSend(o) {
+		return false
+	}
+	return o.Status == domain.OrderQueued || o.Status == domain.OrderRouting
 }

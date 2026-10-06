@@ -4,6 +4,9 @@ import { Link } from "react-router-dom";
 import { api } from "../api";
 import { formatDateTime, formatNumber } from "../labels";
 import { useBreadcrumbs } from "../components/breadcrumbs";
+import { PageHeader } from "../components/PageHeader";
+import { liveRefetchInterval } from "../lib/poll";
+import { useAdminStream } from "../hooks/useAdminStream";
 
 type Note = {
   id: string;
@@ -40,20 +43,21 @@ function tone(sev: string) {
     case "WARNING":
       return "border-amber-100 bg-amber-50";
     default:
-      return "border-slate-100 bg-white";
+      return "border-line bg-panel";
   }
 }
 
 export default function NotificationsPage() {
   useBreadcrumbs([{ label: "Уведомления" }]);
   const qc = useQueryClient();
+  const { connected } = useAdminStream();
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(PAGE_SIZE);
   const q = useQuery({
     queryKey: ["notifications", "list", page, pageSize],
-    queryFn: () =>
-      api<NotesPage>(`/api/v1/admin/notifications?limit=${pageSize}&page=${page}`),
-    refetchInterval: 8000,
+    queryFn: ({ signal }) =>
+      api<NotesPage>(`/api/v1/admin/notifications?limit=${pageSize}&page=${page}`, { signal }),
+    refetchInterval: liveRefetchInterval(connected, 8000),
   });
   const readAll = useMutation({
     mutationFn: () => api("/api/v1/admin/notifications/read-all", { method: "POST" }),
@@ -79,17 +83,15 @@ export default function NotificationsPage() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-end justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-semibold">Уведомления</h1>
-          <p className="text-sm text-slate-500">
-            Непрочитанных: {formatNumber(q.data?.unread ?? 0)}. Одинаковые ошибки агрегируются за минуту.
-          </p>
-        </div>
-        <button type="button" className="btn-muted" onClick={() => readAll.mutate()} disabled={readAll.isPending}>
-          Прочитать все
-        </button>
-      </div>
+      <PageHeader
+        title="Уведомления"
+        subtitle={`Непрочитанных: ${formatNumber(q.data?.unread ?? 0)}. Одинаковые ошибки агрегируются за минуту.`}
+        actions={
+          <button type="button" className="btn-muted" onClick={() => readAll.mutate()} disabled={readAll.isPending}>
+            Прочитать все
+          </button>
+        }
+      />
       <div className="space-y-2">
         {items.map((n) => (
           <div key={n.id} className={`card border ${tone(n.severity)} ${n.severity === "CRITICAL" ? "ring-1 ring-rose-300" : ""}`}>

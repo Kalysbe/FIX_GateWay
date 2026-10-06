@@ -74,7 +74,7 @@ func classifyAdmin(method, path string) RouteClass {
 		return RouteClass{TypeAPI, SubBrokerRequest, adminRoute(path)}
 	case path == "/api/v1/admin/login":
 		return RouteClass{TypeAPI, SubTokenRequest, path}
-	case path == "/health" || strings.HasSuffix(path, "/ws"):
+	case path == "/health" || path == "/api/v1/admin/events/stream":
 		return RouteClass{TypeAPI, SubHealthRequest, path}
 	default:
 		return RouteClass{TypeAPI, SubAdminRequest, adminRoute(path)}
@@ -98,7 +98,7 @@ func SkipHTTPLog(path string) bool {
 	case "/metrics", "/api/openapi.yaml", "/swagger", "/api/broker-openapi.yaml", "/broker-swagger":
 		return true
 	}
-	return strings.HasSuffix(path, "/ws")
+	return path == "/api/v1/admin/events/stream"
 }
 
 func ErrorSubtypeForStatus(status int, apiSubtype string) string {
@@ -125,7 +125,7 @@ func AuthSubtypeFromReason(reason string) string {
 		return AuthTokenExpired
 	case r == "token revoked" || strings.Contains(r, "revoked"):
 		return AuthTokenRevoked
-	case r == "ip not allowed":
+	case r == "ip not allowed" || strings.HasPrefix(r, "ip not allowed:"):
 		return AuthIPNotAllowed
 	case strings.Contains(r, "hmac"):
 		return AuthHMACFailed

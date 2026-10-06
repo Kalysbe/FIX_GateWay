@@ -1,8 +1,12 @@
 package metrics
 
 import (
+	"bufio"
+	"net"
 	"net/http"
+	"regexp"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -10,6 +14,14 @@ import (
 )
 
 var (
+	ObsQueueSize = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "gateway_observability_queue_size",
+		Help: "Diagnostic events waiting for batch persistence",
+	})
+	ObsDropped = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "gateway_observability_dropped_events_total",
+		Help: "Diagnostic events or notification summaries lost by reason; not accepted orders",
+	}, []string{"reason"})
 	HTTPRequests = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "gateway_http_requests_total",
 		Help: "Total HTTP requests",
@@ -57,14 +69,33 @@ var (
 	}, []string{"adapter_id"})
 )
 
+var (
+	uuidPath = regexp.MustCompile(`[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}`)
+	idPath   = regexp.MustCompile(`/[0-9]+`)
+)
+
+func routeLabel(path string) string {
+	path = uuidPath.ReplaceAllString(path, "/{id}")
+	return idPath.ReplaceAllString(path, "/{id}")
+}
+
 func Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		ww := &statusWriter{ResponseWriter: w, status: 200}
 		next.ServeHTTP(ww, r)
-		path := r.URL.Path
-		HTTPRequests.WithLabelValues(r.Method, path, strconv.Itoa(ww.status)).Inc()
-		HTTPDuration.WithLabelValues(r.Method, path).Observe(time.Since(start).Seconds())
+		path := "unmatched"
+		if r.Pattern != "" {
+			_, path, _ = strings.Cut(r.Pattern, " ")
+		}
+		method := r.Method
+		switch method {
+		case "GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "CONNECT", "TRACE":
+		default:
+			method = "OTHER"
+		}
+		HTTPRequests.WithLabelValues(method, path, strconv.Itoa(ww.status)).Inc()
+		HTTPDuration.WithLabelValues(method, path).Observe(time.Since(start).Seconds())
 	})
 }
 
@@ -77,3 +108,15 @@ func (w *statusWriter) WriteHeader(code int) {
 	w.status = code
 	w.ResponseWriter.WriteHeader(code)
 }
+
+func (w *statusWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
+
+func (w *statusWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	conn, rw, err := http.NewResponseController(w.ResponseWriter).Hijack()
+	if err == nil {
+		w.status = http.StatusSwitchingProtocols
+	}
+	return conn, rw, err
+}
+
+func (w *statusWriter) Flush() { _ = http.NewResponseController(w.ResponseWriter).Flush() }

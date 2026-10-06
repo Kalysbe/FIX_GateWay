@@ -231,4 +231,9 @@ export const Icons = {
       <path d="M8 15l3-4 3 2 4-6" />
     </Icon>
   ),
+  menu: (p: IconProps) => (
+    <Icon {...p}>
+      <path d="M4 7h16M4 12h16M4 17h16" />
+    </Icon>
+  ),
 };

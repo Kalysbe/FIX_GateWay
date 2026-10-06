@@ -27,8 +27,9 @@ type Manager struct {
 	onFIX        func(kind, adapterID, sessionID, msgType, direction, clOrdID, reason string, seq int)
 	onObs        func(eventType, subtype, adapterID, message string)
 
-	mu       sync.RWMutex
-	adapters map[string]Adapter
+	mu          sync.RWMutex
+	lifecycleMu sync.Mutex
+	adapters    map[string]Adapter
 }
 
 func NewManager(store *Store, log *slog.Logger, balancer routing.Balancer, onExec ExecutionHandler, storeDir string, interval time.Duration) *Manager {
@@ -78,11 +79,16 @@ func (m *Manager) StartAll(ctx context.Context) error {
 }
 
 func (m *Manager) startOne(ctx context.Context, meta domain.Adapter) error {
+	m.lifecycleMu.Lock()
+	defer m.lifecycleMu.Unlock()
 	m.mu.Lock()
-	defer m.mu.Unlock()
-	if existing, ok := m.adapters[meta.ID]; ok {
-		_ = existing.Stop(ctx)
-		delete(m.adapters, meta.ID)
+	existing := m.adapters[meta.ID]
+	delete(m.adapters, meta.ID)
+	m.mu.Unlock()
+	if existing != nil {
+		if err := existing.Stop(ctx); err != nil {
+			return err
+		}
 	}
 	_ = m.store.MarkStarted(ctx, meta.ID)
 	if m.hostOverride != "" {
@@ -104,7 +110,9 @@ func (m *Manager) startOne(ctx context.Context, meta domain.Adapter) error {
 	if err := ad.Start(ctx); err != nil {
 		return err
 	}
+	m.mu.Lock()
 	m.adapters[meta.ID] = ad
+	m.mu.Unlock()
 	_ = m.store.AddEvent(ctx, meta.ID, "STARTED", "adapter started")
 	if m.onObs != nil {
 		m.onObs("ADAPTER", "ADAPTER_STARTED", meta.ID, "adapter started")
@@ -113,12 +121,15 @@ func (m *Manager) startOne(ctx context.Context, meta domain.Adapter) error {
 }
 
 func (m *Manager) StopAll(ctx context.Context) {
+	m.lifecycleMu.Lock()
+	defer m.lifecycleMu.Unlock()
 	m.mu.Lock()
-	defer m.mu.Unlock()
-	for id, ad := range m.adapters {
+	list := m.adapters
+	m.adapters = map[string]Adapter{}
+	m.mu.Unlock()
+	for id, ad := range list {
 		_ = ad.Stop(ctx)
 		_ = m.store.UpdateStatus(ctx, id, domain.AdapterOffline, false)
-		delete(m.adapters, id)
 	}
 }
 
@@ -236,6 +247,8 @@ func (m *Manager) AvailableCount() int {
 }
 
 func (m *Manager) Disable(ctx context.Context, id string) error {
+	m.lifecycleMu.Lock()
+	defer m.lifecycleMu.Unlock()
 	online, err := m.store.CountOnlineEnabled(ctx)
 	if err != nil {
 		return err
@@ -248,15 +261,30 @@ func (m *Manager) Disable(ctx context.Context, id string) error {
 		return err
 	}
 	m.mu.Lock()
-	if existing, ok := m.adapters[id]; ok {
-		_ = existing.Stop(ctx)
-		delete(m.adapters, id)
-	}
+	existing := m.adapters[id]
+	delete(m.adapters, id)
 	m.mu.Unlock()
+	if existing != nil {
+		if err := existing.Stop(ctx); err != nil {
+			return err
+		}
+	}
 	if m.onObs != nil {
 		m.onObs("ADAPTER", "ADAPTER_STOPPED", id, "adapter disabled")
 	}
 	return m.store.UpdateStatus(ctx, id, domain.AdapterOffline, false)
+}
+
+// Snapshot map membership before any network operation. A pending writer must
+// never turn a slow dictionary request into a global routing/readiness stall.
+func (m *Manager) snapshotAdapters() []Adapter {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	list := make([]Adapter, 0, len(m.adapters))
+	for _, ad := range m.adapters {
+		list = append(list, ad)
+	}
+	return list
 }
 
 func (m *Manager) Enable(ctx context.Context, id string) error {

@@ -2,9 +2,11 @@ import type { CreateOrderInput, LocalOrder, OrderEvent, Side, OrderType, TimeInF
 
 export class ApiError extends Error {
   status: number;
-  constructor(status: number, message: string) {
+  retryAfterMs: number;
+  constructor(status: number, message: string, retryAfterMs = 0) {
     super(message);
     this.status = status;
+    this.retryAfterMs = retryAfterMs;
   }
 }
 
@@ -22,10 +24,17 @@ async function request<T>(
   headers.set("Content-Type", "application/json");
   headers.set("Authorization", `Bearer ${token.trim()}`);
 
-  const res = await fetch(`${baseUrl(gatewayUrl)}${path}`, { ...init, headers });
+  const timeout = AbortSignal.timeout(15000);
+  const signal = init.signal ? AbortSignal.any([init.signal, timeout]) : timeout;
+  const res = await fetch(`${baseUrl(gatewayUrl)}${path}`, { ...init, headers, signal });
   const body = await res.json().catch(() => ({}));
   if (!res.ok) {
-    throw new ApiError(res.status, (body as { error?: string }).error || res.statusText || "request failed");
+    const retryAfter = res.headers.get("Retry-After");
+    const seconds = retryAfter === null ? NaN : Number(retryAfter);
+    const retryAfterMs = Number.isFinite(seconds)
+      ? Math.max(0, seconds * 1000)
+      : Math.max(0, Date.parse(retryAfter || "") - Date.now()) || 0;
+    throw new ApiError(res.status, (body as { error?: string }).error || res.statusText || "request failed", retryAfterMs);
   }
   return body as T;
 }
@@ -138,6 +147,7 @@ export async function listOrders(gatewayUrl: string, token: string): Promise<Gat
 }
 
 export async function cancelOrder(gatewayUrl: string, token: string, orderId: string): Promise<GatewayOrder> {
+  validateOrderId(orderId);
   const res = await request<{ order: GatewayOrder }>(gatewayUrl, token, `/api/v1/orders/${orderId}/cancel`, {
     method: "POST",
   });
@@ -149,5 +159,45 @@ export async function getOrder(
   token: string,
   orderId: string,
 ): Promise<{ order: GatewayOrder; events: Array<{ id: string; event_type?: string; message?: string; created_at?: string }> }> {
+  validateOrderId(orderId);
   return request(gatewayUrl, token, `/api/v1/orders/${orderId}`);
+}
+
+function validateOrderId(id: string): void {
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) {
+    throw new ApiError(400, "Используйте UUID order.id из ответа gateway, а не client_order_id или ID mock-адаптера");
+  }
+}
+
+export type BookLevel = {
+  price?: string;
+  size?: string;
+};
+
+export type OrderBook = {
+  symbol?: string;
+  security_id?: string;
+  board?: string;
+  currency?: string;
+  last?: string;
+  bid?: string;
+  bid_size?: string;
+  offer?: string;
+  offer_size?: string;
+  bids?: BookLevel[];
+  offers?: BookLevel[];
+  updated_at?: string;
+};
+
+export async function getOrderBook(
+  gatewayUrl: string,
+  token: string,
+  symbol: string,
+  board: string,
+): Promise<{ live?: boolean; books: OrderBook[]; note?: string }> {
+  const q = new URLSearchParams();
+  if (symbol) q.set("symbol", symbol);
+  if (board) q.set("board", board);
+  const path = q.toString() ? `/api/v1/orderbook?${q}` : "/api/v1/orderbook";
+  return request(gatewayUrl, token, path);
 }

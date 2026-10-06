@@ -31,6 +31,7 @@ type Adapter struct {
 	storeDir  string
 
 	subMu       sync.Mutex
+	mdRequestMu sync.Mutex
 	lastMDQuery domain.MarketDataQuery
 }
 
@@ -43,7 +44,7 @@ func New(meta domain.Adapter, log *slog.Logger, onExec domain.ExecutionHandler, 
 		a.subMu.Lock()
 		q := a.lastMDQuery
 		a.subMu.Unlock()
-		if q.Symbol == "" && len(q.Instruments) == 0 {
+		if q.Symbol == "" && q.Board == "" && len(q.Boards) == 0 && len(q.Instruments) == 0 {
 			return
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)

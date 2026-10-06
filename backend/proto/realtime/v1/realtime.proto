@@ -1,0 +1,45 @@
+syntax = "proto3";
+
+package fixgateway.realtime.v1;
+option go_package = "github.com/fix-gateway/backend/gen/realtime/v1;realtimev1";
+
+import "google/protobuf/struct.proto";
+import "google/protobuf/timestamp.proto";
+
+// JWT authorization metadata is required in addition to TLS/mTLS.
+service RealtimeService {
+  rpc Stream(stream ClientMessage) returns (stream ServerMessage);
+}
+
+message ClientMessage {
+  oneof command {
+    Subscribe subscribe = 1;
+    Ping ping = 2;
+  }
+}
+
+message Subscribe {
+  // Empty means every event permitted by the authenticated role.
+  // A new Subscribe atomically replaces the previous subscription.
+  repeated string event_types = 1;
+}
+
+message Ping { string id = 1; }
+
+message ServerMessage {
+  oneof response {
+    Ready ready = 1;
+    Event event = 2;
+    Pong pong = 3;
+  }
+}
+
+message Ready { repeated string event_types = 1; }
+message Pong { string id = 1; }
+message Event {
+  uint64 sequence = 1;
+  string type = 2;
+  // Preserves the existing event DTO fields; decimals remain strings.
+  google.protobuf.Struct data = 3;
+  google.protobuf.Timestamp occurred_at = 4;
+}

@@ -3,6 +3,7 @@ package arqa
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -95,15 +96,27 @@ func (a *sessionApp) handleSecurityDefinition(msg *quickfix.Message) {
 	w := a.secDefWait
 	a.secDefMu.Unlock()
 	if w == nil || (reqID != "" && w.reqID != reqID) {
-		a.log.Info("security definition (no waiter)", "adapter_id", a.adapterID, "req_id", reqID, "items", len(items), "total_hint", totalHint)
+		a.log.Debug("security definition (no waiter)", "adapter_id", a.adapterID, "req_id", reqID, "items", len(items), "total_hint", totalHint)
 		return
 	}
-	a.log.Info("security definition batch", "adapter_id", a.adapterID, "req_id", reqID, "batch", len(items), "total_hint", totalHint)
+	a.log.Debug("security definition batch", "adapter_id", a.adapterID, "req_id", reqID, "batch", len(items), "total_hint", totalHint)
+	for _, it := range items {
+		a.log.Debug("security definition item",
+			"symbol", firstNonEmpty(it.SecurityID, it.Symbol), "board", it.Board, "name", it.Name)
+	}
 	w.add(totalHint, items)
 }
 
 // FetchSecurities sends Security Definition Request (35=c) and collects Security Definition (35=d) replies.
 func (a *Adapter) FetchSecurities(ctx context.Context) ([]domain.SecurityRef, error) {
+	return a.fetchSecurities(ctx, "")
+}
+
+func (a *Adapter) FetchSecuritiesByBoard(ctx context.Context, board string) ([]domain.SecurityRef, error) {
+	return a.fetchSecurities(ctx, board)
+}
+
+func (a *Adapter) fetchSecurities(ctx context.Context, board string) ([]domain.SecurityRef, error) {
 	if !a.app.isLoggedOn() {
 		return nil, fmt.Errorf("adapter %s not logged on", a.meta.ID)
 	}
@@ -111,13 +124,16 @@ func (a *Adapter) FetchSecurities(ctx context.Context) ([]domain.SecurityRef, er
 	w := a.app.beginSecDefWait(reqID)
 	defer a.app.clearSecDefWait(reqID)
 
-	msg := buildSecurityDefinitionRequest(reqID)
+	msg := buildSecurityDefinitionRequest(reqID, board)
 	if _, err := a.app.send(msg); err != nil {
 		return nil, err
 	}
-	a.log.Info("security definition request sent", "adapter_id", a.meta.ID, "req_id", reqID)
+	a.log.Debug("security definition request sent", "adapter_id", a.meta.ID, "req_id", reqID, "board", board)
 
 	hardDeadline := time.NewTimer(60 * time.Second)
+	if strings.TrimSpace(board) != "" {
+		hardDeadline.Reset(8 * time.Second)
+	}
 	defer hardDeadline.Stop()
 	idle := time.NewTimer(3 * time.Second)
 	idle.Stop()

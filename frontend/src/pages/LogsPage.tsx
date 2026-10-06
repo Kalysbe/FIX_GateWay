@@ -1,9 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
-import { useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useInfiniteQuery, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, apiDownload } from "../api";
+import { PageHeader } from "../components/PageHeader";
 import { formatDateTime, formatMs, formatNumber, logTypeLabel } from "../labels";
 import { useBreadcrumbs } from "../components/breadcrumbs";
+
+const PAGE_SIZE = 25;
 
 export type LogRow = {
   id: string;
@@ -17,6 +20,7 @@ export type LogRow = {
   broker_name?: string;
   token_id?: string;
   client_ip?: string;
+  forwarded_for?: string;
   user_agent?: string;
   http_method?: string;
   endpoint?: string;
@@ -90,9 +94,17 @@ export default function LogsPage() {
   const [method, setMethod] = useState("");
   const [adapter, setAdapter] = useState("");
   const [errorCode, setErrorCode] = useState(params.get("error_code") || "");
-  const [cursor, setCursor] = useState("");
   const [selected, setSelected] = useState<LogRow | null>(null);
-  const [pages, setPages] = useState<string[]>([""]);
+  const qc = useQueryClient();
+
+  const dFrom = useDebounced(from, 250);
+  const dTo = useDebounced(to, 250);
+  const dIp = useDebounced(ip, 350);
+  const dRequestId = useDebounced(requestId, 350);
+  const dOrderId = useDebounced(orderId, 350);
+  const dClientOrderId = useDebounced(clientOrderId, 350);
+  const dEndpoint = useDebounced(endpoint, 350);
+  const dAdapter = useDebounced(adapter, 350);
 
   useBreadcrumbs([{ label: "Логи" }, { label: KINDS.find((k) => k.id === kind)?.label || "Все" }]);
 
@@ -100,39 +112,43 @@ export default function LogsPage() {
     const q = new URLSearchParams();
     if (kind && kind !== "all") q.set("kind", kind);
     if (brokerId) q.set("broker_id", brokerId);
-    if (from) q.set("from", from);
-    if (to) q.set("to", to);
+    if (dFrom) q.set("from", dFrom);
+    if (dTo) q.set("to", dTo);
     if (severity) q.set("severity", severity);
-    if (ip) q.set("ip", ip);
-    if (requestId) q.set("request_id", requestId);
-    if (orderId) q.set("order_id", orderId);
-    if (clientOrderId) q.set("client_order_id", clientOrderId);
-    if (endpoint) q.set("endpoint", endpoint);
+    if (dIp) q.set("ip", dIp);
+    if (dRequestId) q.set("request_id", dRequestId);
+    if (dOrderId) q.set("order_id", dOrderId);
+    if (dClientOrderId) q.set("client_order_id", dClientOrderId);
+    if (dEndpoint) q.set("endpoint", dEndpoint);
     if (method) q.set("http_method", method);
-    if (adapter) q.set("adapter_id", adapter);
+    if (dAdapter) q.set("adapter_id", dAdapter);
     if (errorCode) q.set("error_code", errorCode);
-    if (cursor) q.set("cursor", cursor);
-    q.set("limit", "20");
     return q.toString();
-  }, [kind, brokerId, from, to, severity, ip, requestId, orderId, clientOrderId, endpoint, method, adapter, errorCode, cursor]);
+  }, [kind, brokerId, dFrom, dTo, severity, dIp, dRequestId, dOrderId, dClientOrderId, dEndpoint, method, dAdapter, errorCode]);
 
-  const q = useQuery({
+  const q = useInfiniteQuery({
     queryKey: ["logs", qs],
-    queryFn: () => api<{ logs: LogRow[]; next_cursor?: string; total?: number }>(`/api/v1/admin/logs?${qs}`),
-    refetchInterval: 8000,
+    queryFn: ({ pageParam, signal }) => {
+      const p = new URLSearchParams(qs);
+      p.set("limit", String(PAGE_SIZE));
+      if (pageParam) p.set("cursor", pageParam);
+      return api<{ logs: LogRow[]; next_cursor?: string | null }>(`/api/v1/admin/logs?${p}`, { signal });
+    },
+    initialPageParam: "",
+    getNextPageParam: (last) => last.next_cursor || undefined,
+    placeholderData: keepPreviousData,
+    refetchOnWindowFocus: false,
+    staleTime: 15_000,
   });
 
   const brokers = useQuery({
     queryKey: ["brokers"],
     queryFn: () => api<{ brokers: Array<{ id: number; name: string }> }>("/api/v1/admin/brokers"),
+    staleTime: 60_000,
   });
 
-  useEffect(() => {
-    setCursor("");
-    setPages([""]);
-  }, [kind, brokerId, from, to, severity, ip, requestId, orderId, clientOrderId, endpoint, method, adapter, errorCode]);
-
-  const rows = q.data?.logs || [];
+  const rows = q.data?.pages.flatMap((page) => page.logs || []) || [];
+  const loaded = rows.length;
 
   async function exportLogs(format: "csv" | "json") {
     const p = new URLSearchParams(qs);
@@ -153,22 +169,20 @@ export default function LogsPage() {
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-end justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-semibold">Логи</h1>
-          <p className="text-sm text-slate-500">
-            {formatNumber(q.data?.total)} событий · фильтры применяются на сервере
-          </p>
-        </div>
-        <div className="flex gap-2">
-          <button type="button" className="btn-muted" onClick={() => exportLogs("csv")}>
-            CSV
-          </button>
-          <button type="button" className="btn-muted" onClick={() => exportLogs("json")}>
-            JSON
-          </button>
-        </div>
-      </div>
+      <PageHeader
+        title="Логи"
+        subtitle={`Показано ${formatNumber(loaded)} · с сервера по ${PAGE_SIZE}${q.isFetching && !q.isFetchingNextPage ? " · обновление…" : ""}`}
+        actions={
+          <div className="flex gap-2">
+            <button type="button" className="btn-muted" onClick={() => exportLogs("csv")}>
+              CSV
+            </button>
+            <button type="button" className="btn-muted" onClick={() => exportLogs("json")}>
+              JSON
+            </button>
+          </div>
+        }
+      />
 
       <div className="flex flex-wrap gap-1">
         {KINDS.map((k) => (
@@ -194,7 +208,7 @@ export default function LogsPage() {
           ))}
         </select>
         <select className="input w-auto" value={severity} onChange={(e) => setSeverity(e.target.value)}>
-          <option value="">Severity</option>
+          <option value="">Важность</option>
           {["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"].map((s) => (
             <option key={s}>{s}</option>
           ))}
@@ -211,21 +225,22 @@ export default function LogsPage() {
         <input className="input min-w-[140px]" placeholder="Client Order ID" value={clientOrderId} onChange={(e) => setClientOrderId(e.target.value)} />
         <input className="input min-w-[140px]" placeholder="Endpoint" value={endpoint} onChange={(e) => setEndpoint(e.target.value)} />
         <input className="input min-w-[120px]" placeholder="Adapter" value={adapter} onChange={(e) => setAdapter(e.target.value)} />
+        <input className="input min-w-[140px]" placeholder="Код ошибки" value={errorCode} onChange={(e) => setErrorCode(e.target.value)} />
       </div>
 
-      <div className="card !p-0 overflow-x-auto">
+      <div className={`card !p-0 overflow-x-auto ${q.isPlaceholderData ? "opacity-60" : ""}`}>
         <table className="table">
           <thead>
             <tr>
               <th>Время</th>
-              <th>Severity</th>
+              <th>Важность</th>
               <th>Тип</th>
               <th>Подтип</th>
               <th>Фирма</th>
               <th>IP</th>
               <th>Endpoint</th>
-              <th>Status</th>
-              <th>Duration</th>
+              <th>Статус</th>
+              <th>Длительность</th>
               <th>Request ID</th>
             </tr>
           </thead>
@@ -252,7 +267,7 @@ export default function LogsPage() {
             {rows.length === 0 && (
               <tr>
                 <td colSpan={10} className="py-10 text-center text-slate-400">
-                  {q.isLoading ? "Загрузка…" : "Нет событий по выбранным фильтрам"}
+                  {q.isLoading ? "Загрузка…" : q.isError ? "Не удалось загрузить логи" : "Нет событий по выбранным фильтрам"}
                 </td>
               </tr>
             )}
@@ -262,39 +277,25 @@ export default function LogsPage() {
 
       <div className="flex flex-wrap items-center justify-between gap-3 text-sm">
         <div className="text-slate-500">
-          Страница <span className="font-mono text-ink">{pages.length}</span>
-          {q.data?.total != null && (
-            <>
-              {" "}
-              · всего <span className="font-mono text-ink">{formatNumber(q.data.total)}</span>
-            </>
-          )}
-          , по 20
+          Загружено <span className="font-mono text-ink">{formatNumber(loaded)}</span>
+          {q.hasNextPage ? " · есть ещё" : loaded > 0 ? " · это всё по фильтру" : ""}
         </div>
         <div className="flex justify-end gap-2">
           <button
             type="button"
             className="btn-muted"
-            disabled={pages.length <= 1}
-            onClick={() => {
-              const next = pages.slice(0, -1);
-              setPages(next);
-              setCursor(next[next.length - 1] || "");
-            }}
+            disabled={q.isFetching && !q.isFetchingNextPage}
+            onClick={() => qc.resetQueries({ queryKey: ["logs", qs] })}
           >
-            Назад
+            Обновить
           </button>
           <button
             type="button"
-            className="btn-muted"
-            disabled={!q.data?.next_cursor}
-            onClick={() => {
-              const c = q.data?.next_cursor || "";
-              setPages((p) => [...p, c]);
-              setCursor(c);
-            }}
+            className="btn"
+            disabled={!q.hasNextPage || q.isFetchingNextPage}
+            onClick={() => q.fetchNextPage()}
           >
-            Далее
+            {q.isFetchingNextPage ? "Загрузка…" : "Показать ещё"}
           </button>
         </div>
       </div>
@@ -311,8 +312,8 @@ function LogDetails({ row, onClose }: { row: LogRow; onClose: () => void }) {
   });
   const d = q.data?.log || row;
   return (
-    <div className="fixed inset-y-0 right-0 left-[232px] z-50 flex items-start justify-end bg-slate-900/40" onClick={onClose}>
-      <div className="h-full w-full max-w-lg overflow-y-auto bg-white p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
+    <div className="fixed inset-y-0 right-0 z-50 flex items-start justify-end bg-slate-900/40 md:left-[240px]" onClick={onClose}>
+      <div className="h-full w-full max-w-lg overflow-y-auto bg-panel p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
         <div className="mb-4 flex items-center justify-between">
           <h2 className="text-lg font-semibold">Детали события</h2>
           <button type="button" className="btn-muted" onClick={onClose}>
@@ -326,6 +327,9 @@ function LogDetails({ row, onClose }: { row: LogRow; onClose: () => void }) {
           <Row k="Broker" v={d.broker_name || String(d.broker_id || "—")} />
           <Row k="Token ID" v={d.token_id} mono />
           <Row k="IP" v={d.client_ip} mono />
+          {d.forwarded_for && d.forwarded_for !== d.client_ip && (
+            <Row k="X-Forwarded-For" v={d.forwarded_for} mono />
+          )}
           <Row k="User Agent" v={d.user_agent} />
           <Row k="HTTP" v={`${d.http_method || ""} ${d.endpoint || ""}`.trim() || "—"} />
           <Row k="Status" v={String(d.status_code ?? d.result ?? "—")} />
@@ -380,4 +384,13 @@ function mergeParam(params: URLSearchParams, key: string, value: string) {
   if (value) next.set(key, value);
   else next.delete(key);
   return next;
+}
+
+function useDebounced<T>(value: T, delay: number): T {
+  const [debounced, setDebounced] = useState(value);
+  useEffect(() => {
+    const id = window.setTimeout(() => setDebounced(value), delay);
+    return () => window.clearTimeout(id);
+  }, [value, delay]);
+  return debounced;
 }

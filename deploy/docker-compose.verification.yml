@@ -1,0 +1,12 @@
+# Used together with docker-compose.local.yml and -p fix-gateway-verification.
+# Separate project volumes and loopback ports keep the existing local stack intact.
+services:
+  access:
+    ports: !override
+      - "127.0.0.1:38080:8080"
+      - "127.0.0.1:38443:8443"
+      - "127.0.0.1:35432:5432"
+  fixsimulator:
+    environment:
+      SIM_FILL_DELAY: 30s
+      SIM_FAULT_SYMBOL: FAULT_RECOVER

@@ -17,6 +17,13 @@ import (
 // Minimal FIX.4.4 acceptor for local e2e testing (two ports).
 // Not a full FIX engine — enough for Logon / NewOrderSingle / Cancel + ExecutionReports.
 
+// Opt-in test fault: retain an accepted order across a socket disconnect and
+// publish its delayed ACK on the next logon. This ledger is process-local.
+var recoveryFaults = struct {
+	sync.Mutex
+	pending map[string][]map[string]string
+}{pending: make(map[string][]map[string]string)}
+
 func main() {
 	ports := []string{"5001", "5002"}
 	if v := os.Getenv("SIM_PORTS"); v != "" {
@@ -51,10 +58,26 @@ func listen(port string) error {
 }
 
 func handleConn(conn net.Conn, port string) {
-	defer conn.Close()
+	session := &simSession{orders: make(map[string]*simOrder), fillDelay: 50 * time.Millisecond}
+	if delay := os.Getenv("SIM_FILL_DELAY"); delay != "" {
+		if parsed, err := time.ParseDuration(delay); err == nil && parsed >= 0 {
+			session.fillDelay = parsed
+		}
+	}
+	defer func() {
+		session.mu.Lock()
+		session.closed = true
+		for _, order := range session.orders {
+			if order.timer != nil {
+				order.timer.Stop()
+			}
+		}
+		conn.Close()
+		session.mu.Unlock()
+	}()
 	log.Printf("[%s] connection from %s", port, conn.RemoteAddr())
 	r := bufio.NewReader(conn)
-	var seqOut int32 = 1
+	var seqOut int32
 	var sender, target string
 	loggedOn := false
 
@@ -72,47 +95,102 @@ func handleConn(conn net.Conn, port string) {
 			sender = fields["56"] // our SenderCompID = their TargetCompID
 			target = fields["49"]
 		}
+		session.mu.Lock()
 		switch msgType {
 		case "A":
 			loggedOn = true
 			resp := buildMsg("A", sender, target, &seqOut, map[string]string{"98": "0", "108": "30"})
 			_, _ = conn.Write([]byte(resp))
 			log.Printf("[%s] logon from %s", port, target)
+			recoveryFaults.Lock()
+			scope := port + ":" + target
+			reports := recoveryFaults.pending[scope]
+			delete(recoveryFaults.pending, scope)
+			recoveryFaults.Unlock()
+			for _, report := range reports {
+				_, _ = conn.Write([]byte(buildMsg("8", sender, target, &seqOut, report)))
+			}
 		case "0":
 			resp := buildMsg("0", sender, target, &seqOut, map[string]string{"112": fields["112"]})
 			_, _ = conn.Write([]byte(resp))
 		case "5":
 			resp := buildMsg("5", sender, target, &seqOut, nil)
 			_, _ = conn.Write([]byte(resp))
+			session.mu.Unlock()
 			return
+		case "1":
+			_, _ = conn.Write([]byte(buildMsg("0", sender, target, &seqOut, map[string]string{"112": fields["112"]})))
 		case "D":
 			if !loggedOn {
+				session.mu.Unlock()
 				continue
 			}
-			handleNewOrder(conn, sender, target, &seqOut, fields)
+			if faultSymbol := os.Getenv("SIM_FAULT_SYMBOL"); faultSymbol != "" && firstNonEmptySim(fields["48"], fields["55"]) == faultSymbol {
+				report := map[string]string{"11": fields["11"], "37": fmt.Sprintf("Q%d", time.Now().UnixNano()), "17": fmt.Sprintf("E%d", time.Now().UnixNano()), "150": "0", "39": "0", "55": faultSymbol, "54": fields["54"], "38": fields["38"], "14": "0", "151": fields["38"], "6": "0"}
+				recoveryFaults.Lock()
+				scope := port + ":" + target
+				recoveryFaults.pending[scope] = append(recoveryFaults.pending[scope], report)
+				recoveryFaults.Unlock()
+				log.Printf("[%s] FAULT_RECEIVED %s; disconnecting before ACK", port, fields["11"])
+				session.mu.Unlock()
+				return
+			}
+			handleNewOrder(session, conn, sender, target, &seqOut, fields)
 		case "F":
 			if !loggedOn {
+				session.mu.Unlock()
 				continue
 			}
-			handleCancel(conn, sender, target, &seqOut, fields)
+			handleCancel(session, conn, sender, target, &seqOut, fields)
+		case "AL":
+			if !loggedOn {
+				session.mu.Unlock()
+				continue
+			}
+			handlePosMaint(conn, sender, target, &seqOut, fields)
+		case "AN":
+			if !loggedOn {
+				session.mu.Unlock()
+				continue
+			}
+			handlePosRequest(conn, sender, target, &seqOut, fields)
 		default:
 			log.Printf("[%s] ignore msg type %s", port, msgType)
 		}
+		session.mu.Unlock()
 	}
 }
 
-func handleNewOrder(conn net.Conn, sender, target string, seq *int32, f map[string]string) {
+type simSession struct {
+	mu        sync.Mutex
+	orders    map[string]*simOrder
+	fillDelay time.Duration
+	closed    bool
+}
+
+type simOrder struct {
+	id, symbol, side, qty string
+	status                string
+	terminal              bool
+	timer                 *time.Timer
+}
+
+func handleNewOrder(session *simSession, conn net.Conn, sender, target string, seq *int32, f map[string]string) {
 	clOrdID := f["11"]
-	symbol := f["55"]
+	symbol := firstNonEmptySim(f["48"], f["55"])
 	side := f["54"]
 	qty := f["38"]
 	if qty == "" {
 		qty = "1"
 	}
-	orderID := fmt.Sprintf("Q%d", time.Now().UnixNano()%1_000_000_000)
-	execID := fmt.Sprintf("E%d", time.Now().UnixNano()%1_000_000_000)
+	orderID := fmt.Sprintf("Q%d", time.Now().UnixNano())
+	execID := fmt.Sprintf("E%d", time.Now().UnixNano())
+	order := &simOrder{id: orderID, symbol: symbol, side: side, qty: qty}
+	session.orders[clOrdID] = order
 
 	if symbol == "REJECT" {
+		order.terminal = true
+		order.status = "8"
 		er := map[string]string{
 			"11": clOrdID, "37": orderID, "17": execID, "150": "8", "39": "8",
 			"55": symbol, "54": side, "38": qty, "14": "0", "151": qty, "6": "0", "58": "symbol rejected",
@@ -129,8 +207,15 @@ func handleNewOrder(conn net.Conn, sender, target string, seq *int32, f map[stri
 	_, _ = conn.Write([]byte(buildMsg("8", sender, target, seq, ack)))
 
 	// Auto-fill after short delay
-	time.AfterFunc(50*time.Millisecond, func() {
-		fillExec := fmt.Sprintf("E%d", time.Now().UnixNano()%1_000_000_000)
+	order.timer = time.AfterFunc(session.fillDelay, func() {
+		session.mu.Lock()
+		defer session.mu.Unlock()
+		if session.closed || order.terminal {
+			return
+		}
+		order.terminal = true
+		order.status = "2"
+		fillExec := fmt.Sprintf("E%d", time.Now().UnixNano())
 		px := f["44"]
 		if px == "" {
 			px = "100"
@@ -144,19 +229,68 @@ func handleNewOrder(conn net.Conn, sender, target string, seq *int32, f map[stri
 	})
 }
 
-func handleCancel(conn net.Conn, sender, target string, seq *int32, f map[string]string) {
+func handleCancel(session *simSession, conn net.Conn, sender, target string, seq *int32, f map[string]string) {
 	clOrdID := f["11"]
 	orig := f["41"]
-	orderID := f["37"]
-	if orderID == "" {
-		orderID = "Q0"
+	order, ok := session.orders[orig]
+	if !ok || order.terminal {
+		reason, status := "1", "8"
+		if ok {
+			reason, status = "0", order.status
+		}
+		_, _ = conn.Write([]byte(buildMsg("9", sender, target, seq, map[string]string{
+			"11": clOrdID, "41": orig, "37": firstNonEmptySim(f["37"], "NONE"), "39": status,
+			"102": reason, "434": "1", "58": "order is not cancellable",
+		})))
+		return
 	}
-	execID := fmt.Sprintf("E%d", time.Now().UnixNano()%1_000_000_000)
+	order.terminal = true
+	order.status = "4"
+	if order.timer != nil {
+		order.timer.Stop()
+	}
+	orderID := order.id
+	execID := fmt.Sprintf("E%d", time.Now().UnixNano())
 	er := map[string]string{
 		"11": clOrdID, "41": orig, "37": orderID, "17": execID, "150": "4", "39": "4",
-		"55": f["55"], "54": f["54"], "14": "0", "151": "0", "6": "0",
+		"55": order.symbol, "54": order.side, "38": order.qty, "14": "0", "151": "0", "6": "0",
 	}
 	_, _ = conn.Write([]byte(buildMsg("8", sender, target, seq, er)))
+}
+
+func handlePosMaint(conn net.Conn, sender, target string, seq *int32, f map[string]string) {
+	reqID := f["710"]
+	am := map[string]string{
+		"710": reqID,
+		"721": fmt.Sprintf("PmR%d", time.Now().UnixNano()%1_000_000),
+		"709": firstNonEmptySim(f["709"], "3"),
+		"712": firstNonEmptySim(f["712"], "2"),
+		"722": "1", // Completed
+		"723": "0",
+	}
+	_, _ = conn.Write([]byte(buildMsg("AM", sender, target, seq, am)))
+}
+
+func handlePosRequest(conn net.Conn, sender, target string, seq *int32, f map[string]string) {
+	reqID := f["710"]
+	ao := map[string]string{
+		"710": reqID,
+		"721": fmt.Sprintf("RfPA%d", time.Now().UnixNano()%1_000_000),
+		"724": "0",
+		"728": "0",
+		"729": "0",
+		"727": "0",
+	}
+	_, _ = conn.Write([]byte(buildMsg("AO", sender, target, seq, ao)))
+}
+
+func firstNonEmptySim(vals ...string) string {
+	for _, v := range vals {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 func readMessage(r *bufio.Reader) (string, error) {

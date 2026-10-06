@@ -78,5 +78,33 @@ func (s *UserStore) List(ctx context.Context) ([]domain.User, error) {
 }
 
 func IssueToken(secret string, u domain.User) (string, error) {
-	return auth.IssueAdminJWT(secret, u.ID, u.Email, u.RoleCode, 12*time.Hour)
+	return auth.IssueAdminJWT(secret, u.ID, u.Email, u.RoleCode, 12*time.Hour, u.UpdatedAt.UnixMicro())
+}
+
+func (s *UserStore) AuthenticateSession(ctx context.Context, secret, token string) (*auth.AdminClaims, error) {
+	claims, err := auth.ParseAdminJWT(secret, token)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.ValidateSession(ctx, claims.UserID, claims.RoleCode, claims.UserVersion); err != nil {
+		return nil, err
+	}
+	return claims, nil
+}
+
+// ValidateSession revokes sessions on status, role, password or version changes.
+func (s *UserStore) ValidateSession(ctx context.Context, id, role string, version int64) error {
+	if s == nil || s.pool == nil || version == 0 {
+		return errors.New("invalid session")
+	}
+	var currentRole, status string
+	var updated time.Time
+	err := s.pool.QueryRow(ctx, `SELECT role_code, status, updated_at FROM users WHERE id=$1`, id).Scan(&currentRole, &status, &updated)
+	if err != nil {
+		return err
+	}
+	if status != "ACTIVE" || currentRole != role || updated.UnixMicro() != version {
+		return errors.New("session revoked")
+	}
+	return nil
 }

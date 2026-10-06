@@ -8,8 +8,12 @@ import {
 } from "../types";
 
 const STORAGE_KEY = "broker-desk-v2";
+const TOKEN_SESSION_KEY = "broker-desk-tokens-v2";
 
 function uid(prefix = "id"): string {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+    return `${prefix}_${crypto.randomUUID()}`;
+  }
   return `${prefix}_${Math.random().toString(36).slice(2, 10)}_${Date.now().toString(36)}`;
 }
 
@@ -36,13 +40,14 @@ export function loadState(): AppState {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return emptyState();
     const parsed = JSON.parse(raw) as AppState;
+    const tokens = loadSessionTokens();
     return {
       ...emptyState(),
       ...parsed,
       settings: { ...DEFAULT_SETTINGS, ...(parsed.settings || {}) },
       brokers: (parsed.brokers || []).map((b) => ({
         ...b,
-        // never restore as connected — must re-auth with token
+        apiToken: tokens[b.id] || b.apiToken || "",
         connected: false,
         connectionStatus: "DISCONNECTED" as const,
         lastError: undefined,
@@ -56,11 +61,12 @@ export function loadState(): AppState {
 }
 
 export function saveState(state: AppState): void {
+  saveSessionTokens(state.brokers);
   const trimmed: AppState = {
     ...state,
-    // persist tokens + profiles, but not live connection flags
     brokers: state.brokers.map((b) => ({
       ...b,
+      apiToken: "",
       connected: false,
       connectionStatus: "DISCONNECTED",
     })),
@@ -68,6 +74,33 @@ export function saveState(state: AppState): void {
     orders: state.orders.slice(0, 1000),
   };
   localStorage.setItem(STORAGE_KEY, JSON.stringify(trimmed));
+}
+
+function loadSessionTokens(): Record<string, string> {
+  try {
+    const raw = sessionStorage.getItem(TOKEN_SESSION_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as Record<string, string>;
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveSessionTokens(brokers: BrokerProfile[]): void {
+  const map: Record<string, string> = {};
+  for (const b of brokers) {
+    if (b.apiToken.trim()) map[b.id] = b.apiToken;
+  }
+  sessionStorage.setItem(TOKEN_SESSION_KEY, JSON.stringify(map));
+}
+
+export function exportSafeState(state: AppState): string {
+  const safe: AppState = {
+    ...state,
+    brokers: state.brokers.map((b) => ({ ...b, apiToken: "", connected: false, connectionStatus: "DISCONNECTED" })),
+  };
+  return JSON.stringify(safe, null, 2);
 }
 
 export function makeBroker(partial?: Partial<BrokerProfile>, index = 0): BrokerProfile {

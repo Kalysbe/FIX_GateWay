@@ -10,6 +10,19 @@ import (
 
 func marshalJSON(v any) ([]byte, error) { return json.Marshal(v) }
 
+// IPNotAllowedMessage describes a whitelist rejection, including the peer IP
+// used for the check and X-Forwarded-For when it differs (typical behind a proxy).
+func IPNotAllowedMessage(ip, forwardedFor string) string {
+	msg := "ip not allowed"
+	if ip != "" {
+		msg += ": " + ip
+	}
+	if forwardedFor != "" && forwardedFor != ip {
+		msg += " (X-Forwarded-For: " + forwardedFor + ")"
+	}
+	return msg
+}
+
 func ParseTrustedProxies(csv string) []*net.IPNet {
 	var out []*net.IPNet
 	for _, p := range strings.Split(csv, ",") {
@@ -52,6 +65,24 @@ func ipInNets(ip net.IP, nets []*net.IPNet) bool {
 		}
 	}
 	return false
+}
+
+func TrustedPeer(remote string, trusted []*net.IPNet) bool {
+	ip := net.ParseIP(remote)
+	return ip != nil && ipInNets(ip, trusted)
+}
+
+// RequestProto returns the client-facing scheme. X-Forwarded-Proto is honoured
+// only when the immediate peer is in the trusted proxy list.
+func RequestProto(r *http.Request, trusted []*net.IPNet) string {
+	if r.TLS != nil {
+		return "https"
+	}
+	raw := strings.TrimSpace(r.Header.Get("X-Forwarded-Proto"))
+	if raw == "" || !TrustedPeer(RemoteIP(r), trusted) {
+		return "http"
+	}
+	return strings.ToLower(strings.TrimSpace(strings.Split(raw, ",")[0]))
 }
 
 // ClientIP returns the peer IP. X-Forwarded-For is used only when the immediate

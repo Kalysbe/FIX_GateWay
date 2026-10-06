@@ -105,10 +105,10 @@ func (a *sessionApp) handlePositionReport(msg *quickfix.Message) {
 	w := a.posWait
 	a.posMu.Unlock()
 	if w == nil || (reqID != "" && w.reqID != reqID) {
-		a.log.Info("position report (no waiter)", "adapter_id", a.adapterID, "req_id", reqID, "items", len(items))
+		a.log.Debug("position report (no waiter)", "adapter_id", a.adapterID, "req_id", reqID, "items", len(items))
 		return
 	}
-	a.log.Info("position report", "adapter_id", a.adapterID, "req_id", reqID, "batch", len(items), "total", total, "end", endSnap)
+	a.log.Debug("position report", "adapter_id", a.adapterID, "req_id", reqID, "batch", len(items), "total", total, "end", endSnap)
 	w.add(total, endSnap, items)
 }
 
@@ -131,7 +131,7 @@ func (a *sessionApp) handleRequestForPositionsAck(msg *quickfix.Message) {
 	w := a.posWait
 	a.posMu.Unlock()
 	if w == nil || (reqID != "" && w.reqID != reqID) {
-		a.log.Info("positions ack (no waiter)", "adapter_id", a.adapterID, "req_id", reqID, "result", result, "status", status)
+		a.log.Debug("positions ack (no waiter)", "adapter_id", a.adapterID, "req_id", reqID, "result", result, "status", status)
 		return
 	}
 	w.mu.Lock()
@@ -141,7 +141,7 @@ func (a *sessionApp) handleRequestForPositionsAck(msg *quickfix.Message) {
 		w.expected = total
 	}
 	w.mu.Unlock()
-	a.log.Info("positions ack", "adapter_id", a.adapterID, "req_id", reqID, "result", result, "status", status, "total", total)
+	a.log.Debug("positions ack", "adapter_id", a.adapterID, "req_id", reqID, "result", result, "status", status, "total", total)
 
 	// ARQA: result 1 = invalid; status 2 = rejected; status 0 + total 0 = completed empty
 	if result == "1" || status == "2" {
@@ -223,7 +223,7 @@ func (a *Adapter) FetchPositions(ctx context.Context, q domain.PositionQuery) (s
 	if _, err := a.app.send(msg); err != nil {
 		return reqID, nil, err
 	}
-	a.log.Info("request for positions sent",
+	a.log.Debug("request for positions sent",
 		"adapter_id", a.meta.ID, "req_id", reqID, "firm", q.Firm, "client", q.ClientCode, "account", q.Account)
 
 	hardDeadline := time.NewTimer(60 * time.Second)

@@ -22,7 +22,7 @@ export interface BrokerProfile {
   id: string;
   name: string;
   code: string;
-  /** Full API token (sk_live_… / sk_test_…). Stored only in localStorage. */
+  /** Full API token (sk_live_… / sk_test_…). Stored only in sessionStorage. */
   apiToken: string;
   accountId: string;
   clientCode: string;

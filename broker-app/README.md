@@ -2,7 +2,7 @@
 
 Фронтенд для имитации **нескольких одновременных брокерских клиентов** против реального FIX Gateway.
 
-Токены и профили хранятся в `localStorage`. Заявки идут в API gateway (`Authorization: Bearer sk_…`).
+Профили хранятся в `localStorage`, токены — в `sessionStorage` текущей вкладки и не попадают в JSON-экспорт. Заявки идут в API gateway (`Authorization: Bearer sk_…`).
 
 ## Запуск
 

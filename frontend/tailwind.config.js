@@ -4,16 +4,23 @@ export default {
   theme: {
     extend: {
       fontFamily: {
-        display: ["\"IBM Plex Sans\"", "Segoe UI", "sans-serif"],
-        mono: ["\"IBM Plex Mono\"", "ui-monospace", "monospace"],
+        sans: ["Onest", "Segoe UI", "sans-serif"],
+        display: ["Onest", "Segoe UI", "sans-serif"],
+        mono: ["\"JetBrains Mono\"", "ui-monospace", "monospace"],
       },
       colors: {
         ink: "#1a2332",
         panel: "#ffffff",
         surface: "#f4f7f8",
+        line: "#e2e8f0",
+        muted: "#64748b",
+        sidebar: "#ffffff",
         accent: "#57b6c0",
         warn: "#c47a00",
         danger: "#d6455d",
+      },
+      boxShadow: {
+        card: "0 1px 2px rgba(15, 23, 42, 0.05)",
       },
     },
   },

@@ -15,10 +15,21 @@ export function BreadcrumbProvider({ children }: { children: React.ReactNode }) 
 
 export function useBreadcrumbs(crumbs: Crumb[] | null) {
   const { setCrumbs } = useContext(BreadcrumbCtx);
+  const serialized = crumbs ? JSON.stringify(crumbs) : "";
   useEffect(() => {
-    setCrumbs(crumbs);
+    if (!serialized) {
+      setCrumbs(null);
+      return () => setCrumbs(null);
+    }
+    let parsed: Crumb[] = [];
+    try {
+      parsed = JSON.parse(serialized) as Crumb[];
+    } catch {
+      parsed = [];
+    }
+    setCrumbs(parsed);
     return () => setCrumbs(null);
-  }, [crumbs, setCrumbs]);
+  }, [serialized, setCrumbs]);
 }
 
 export function useBreadcrumbState() {

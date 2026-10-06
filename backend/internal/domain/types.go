@@ -168,25 +168,28 @@ type Adapter struct {
 }
 
 type Order struct {
-	ID             uuid.UUID        `json:"id"`
-	BrokerID       int64            `json:"broker_id"`
-	AccountID      int64            `json:"account_id"`
-	ClientOrderID  string           `json:"client_order_id"`
-	InstrumentID   int64            `json:"instrument_id"`
-	Side           Side             `json:"side"`
-	OrderType      OrderType        `json:"order_type"`
-	TimeInForce    string           `json:"time_in_force"`
-	Quantity       decimal.Decimal  `json:"quantity"`
-	Price          *decimal.Decimal `json:"price,omitempty"`
-	FilledQuantity decimal.Decimal  `json:"filled_quantity"`
-	AvgPrice       decimal.Decimal  `json:"avg_price"`
-	Status         OrderStatus      `json:"status"`
-	AdapterID      *string          `json:"adapter_id,omitempty"`
-	FixClOrdID     *string          `json:"fix_cl_ord_id,omitempty"`
-	QuikOrderID    *string          `json:"quik_order_id,omitempty"`
-	RejectReason   *string          `json:"reject_reason,omitempty"`
-	CreatedAt      time.Time        `json:"created_at"`
-	UpdatedAt      time.Time        `json:"updated_at"`
+	// Set only by ApplyExecutionReport; not persisted or exposed by APIs.
+	ExecutionBecameTerminal bool             `json:"-"`
+	ID                      uuid.UUID        `json:"id"`
+	BrokerID                int64            `json:"broker_id"`
+	AccountID               int64            `json:"account_id"`
+	ClientOrderID           string           `json:"client_order_id"`
+	InstrumentID            int64            `json:"instrument_id"`
+	Side                    Side             `json:"side"`
+	OrderType               OrderType        `json:"order_type"`
+	TimeInForce             string           `json:"time_in_force"`
+	Quantity                decimal.Decimal  `json:"quantity"`
+	Price                   *decimal.Decimal `json:"price,omitempty"`
+	FilledQuantity          decimal.Decimal  `json:"filled_quantity"`
+	AvgPrice                decimal.Decimal  `json:"avg_price"`
+	Status                  OrderStatus      `json:"status"`
+	AdapterID               *string          `json:"adapter_id,omitempty"`
+	FixClOrdID              *string          `json:"fix_cl_ord_id,omitempty"`
+	QuikOrderID             *string          `json:"quik_order_id,omitempty"`
+	RejectReason            *string          `json:"reject_reason,omitempty"`
+	FixSendAttemptedAt      *time.Time       `json:"fix_send_attempted_at,omitempty"`
+	CreatedAt               time.Time        `json:"created_at"`
+	UpdatedAt               time.Time        `json:"updated_at"`
 
 	Symbol         string `json:"symbol,omitempty"`
 	Board          string `json:"board,omitempty"`
@@ -292,6 +295,28 @@ type PositionQuery struct {
 	ClearingBusinessDate string // metadata only — not sent on ARQA AN
 }
 
+// PositionBlock is one ML/DL block for Position Maintenance Request (35=AL),
+// same PosKey/PosItem layout as Position Report (35=AP), ARQA §2.33.
+type PositionBlock struct {
+	PosType      string            // ML | DL
+	UpdateAction string            // 5024: 0 New / 1 Change / 2 Delete
+	Keys         map[string]string // 5026/5027
+	Items        map[string]string // 5029/5030
+	LongQty      decimal.Decimal
+	ShortQty     decimal.Decimal
+}
+
+// PositionMaintainRequest is sent to QUIK via FIX adapter (35=AL).
+type PositionMaintainRequest struct {
+	Firm                 string
+	ClientCode           string
+	Account              string
+	ClearingBusinessDate string
+	Action               string // 712 PosMaintAction: 1 New, 2 Replace, 3 Cancel
+	TransType            string // 709 PosTransType: 3 Position Adjustment
+	Blocks               []PositionBlock
+}
+
 // FIXPosition is one position block from Position Report (35=AP), ARQA §2.33.
 // Spot money = PosType ML; spot instrument = DL; futures limit/pos = FL/FP.
 type FIXPosition struct {
@@ -318,6 +343,7 @@ type FIXPosition struct {
 	PosAmt        decimal.Decimal   `json:"pos_amt"`
 	SettlPrice    decimal.Decimal   `json:"settl_price"`
 	RawFIX        string            `json:"raw_fix,omitempty"`
+	Source        string            `json:"source,omitempty"` // fix | manual
 }
 
 type ExecutionReport struct {
@@ -346,14 +372,23 @@ type ExecutionHandler func(report ExecutionReport)
 type MarketDataQuery struct {
 	Symbol           string        // SecurityID (48)
 	Board            string        // ExDestination (100) class code
+	SecurityType     string        // SecurityType (167), e.g. CS / GOVT
+	Boards           []string      // extra class codes; each is a separate 35=V with tag 100
 	Instruments      []SecurityRef // optional list for NoRelatedSym (146)
 	SubscriptionType string        // 263: 0=SNAPSHOT, 1=SNAPSHOT+UPDATES, 2=DISABLE
 }
 
 type MarketDataHandler func(quotes []MarketQuote)
 
+// BookLevel is one aggregated price in the order book (стакан).
+type BookLevel struct {
+	Price string `json:"price"`
+	Size  string `json:"size"`
+}
+
 // MarketQuote is one row of QUIK «Текущие торги», built from Market Data Snapshot (35=W)
-// / Incremental Refresh (35=X). Best bid/offer (top of book) plus last/OHLC/VWAP.
+// / Incremental Refresh (35=X). Best bid/offer plus last/OHLC/VWAP and, when the
+// adapter sends depth (264=0), the visible bid/offer book.
 type MarketQuote struct {
 	AdapterID         string            `json:"adapter_id"`
 	MDReqID           string            `json:"md_req_id"`
@@ -366,11 +401,13 @@ type MarketQuote struct {
 	TradingStatus     string            `json:"trading_status"`      // 326
 	TradingSessionID  string            `json:"trading_session_id"`  // 336
 	TradingSessionSub string            `json:"trading_session_sub"` // 625
-	Bid               string            `json:"bid"`                 // 269=0
+	Bid               string            `json:"bid"`                 // 269=0 best
 	BidSize           string            `json:"bid_size"`
-	Offer             string            `json:"offer"` // 269=1
+	Offer             string            `json:"offer"` // 269=1 best
 	OfferSize         string            `json:"offer_size"`
-	Last              string            `json:"last"` // 269=2
+	Bids              []BookLevel       `json:"bids,omitempty"`   // bid side, best first
+	Offers            []BookLevel       `json:"offers,omitempty"` // offer side, best first
+	Last              string            `json:"last"`             // 269=2
 	LastSize          string            `json:"last_size"`
 	LastTime          string            `json:"last_time"`
 	Open              string            `json:"open"`  // 269=4
@@ -388,4 +425,8 @@ type MarketQuote struct {
 	UpdatedAt         time.Time         `json:"updated_at,omitempty"`
 	DeltaVolume       string            `json:"-"` // last-trade qty in this FIX message, when 387 absent
 	DeltaValue        string            `json:"-"` // last-trade notional, when 6143 absent
+	ReplaceBids       bool              `json:"-"` // 35=W replaced the bid side
+	ReplaceOffers     bool              `json:"-"` // 35=W replaced the offer side
+	DeletedBids       []string          `json:"-"` // prices removed on 35=X 279=2
+	DeletedOffers     []string          `json:"-"`
 }

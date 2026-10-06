@@ -24,7 +24,7 @@ export default function BrokerSidebar() {
       <div>
         <div className="font-display text-lg font-semibold tracking-tight">Брокеры</div>
         <div className="mt-1 text-xs text-slate-400">
-          {connectedCount}/{state.brokers.length} online · токены в localStorage · API gateway
+          {connectedCount}/{state.brokers.length} online · токены в sessionStorage · API gateway
         </div>
       </div>
 
@@ -93,7 +93,7 @@ export default function BrokerSidebar() {
                   <input
                     className="input font-mono text-xs"
                     type={showTokenFor === b.id ? "text" : "password"}
-                    placeholder="sk_live_… или sk_test_…"
+                    placeholder="API-токен из админки"
                     value={b.apiToken}
                     disabled={b.connected}
                     onChange={(e) => updateBroker(b.id, { apiToken: e.target.value })}

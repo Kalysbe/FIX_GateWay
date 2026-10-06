@@ -17,7 +17,7 @@ import (
 	"github.com/quickfixgo/tag"
 )
 
-// Current-trades MDEntryTypes (QUIK «Текущие торги», not Level II book).
+// Current-trades + book MDEntryTypes (QUIK «Текущие торги» plus bid/offer depth).
 var currentTradesEntryTypes = []string{
 	"0", // bid
 	"1", // offer
@@ -127,6 +127,12 @@ func (a *sessionApp) clearMDWait(reqID string) {
 
 func (a *sessionApp) handleMarketDataSnapshot(msg *quickfix.Message) {
 	reqID, quotes := parseMarketDataSnapshot(msg, a.adapterID)
+	if len(quotes) == 0 {
+		a.log.Warn("market data snapshot produced no quotes", "adapter_id", a.adapterID, "req_id", reqID)
+	} else {
+		a.log.Debug("market data snapshot", "adapter_id", a.adapterID, "req_id", reqID,
+			"quotes", len(quotes), "symbol", quotes[0].Symbol, "board", quotes[0].Board)
+	}
 	a.applyLive(quotes)
 	a.mdMu.Lock()
 	w := a.mdWait
@@ -183,12 +189,12 @@ func newMDReqID() string {
 	return fmt.Sprintf("MD%d-%d", time.Now().UTC().Unix()%1_000_000, n)
 }
 
-// buildMarketDataRequest builds ARQA Market Data Request (35=V) for «Текущие торги».
-// HowTo example (one instrument LKOH / BQUOTE, bid+offer, snapshot+updates):
+// buildMarketDataRequest builds ARQA Market Data Request (35=V) for «Текущие торги»
+// plus the visible order book. HowTo example (one instrument, full book, bid+offer):
 //
 //	35=V|22=8|48=LKOH|100=BQUOTE|262=…|263=1|264=0|265=0|267=2|269=1|269=0|
 //
-// Snapshot of current trades (top of book): 263=0, 264=1, entry types 0/1/2/4/5/7/8/9/o/O.
+// 264=0 = Full Book (стакан). Entry types also include last/OHLC for the trades table.
 func buildMarketDataRequest(reqID string, q domain.MarketDataQuery) *quickfix.Message {
 	msg := quickfix.NewMessage()
 	msg.Header.SetField(tag.MsgType, field.NewMsgType(enum.MsgType_MARKET_DATA_REQUEST))
@@ -198,7 +204,7 @@ func buildMarketDataRequest(reqID string, q domain.MarketDataQuery) *quickfix.Me
 		sub = "0" // SNAPSHOT
 	}
 	msg.Body.SetString(tag.SubscriptionRequestType, sub)
-	msg.Body.SetString(tag.MarketDepth, "1") // Top of Book
+	msg.Body.SetString(tag.MarketDepth, "0") // Full Book
 	if sub == "1" {
 		// Incremental (1): 35=X on each change of last/bid/offer/volume — not a delayed full snapshot.
 		msg.Body.SetString(tag.MDUpdateType, "1")
@@ -215,41 +221,75 @@ func buildMarketDataRequest(reqID string, q domain.MarketDataQuery) *quickfix.Me
 	msg.Body.SetGroup(rg)
 
 	switch {
-	case len(q.Instruments) > 0:
+	case len(q.Instruments) == 1:
+		// HowTo: one instrument at body level, no 146.
+		// ARQA rejects 146=1 without tag 48 ("NoRelatedSym dont match … InstrmtMDReqGrps").
+		setMDInstrumentBody(msg, q.Instruments[0])
+	case len(q.Instruments) > 1:
 		symRG := quickfix.NewRepeatingGroup(tag.NoRelatedSym, quickfix.GroupTemplate{
 			quickfix.GroupElement(tag.SecurityIDSource),
 			quickfix.GroupElement(tag.SecurityID),
+			quickfix.GroupElement(tag.SecurityType),
 			quickfix.GroupElement(tag.ExDestination),
 		})
 		for _, inst := range q.Instruments {
-			sym := firstNonEmpty(inst.SecurityID, inst.Symbol)
-			if sym == "" {
+			if firstNonEmpty(inst.SecurityID, inst.Symbol) == "" {
 				continue
 			}
-			board := strings.TrimSpace(inst.Board)
-			if strings.EqualFold(board, "UNKNOWN") {
-				board = ""
-			}
 			g := symRG.Add()
-			g.SetString(tag.SecurityIDSource, string(enum.SecurityIDSource_EXCHANGE_SYMBOL)) // 8
-			g.SetString(tag.SecurityID, sym)
-			if board != "" {
-				g.SetString(tag.ExDestination, board)
-			}
+			setMDInstrumentGroup(g, inst)
 		}
 		if symRG.Len() > 0 {
 			msg.Body.SetGroup(symRG)
 		}
-	case q.Symbol != "":
-		// HowTo: instrument tags at body level (no 146).
-		msg.Body.SetString(tag.SecurityIDSource, string(enum.SecurityIDSource_EXCHANGE_SYMBOL))
-		msg.Body.SetString(tag.SecurityID, q.Symbol)
-		if q.Board != "" {
-			msg.Body.SetString(tag.ExDestination, q.Board)
-		}
+	case strings.TrimSpace(q.Symbol) != "":
+		setMDInstrumentBody(msg, domain.SecurityRef{
+			Symbol: q.Symbol, SecurityID: q.Symbol, Board: q.Board, SecurityType: q.SecurityType,
+		})
 	}
+	// Board-only / empty query: do not send 146. ARQA counts 146 against valid
+	// groups that must include SecurityID (48).
 
 	return msg
+}
+
+func mdInstrumentID(inst domain.SecurityRef) string {
+	return firstNonEmpty(inst.SecurityID, inst.Symbol)
+}
+
+func mdInstrumentBoard(inst domain.SecurityRef) string {
+	board := strings.TrimSpace(inst.Board)
+	if strings.EqualFold(board, "UNKNOWN") {
+		return ""
+	}
+	return board
+}
+
+func setMDInstrumentBody(msg *quickfix.Message, inst domain.SecurityRef) {
+	sym := mdInstrumentID(inst)
+	if sym == "" {
+		return
+	}
+	msg.Body.SetString(tag.SecurityIDSource, string(enum.SecurityIDSource_EXCHANGE_SYMBOL)) // 8
+	msg.Body.SetString(tag.SecurityID, sym)
+	if st := domain.NormalizeSecurityType(inst.SecurityType); st != "" {
+		msg.Body.SetString(tag.SecurityType, st)
+	}
+	if board := mdInstrumentBoard(inst); board != "" {
+		msg.Body.SetString(tag.ExDestination, board)
+	}
+}
+
+func setMDInstrumentGroup(g *quickfix.Group, inst domain.SecurityRef) {
+	sym := mdInstrumentID(inst)
+	g.SetString(tag.SecurityIDSource, string(enum.SecurityIDSource_EXCHANGE_SYMBOL))
+	g.SetString(tag.SecurityID, sym)
+	if st := domain.NormalizeSecurityType(inst.SecurityType); st != "" {
+		g.SetString(tag.SecurityType, st)
+	}
+	if board := mdInstrumentBoard(inst); board != "" {
+		g.SetString(tag.ExDestination, board)
+	}
 }
 
 const mdInstrumentBatch = 30
@@ -310,7 +350,7 @@ func (a *Adapter) fetchMarketDataOnce(ctx context.Context, q domain.MarketDataQu
 	if _, err := a.app.send(msg); err != nil {
 		return reqID, nil, err
 	}
-	a.log.Info("market data request sent",
+	a.log.Debug("market data request sent",
 		"adapter_id", a.meta.ID, "req_id", reqID, "symbol", q.Symbol, "board", q.Board, "instruments", len(q.Instruments))
 
 	hardDeadline := time.NewTimer(45 * time.Second)
@@ -438,23 +478,27 @@ func parseMarketDataFromRaw(raw, adapterID string, incremental bool) (reqID stri
 			} else {
 				cur.currency = v
 			}
-		case "55":
+		case "55", "311": // Symbol / UnderlyingSymbol
 			if inEntries && cur != nil {
 				cur.symbol = v
 			} else {
 				base.Symbol = v
 			}
-		case "48":
+		case "48", "309": // SecurityID / UnderlyingSecurityID
 			if inEntries && cur != nil {
 				cur.securityID = v
 			} else {
 				base.SecurityID = v
 			}
-		case "100", "207":
+		case "100", "207", "308": // ExDestination / exchange / UnderlyingSecurityExchange
 			if inEntries && cur != nil {
 				cur.board = v
 			} else if base.Board == "" {
 				base.Board = v
+			}
+		case "318":
+			if base.Currency == "" {
+				base.Currency = v
 			}
 		case "107":
 			base.Name = v
@@ -489,8 +533,8 @@ func parseMarketDataFromRaw(raw, adapterID string, incremental bool) (reqID stri
 	flushEntry()
 
 	type bucket struct {
-		q       domain.MarketQuote
-		entries []mdEntry
+		q                domain.MarketQuote
+		sawBid, sawOffer bool
 	}
 	groups := map[string]*bucket{}
 	ensure := func(sym, sec, board string) *bucket {
@@ -528,9 +572,6 @@ func parseMarketDataFromRaw(raw, adapterID string, incremental bool) (reqID stri
 	}
 
 	for _, e := range entries {
-		if e.action == "2" { // Delete
-			continue
-		}
 		b := ensure(e.symbol, e.securityID, e.board)
 		if e.currency != "" {
 			b.q.Currency = e.currency
@@ -542,10 +583,41 @@ func parseMarketDataFromRaw(raw, adapterID string, incremental bool) (reqID stri
 			b.q.Value = e.value
 		}
 		size := firstNonEmpty(e.size, e.tradeVol)
+		deleted := e.action == "2" || (incremental && isZeroSize(size) && (e.typ == "0" || e.typ == "1"))
+		if e.typ == "0" {
+			b.sawBid = true
+			if deleted {
+				if e.px != "" {
+					b.q.DeletedBids = append(b.q.DeletedBids, e.px)
+				}
+				continue
+			}
+		}
+		if e.typ == "1" {
+			b.sawOffer = true
+			if deleted {
+				if e.px != "" {
+					b.q.DeletedOffers = append(b.q.DeletedOffers, e.px)
+				}
+				continue
+			}
+		}
+		if e.action == "2" {
+			continue
+		}
 		applyMDEntry(&b.q, e.typ, e.px, size, e.tm)
 	}
 
 	for _, b := range groups {
+		if !incremental {
+			if b.sawBid {
+				b.q.ReplaceBids = true
+			}
+			if b.sawOffer {
+				b.q.ReplaceOffers = true
+			}
+		}
+		finalizeBook(&b.q)
 		b.q.RawFIX = strings.ReplaceAll(strings.TrimRight(raw, "\x01"), "\x01", "|")
 		if !strings.HasSuffix(b.q.RawFIX, "|") && b.q.RawFIX != "" {
 			b.q.RawFIX += "|"
@@ -565,8 +637,14 @@ func applyMDEntry(q *domain.MarketQuote, typ, px, size, tm string) {
 	switch typ {
 	case "0":
 		q.Bid, q.BidSize = firstNonEmpty(px, q.Bid), firstNonEmpty(size, q.BidSize)
+		if px != "" && !isZeroSize(size) {
+			q.Bids = addBookLevel(q.Bids, px, size)
+		}
 	case "1":
 		q.Offer, q.OfferSize = firstNonEmpty(px, q.Offer), firstNonEmpty(size, q.OfferSize)
+		if px != "" && !isZeroSize(size) {
+			q.Offers = addBookLevel(q.Offers, px, size)
+		}
 	case "2":
 		q.Last, q.LastSize, q.LastTime = firstNonEmpty(px, q.Last), firstNonEmpty(size, q.LastSize), firstNonEmpty(tm, q.LastTime)
 		if size != "" {
@@ -611,6 +689,21 @@ func mergeQuote(dst, src domain.MarketQuote) domain.MarketQuote {
 	out.BidSize = firstNonEmpty(src.BidSize, out.BidSize)
 	out.Offer = firstNonEmpty(src.Offer, out.Offer)
 	out.OfferSize = firstNonEmpty(src.OfferSize, out.OfferSize)
+	if src.ReplaceBids {
+		out.Bids = cloneBookLevels(src.Bids)
+		out.ReplaceBids = true
+	} else {
+		out.Bids = upsertBookLevels(out.Bids, src.Bids, src.DeletedBids)
+	}
+	if src.ReplaceOffers {
+		out.Offers = cloneBookLevels(src.Offers)
+		out.ReplaceOffers = true
+	} else {
+		out.Offers = upsertBookLevels(out.Offers, src.Offers, src.DeletedOffers)
+	}
+	finalizeBook(&out)
+	out.ReplaceBids, out.ReplaceOffers = false, false
+	out.DeletedBids, out.DeletedOffers = nil, nil
 	out.Last = firstNonEmpty(src.Last, out.Last)
 	out.LastSize = firstNonEmpty(src.LastSize, out.LastSize)
 	out.LastTime = firstNonEmpty(src.LastTime, out.LastTime)
@@ -672,6 +765,98 @@ func cloneStrMap(in map[string]string) map[string]string {
 	return out
 }
 
+func isZeroSize(s string) bool {
+	n, ok := parseFixNum(s)
+	return ok && n == 0
+}
+
+func addBookLevel(levels []domain.BookLevel, px, size string) []domain.BookLevel {
+	if px == "" {
+		return levels
+	}
+	for i, l := range levels {
+		if l.Price == px {
+			if size != "" {
+				levels[i].Size = addNum(l.Size, size)
+			}
+			return levels
+		}
+	}
+	return append(levels, domain.BookLevel{Price: px, Size: size})
+}
+
+func cloneBookLevels(in []domain.BookLevel) []domain.BookLevel {
+	if in == nil {
+		return nil
+	}
+	out := make([]domain.BookLevel, len(in))
+	copy(out, in)
+	return out
+}
+
+func upsertBookLevels(dst, src []domain.BookLevel, deleted []string) []domain.BookLevel {
+	if len(src) == 0 && len(deleted) == 0 {
+		return cloneBookLevels(dst)
+	}
+	byPx := make(map[string]domain.BookLevel, len(dst)+len(src))
+	for _, l := range dst {
+		if l.Price != "" {
+			byPx[l.Price] = l
+		}
+	}
+	for _, px := range deleted {
+		delete(byPx, px)
+	}
+	for _, l := range src {
+		if l.Price == "" {
+			continue
+		}
+		if isZeroSize(l.Size) {
+			delete(byPx, l.Price)
+			continue
+		}
+		byPx[l.Price] = l
+	}
+	out := make([]domain.BookLevel, 0, len(byPx))
+	for _, l := range byPx {
+		out = append(out, l)
+	}
+	return out
+}
+
+func sortBookLevels(levels []domain.BookLevel, bids bool) []domain.BookLevel {
+	sort.SliceStable(levels, func(i, j int) bool {
+		ni, okI := parseFixNum(levels[i].Price)
+		nj, okJ := parseFixNum(levels[j].Price)
+		if okI && okJ && ni != nj {
+			if bids {
+				return ni > nj
+			}
+			return ni < nj
+		}
+		if bids {
+			return levels[i].Price > levels[j].Price
+		}
+		return levels[i].Price < levels[j].Price
+	})
+	return levels
+}
+
+func finalizeBook(q *domain.MarketQuote) {
+	q.Bids = sortBookLevels(q.Bids, true)
+	q.Offers = sortBookLevels(q.Offers, false)
+	if len(q.Bids) > 0 {
+		q.Bid, q.BidSize = q.Bids[0].Price, q.Bids[0].Size
+	} else if q.ReplaceBids {
+		q.Bid, q.BidSize = "", ""
+	}
+	if len(q.Offers) > 0 {
+		q.Offer, q.OfferSize = q.Offers[0].Price, q.Offers[0].Size
+	} else if q.ReplaceOffers {
+		q.Offer, q.OfferSize = "", ""
+	}
+}
+
 func parseFixNum(s string) (float64, bool) {
 	s = strings.TrimSpace(strings.ReplaceAll(s, " ", ""))
 	s = strings.ReplaceAll(s, ",", ".")
@@ -730,6 +915,10 @@ func (a *sessionApp) applyLive(quotes []domain.MarketQuote) {
 			}
 		}
 		q.DeltaVolume, q.DeltaValue = "", ""
+		q.ReplaceBids, q.ReplaceOffers = false, false
+		q.DeletedBids, q.DeletedOffers = nil, nil
+		q.Bids = cloneBookLevels(q.Bids)
+		q.Offers = cloneBookLevels(q.Offers)
 		q.UpdatedAt = now
 		a.mdBook[key] = q
 		changed = append(changed, q)
@@ -779,6 +968,8 @@ func buildMDUnsubscribe(reqID string) *quickfix.Message {
 
 // SubscribeMarketData sends 35=V with 263=1 (SNAPSHOT+UPDATES) and keeps the book live.
 func (a *Adapter) SubscribeMarketData(ctx context.Context, q domain.MarketDataQuery) (string, []domain.MarketQuote, error) {
+	a.mdRequestMu.Lock()
+	defer a.mdRequestMu.Unlock()
 	if !a.app.isLoggedOn() {
 		return "", nil, fmt.Errorf("adapter %s not logged on", a.meta.ID)
 	}
@@ -789,22 +980,15 @@ func (a *Adapter) SubscribeMarketData(ctx context.Context, q domain.MarketDataQu
 
 	_ = a.UnsubscribeMarketData(ctx)
 
-	batches := []domain.MarketDataQuery{q}
-	if len(q.Instruments) > mdInstrumentBatch {
-		batches = nil
-		for i := 0; i < len(q.Instruments); i += mdInstrumentBatch {
-			end := i + mdInstrumentBatch
-			if end > len(q.Instruments) {
-				end = len(q.Instruments)
-			}
-			b := q
-			b.Instruments = q.Instruments[i:end]
-			batches = append(batches, b)
-		}
-	}
-
+	batches := marketDataSubscribeBatches(q)
 	var lastID string
+	sent := 0
 	for _, batch := range batches {
+		if !mdQueryHasSecurityID(batch) {
+			a.log.Warn("skip market data subscribe without SecurityID 48",
+				"adapter_id", a.meta.ID, "board", batch.Board)
+			continue
+		}
 		reqID := newMDReqID()
 		lastID = reqID
 		a.app.trackSub(reqID)
@@ -812,14 +996,27 @@ func (a *Adapter) SubscribeMarketData(ctx context.Context, q domain.MarketDataQu
 		if _, err := a.app.send(msg); err != nil {
 			return reqID, nil, err
 		}
-		a.log.Info("market data subscribe sent",
-			"adapter_id", a.meta.ID, "req_id", reqID, "instruments", len(batch.Instruments), "symbol", batch.Symbol)
+		sent++
+		a.log.Debug("market data subscribe sent",
+			"adapter_id", a.meta.ID, "req_id", reqID,
+			"instruments", len(batch.Instruments), "symbol", firstNonEmpty(batch.Symbol, mdInstrumentID(firstInst(batch))),
+			"board", firstNonEmpty(batch.Board, mdInstrumentBoard(firstInst(batch))))
+	}
+	if sent == 0 {
+		return "", nil, fmt.Errorf("market data subscribe: no instruments with SecurityID (48)")
 	}
 
-	deadline := time.Now().Add(5 * time.Second)
+	wait := 5 * time.Second
+	if extra := sent - 1; extra > 0 {
+		wait += 3 * time.Second * time.Duration(extra)
+		if wait > 15*time.Second {
+			wait = 15 * time.Second
+		}
+	}
+	deadline := time.Now().Add(wait)
 	for time.Now().Before(deadline) {
 		items := a.app.liveQuotes()
-		if len(items) > 0 {
+		if len(items) > 0 && sent <= 1 {
 			return lastID, items, nil
 		}
 		select {
@@ -828,7 +1025,74 @@ func (a *Adapter) SubscribeMarketData(ctx context.Context, q domain.MarketDataQu
 		case <-time.After(100 * time.Millisecond):
 		}
 	}
+	for _, batch := range batches {
+		if mdQueryHasSecurityID(batch) {
+			a.seedSubscribedInstruments(batch)
+		}
+	}
 	return lastID, a.app.liveQuotes(), nil
+}
+
+func firstInst(q domain.MarketDataQuery) domain.SecurityRef {
+	if len(q.Instruments) > 0 {
+		return q.Instruments[0]
+	}
+	return domain.SecurityRef{Symbol: q.Symbol, Board: q.Board, SecurityType: q.SecurityType}
+}
+
+func mdQueryHasSecurityID(q domain.MarketDataQuery) bool {
+	if strings.TrimSpace(q.Symbol) != "" {
+		return true
+	}
+	for _, inst := range q.Instruments {
+		if mdInstrumentID(inst) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func marketDataSubscribeBatches(q domain.MarketDataQuery) []domain.MarketDataQuery {
+	var batches []domain.MarketDataQuery
+	if len(q.Instruments) > 0 {
+		type bucket struct {
+			board string
+			list  []domain.SecurityRef
+		}
+		var order []string
+		byBoard := map[string]*bucket{}
+		for _, inst := range q.Instruments {
+			board := strings.TrimSpace(inst.Board)
+			if board == "" || strings.EqualFold(board, "UNKNOWN") {
+				board = ""
+			}
+			key := strings.ToUpper(board)
+			b := byBoard[key]
+			if b == nil {
+				b = &bucket{board: board}
+				byBoard[key] = b
+				order = append(order, key)
+			}
+			b.list = append(b.list, inst)
+		}
+		for _, key := range order {
+			list := byBoard[key].list
+			for i := 0; i < len(list); i += mdInstrumentBatch {
+				end := i + mdInstrumentBatch
+				if end > len(list) {
+					end = len(list)
+				}
+				batches = append(batches, domain.MarketDataQuery{
+					Instruments:      list[i:end],
+					SubscriptionType: q.SubscriptionType,
+				})
+			}
+		}
+	}
+	if strings.TrimSpace(q.Symbol) != "" && len(q.Instruments) == 0 {
+		batches = append(batches, q)
+	}
+	return batches
 }
 
 func (a *Adapter) UnsubscribeMarketData(_ context.Context) error {
@@ -839,6 +1103,37 @@ func (a *Adapter) UnsubscribeMarketData(_ context.Context) error {
 		}
 	}
 	return nil
+}
+
+func (a *Adapter) seedSubscribedInstruments(batch domain.MarketDataQuery) {
+	var list []domain.SecurityRef
+	if len(batch.Instruments) > 0 {
+		list = batch.Instruments
+	} else if strings.TrimSpace(batch.Symbol) != "" {
+		list = []domain.SecurityRef{{
+			Symbol: batch.Symbol, SecurityID: batch.Symbol,
+			Board: batch.Board, SecurityType: batch.SecurityType,
+		}}
+	}
+	now := time.Now().UTC()
+	a.app.mdMu.Lock()
+	defer a.app.mdMu.Unlock()
+	for _, inst := range list {
+		q := domain.MarketQuote{
+			AdapterID:  a.meta.ID,
+			Symbol:     firstNonEmpty(inst.Symbol, inst.SecurityID),
+			SecurityID: firstNonEmpty(inst.SecurityID, inst.Symbol),
+			Board:      mdInstrumentBoard(inst),
+			UpdatedAt:  now,
+		}
+		key := quoteKey(q)
+		if key == "" || key == "|" {
+			continue
+		}
+		if _, ok := a.app.mdBook[key]; !ok {
+			a.app.mdBook[key] = q
+		}
+	}
 }
 
 func (a *Adapter) LiveQuotes() []domain.MarketQuote {

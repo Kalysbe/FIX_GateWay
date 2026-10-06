@@ -20,7 +20,7 @@ tags:
   - name: Фирма
     description: Код фирмы текущего токена
   - name: Справочники
-    description: Инструменты и счета
+    description: Инструменты, стакан и счета
   - name: Заявки
     description: Создание, просмотр и снятие заявок
   - name: Сделки
@@ -95,6 +95,60 @@ paths:
                       $ref: "#/components/schemas/Instrument"
         "401":
           description: Unauthorized
+  /api/v1/orderbook:
+    get:
+      tags: [Справочники]
+      summary: Стакан активных заявок
+      security:
+        - bearerAuth: []
+      description: |
+        Требует `orders:read`.
+
+        Живой стакан рынка по подписанным инструментам (FIX Market Data, полный стакан).
+        `bids` — спрос (лучшая цена первой), `offers` — предложение.
+        Это не заявки брокера, а видимые уровни для построения стакана торгов.
+
+        Фильтры `symbol` и `board` необязательны. Без них вернутся все инструменты.
+      parameters:
+        - in: query
+          name: symbol
+          schema:
+            type: string
+          description: Тикер или SecurityID
+          example: GBA02280810
+        - in: query
+          name: board
+          schema:
+            type: string
+          description: Код класса
+          example: LIST_GBA
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrderBookResponse"
+              example:
+                source: live
+                live: true
+                books:
+                  - symbol: GBA02280810
+                    security_id: GBA02280810
+                    board: LIST_GBA
+                    currency: KGS
+                    bid: "99.5"
+                    bid_size: "10"
+                    offer: "100.5"
+                    offer_size: "12"
+                    bids:
+                      - price: "99.5"
+                        size: "10"
+                    offers:
+                      - price: "100.5"
+                        size: "12"
+        "401":
+          description: Unauthorized
   /api/v1/accounts:
     get:
       tags: [Справочники]
@@ -163,6 +217,16 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/CreateOrderResponse"
+        "422":
+          description: Торговая пауза или превышение quantity/open-order лимита. Отказ не создаёт заявку; идемпотентный повтор принятой заявки сохраняет доступность.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [error, code]
+                properties:
+                  error: {type: string}
+                  code: {type: string, enum: [TRADING_PAUSED, MAX_ORDER_QUANTITY, MAX_OPEN_ORDERS]}
         "400":
           description: Ошибка валидации
           content:
@@ -274,7 +338,8 @@ paths:
         Токен определяет брокера. Код брокера — это код фирмы в снимке QUIK.
         Отдаются только позиции этой фирмы: инструменты и деньги.
 
-        Это кэш последнего Request For Positions, не live-стрим.
+        Это кэш последнего Request For Positions (`35=AN` → `35=AP`), не live-стрим.
+        PUT отправляет в QUIK `35=AL` и после `35=AM` обновляет снимок.
         Если снимка ещё нет, списки пустые, в `note` — пояснение.
       responses:
         "200":
@@ -311,6 +376,146 @@ paths:
           description: Unauthorized
         "403":
           description: Нет права `positions:read`
+    put:
+      tags: [Позиции]
+      summary: Установить позиции по деньгам и бумагам
+      security:
+        - bearerAuth: []
+      description: |
+        Требует `positions:write`.
+
+        Задаёт денежный остаток (ML) и/или количество бумаг (DL) в QUIK:
+        Position Maintenance Request `35=AL` → отчёт `35=AM`, затем снимок `AN`/`AP`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SetPositionsRequest"
+            example:
+              client_code: kalys
+              account_code: "1-3101-2040"
+              cash:
+                - currency: KGS
+                  amount: "1500000"
+                  tag: EQTV
+              instruments:
+                - symbol: KG0105166315
+                  board: LISTEDSTOCKK
+                  quantity: "100"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SetPositionsResponse"
+        "400":
+          description: Ошибка валидации
+        "401":
+          description: Unauthorized
+        "403":
+          description: Нет права `positions:write`
+  /api/v1/positions/cash:
+    put:
+      tags: [Позиции]
+      summary: Установить денежную позицию
+      security:
+        - bearerAuth: []
+      description: Требует `positions:write`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SetCashRequest"
+            example:
+              client_code: kalys
+              currency: KGS
+              amount: "1500000"
+              tag: EQTV
+      responses:
+        "200":
+          description: OK
+        "400":
+          description: Ошибка валидации
+        "403":
+          description: Нет права `positions:write`
+    delete:
+      tags: [Позиции]
+      summary: Удалить денежную позицию в QUIK
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: query
+          name: client_code
+          required: true
+          schema:
+            type: string
+        - in: query
+          name: currency
+          required: true
+          schema:
+            type: string
+        - in: query
+          name: tag
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Снято
+        "404":
+          description: Не найдено
+  /api/v1/positions/instruments:
+    put:
+      tags: [Позиции]
+      summary: Установить позицию по ценным бумагам
+      security:
+        - bearerAuth: []
+      description: Требует `positions:write`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SetInstrumentRequest"
+            example:
+              client_code: kalys
+              symbol: KG0105166315
+              board: LISTEDSTOCKK
+              quantity: "100"
+      responses:
+        "200":
+          description: OK
+        "400":
+          description: Ошибка валидации
+        "403":
+          description: Нет права `positions:write`
+    delete:
+      tags: [Позиции]
+      summary: Удалить позицию по бумагам в QUIK
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: query
+          name: client_code
+          required: true
+          schema:
+            type: string
+        - in: query
+          name: symbol
+          required: true
+          schema:
+            type: string
+        - in: query
+          name: board
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Снято
+        "404":
+          description: Не найдено
 components:
   securitySchemes:
     bearerAuth:
@@ -449,6 +654,67 @@ components:
         status:
           type: string
           example: ACTIVE
+    BookLevel:
+      type: object
+      properties:
+        price:
+          type: string
+          example: "99.5"
+        size:
+          type: string
+          example: "10"
+    OrderBook:
+      type: object
+      properties:
+        symbol:
+          type: string
+        security_id:
+          type: string
+        board:
+          type: string
+        currency:
+          type: string
+        name:
+          type: string
+        last:
+          type: string
+        last_size:
+          type: string
+        last_time:
+          type: string
+        bid:
+          type: string
+        bid_size:
+          type: string
+        offer:
+          type: string
+        offer_size:
+          type: string
+        bids:
+          type: array
+          items:
+            $ref: "#/components/schemas/BookLevel"
+        offers:
+          type: array
+          items:
+            $ref: "#/components/schemas/BookLevel"
+        updated_at:
+          type: string
+          format: date-time
+    OrderBookResponse:
+      type: object
+      properties:
+        source:
+          type: string
+          example: live
+        live:
+          type: boolean
+        books:
+          type: array
+          items:
+            $ref: "#/components/schemas/OrderBook"
+        note:
+          type: string
     Trade:
       type: object
       properties:
@@ -515,6 +781,9 @@ components:
           type: string
         settl_price:
           type: string
+        source:
+          type: string
+          enum: [fix, manual]
         keys:
           type: object
           additionalProperties:
@@ -550,6 +819,7 @@ components:
       properties:
         source:
           type: string
+          enum: [fix, manual, mixed]
           example: fix
         firm_id:
           type: string
@@ -568,3 +838,103 @@ components:
         note:
           type: string
           description: Пояснение, если снимка ещё нет
+    SetCashRequest:
+      type: object
+      required: [client_code, currency, amount]
+      properties:
+        client_code:
+          type: string
+          example: kalys
+        account_code:
+          type: string
+        currency:
+          type: string
+          example: KGS
+        tag:
+          type: string
+          example: EQTV
+        amount:
+          oneOf:
+            - type: string
+            - type: number
+          example: "1500000"
+        open_bal:
+          oneOf:
+            - type: string
+            - type: number
+        limit:
+          oneOf:
+            - type: string
+            - type: number
+        locked:
+          oneOf:
+            - type: string
+            - type: number
+    SetInstrumentRequest:
+      type: object
+      required: [client_code, symbol]
+      properties:
+        client_code:
+          type: string
+        account_code:
+          type: string
+        symbol:
+          type: string
+          example: KG0105166315
+        security_id:
+          type: string
+        board:
+          type: string
+          example: LISTEDSTOCKK
+        currency:
+          type: string
+        quantity:
+          oneOf:
+            - type: string
+            - type: number
+          example: "100"
+        long_qty:
+          oneOf:
+            - type: string
+            - type: number
+        short_qty:
+          oneOf:
+            - type: string
+            - type: number
+        settl_price:
+          oneOf:
+            - type: string
+            - type: number
+    SetPositionsRequest:
+      type: object
+      required: [client_code]
+      properties:
+        client_code:
+          type: string
+        account_code:
+          type: string
+        cash:
+          type: array
+          items:
+            $ref: "#/components/schemas/SetCashRequest"
+        instruments:
+          type: array
+          items:
+            $ref: "#/components/schemas/SetInstrumentRequest"
+    SetPositionsResponse:
+      type: object
+      properties:
+        ok:
+          type: boolean
+        firm_id:
+          type: string
+        cash:
+          type: array
+          items:
+            $ref: "#/components/schemas/Position"
+        instruments:
+          type: array
+          items:
+            $ref: "#/components/schemas/Position"
+        result:
+          $ref: "#/components/schemas/PositionsResponse"

@@ -24,3 +24,32 @@ func TestSlidingWindowFailures(t *testing.T) {
 		t.Fatal("should block after max")
 	}
 }
+
+func TestPolicyUpdateDoesNotRefillExhaustedBucket(t *testing.T) {
+	l := New(1, 2)
+	if !l.Allow("a") || !l.Allow("a") {
+		t.Fatal("expected burst")
+	}
+	l.Update(2, 3)
+	if l.Allow("a") {
+		t.Fatal("policy change refilled exhausted bucket")
+	}
+	l.Update(2, 3)
+	if l.Allow("a") {
+		t.Fatal("refresh refilled exhausted bucket")
+	}
+	if l.rate != 2 || l.burst != 3 {
+		t.Fatal("policy not updated")
+	}
+}
+
+func TestPolicyDecreaseClampsExistingTokens(t *testing.T) {
+	l := New(100, 100)
+	if !l.Allow("a") {
+		t.Fatal("expected burst")
+	}
+	l.Update(1, 1)
+	if !l.Allow("a") || l.Allow("a") {
+		t.Fatal("lower burst not applied")
+	}
+}

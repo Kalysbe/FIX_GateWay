@@ -84,7 +84,31 @@ func (s *Store) InsertPositions(ctx context.Context, snapshotID int64, items []d
 	return nil
 }
 
+// NormalizeFirmIDs de-duplicates firm identifiers used to filter a snapshot
+// (broker.code and/or token quik_firm). Empty values are dropped.
+func NormalizeFirmIDs(ids ...string) []string {
+	seen := make(map[string]struct{}, len(ids))
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
+		}
+		key := strings.ToLower(id)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, id)
+	}
+	return out
+}
+
 func (s *Store) ListFromLatest(ctx context.Context, firmID string, kind string) (Snapshot, []domain.FIXPosition, error) {
+	return s.ListFromLatestByFirms(ctx, NormalizeFirmIDs(firmID), kind)
+}
+
+func (s *Store) ListFromLatestByFirms(ctx context.Context, firms []string, kind string) (Snapshot, []domain.FIXPosition, error) {
 	var sn Snapshot
 	err := s.pool.QueryRow(ctx, `
 		SELECT id, adapter_id, pos_req_id, clearing_date, requested_at, completed_at, status, error, report_count
@@ -106,13 +130,17 @@ func (s *Store) ListFromLatest(ctx context.Context, firmID string, kind string) 
 		FROM fix_positions WHERE snapshot_id=$1`
 	args := []any{sn.ID}
 	n := 1
-	if firm := strings.TrimSpace(firmID); firm != "" {
+	if firms := NormalizeFirmIDs(firms...); len(firms) > 0 {
 		n++
-		args = append(args, firm)
-		// Broker code (e.g. 2040) = FIX PartyRole 13 / ключ FIRMID.
+		lowered := make([]string, len(firms))
+		for i, f := range firms {
+			lowered[i] = strings.ToLower(f)
+		}
+		args = append(args, lowered)
+		// Broker code (e.g. 2040) and token quik_firm both map to PartyRole 13 / FIRMID.
 		q += fmt.Sprintf(` AND (
-			lower(trim(firm_id)) = lower(trim($%d))
-			OR lower(trim(COALESCE(keys->>'FIRMID', ''))) = lower(trim($%d))
+			lower(trim(firm_id)) = ANY($%d::text[])
+			OR lower(trim(COALESCE(keys->>'FIRMID', ''))) = ANY($%d::text[])
 		)`, n, n)
 	}
 	if kind != "" {
@@ -143,6 +171,7 @@ func (s *Store) ListFromLatest(ctx context.Context, firmID string, kind string) 
 		p.LongQty, p.ShortQty, p.NetQty, p.PosAmt, p.SettlPrice = longQ, shortQ, netQ, amt, px
 		_ = json.Unmarshal(keysRaw, &p.Keys)
 		_ = json.Unmarshal(itemsRaw, &p.Items)
+		p.Source = "fix"
 		out = append(out, p)
 	}
 	return sn, out, rows.Err()

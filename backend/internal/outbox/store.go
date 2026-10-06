@@ -2,6 +2,7 @@ package outbox
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/fix-gateway/backend/internal/domain"
@@ -72,10 +73,16 @@ func (s *Store) ClaimBatch(ctx context.Context, workerID string, limit int) ([]d
 }
 
 func (s *Store) MarkDone(ctx context.Context, id int64) error {
-	_, err := s.pool.Exec(ctx, `
+	tag, err := s.pool.Exec(ctx, `
 		UPDATE outbox_events SET status='DONE', locked_by=NULL, locked_at=NULL, last_error=NULL, updated_at=now()
-		WHERE id=$1`, id)
-	return err
+		WHERE id=$1 AND status='PROCESSING'`, id)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() != 1 {
+		return fmt.Errorf("outbox event %d is missing or no longer PROCESSING", id)
+	}
+	return nil
 }
 
 func (s *Store) MarkRetry(ctx context.Context, id int64, errMsg string, delay time.Duration) error {
@@ -83,25 +90,70 @@ func (s *Store) MarkRetry(ctx context.Context, id int64, errMsg string, delay ti
 	if secs < 1 {
 		secs = 1
 	}
-	_, err := s.pool.Exec(ctx, `
+	tag, err := s.pool.Exec(ctx, `
 		UPDATE outbox_events
 		SET status='PENDING', locked_by=NULL, locked_at=NULL, last_error=$2,
 		    available_at=now() + make_interval(secs => $3::int), updated_at=now()
-		WHERE id=$1`, id, errMsg, secs)
-	return err
+		WHERE id=$1 AND status='PROCESSING'`, id, errMsg, secs)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() != 1 {
+		return fmt.Errorf("outbox event %d is missing or no longer PROCESSING", id)
+	}
+	return nil
 }
 
 func (s *Store) MarkFailed(ctx context.Context, id int64, errMsg string) error {
-	_, err := s.pool.Exec(ctx, `
+	tag, err := s.pool.Exec(ctx, `
 		UPDATE outbox_events
 		SET status='FAILED', locked_by=NULL, locked_at=NULL, last_error=$2, updated_at=now()
-		WHERE id=$1`, id, errMsg)
-	return err
+		WHERE id=$1 AND status='PROCESSING'`, id, errMsg)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() != 1 {
+		return fmt.Errorf("outbox event %d is missing or no longer PROCESSING", id)
+	}
+	return nil
+}
+
+const DefaultStaleAfter = 2 * time.Minute
+
+// ReclaimStale retries only a send whose durable order fence proves that no
+// wire attempt began. Cancels and fenced sends require reconciliation.
+func (s *Store) ReclaimStale(ctx context.Context, staleAfter time.Duration) (int64, error) {
+	if staleAfter <= 0 {
+		staleAfter = DefaultStaleAfter
+	}
+	secs := int64(staleAfter / time.Second)
+	if secs < 1 {
+		secs = 1
+	}
+	tag, err := s.pool.Exec(ctx, `
+		UPDATE outbox_events e
+        SET status=CASE WHEN e.event_type='ORDER_SEND' AND EXISTS (
+                SELECT 1 FROM orders o WHERE o.id::text = e.payload->>'order_id'
+                AND o.fix_send_attempted_at IS NULL
+            ) THEN 'PENDING' ELSE 'FAILED' END,
+            locked_by=NULL, locked_at=NULL,
+            last_error=CASE WHEN e.event_type='ORDER_SEND' AND EXISTS (
+                SELECT 1 FROM orders o WHERE o.id::text = e.payload->>'order_id'
+                AND o.fix_send_attempted_at IS NULL
+            ) THEN 'reclaimed stale pre-send PROCESSING'
+            ELSE 'RECONCILIATION_REQUIRED: stale PROCESSING; wire result unknown; ' || COALESCE(e.last_error, '') END,
+		    available_at=now(), updated_at=now()
+		WHERE status='PROCESSING' AND locked_at IS NOT NULL
+		  AND locked_at < now() - make_interval(secs => $1::int)`, secs)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
 }
 
 func (s *Store) PendingCount(ctx context.Context) (int64, error) {
 	var n int64
-	err := s.pool.QueryRow(ctx, `SELECT COUNT(*) FROM outbox_events WHERE status IN ('PENDING','PROCESSING')`).Scan(&n)
+	err := s.pool.QueryRow(ctx, `SELECT COUNT(*) FROM outbox_events WHERE status IN ('PENDING','PROCESSING','FAILED')`).Scan(&n)
 	return n, err
 }
 

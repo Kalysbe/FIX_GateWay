@@ -3,6 +3,9 @@ import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api";
 import { formatDateTime, sideLabel } from "../labels";
+import { liveRefetchInterval } from "../lib/poll";
+import { PageHeader } from "../components/PageHeader";
+import { useAdminStream } from "../hooks/useAdminStream";
 
 type Trade = {
   id: string;
@@ -142,10 +145,11 @@ function dealPassesFilters(
 }
 
 export default function TradesPage() {
+  const { connected } = useAdminStream();
   const q = useQuery({
     queryKey: ["admin-trades"],
-    queryFn: () => api<{ trades: Trade[] }>("/api/v1/admin/trades"),
-    refetchInterval: 5000,
+    queryFn: ({ signal }) => api<{ trades: Trade[] }>("/api/v1/admin/trades", { signal }),
+    refetchInterval: liveRefetchInterval(connected, 5000),
   });
 
   const data = q.data?.trades || [];
@@ -256,21 +260,19 @@ export default function TradesPage() {
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-end justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-semibold">Сделки</h1>
-          <p className="text-sm text-slate-500">
-            FIX ExecutionReport · LastQty &gt; 0 · обновление каждые 5 с
-          </p>
-        </div>
-        <div className="flex flex-wrap gap-2 text-xs">
-          <StatPill label="Всего" value={totalLegs} />
-          <StatPill label="Сделок" value={allDeals.length} />
-          <StatPill label="После фильтра" value={filteredDeals.length} />
-        </div>
-      </div>
+      <PageHeader
+        title="Сделки"
+        subtitle="FIX ExecutionReport · LastQty > 0"
+        actions={
+          <div className="flex flex-wrap gap-2 text-xs">
+            <StatPill label="Всего" value={totalLegs} />
+            <StatPill label="Сделок" value={allDeals.length} />
+            <StatPill label="После фильтра" value={filteredDeals.length} />
+          </div>
+        }
+      />
 
-      <div className="card space-y-3 bg-white">
+      <div className="card space-y-3">
         <div className="flex flex-wrap items-center gap-2">
           <div className="relative min-w-[240px] flex-1">
             <input
@@ -372,7 +374,7 @@ export default function TradesPage() {
                 ].map((h) => (
                   <th
                     key={h}
-                    className="border-b border-slate-200 px-3 py-2.5 text-xs font-semibold uppercase tracking-wide text-slate-500"
+                    className="border-b border-line px-3 py-2.5 text-[12px] font-medium text-muted"
                   >
                     {h}
                   </th>
@@ -546,7 +548,7 @@ function StatPill({
   value: number;
 }) {
   return (
-    <div className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-ink">
+    <div className="rounded-lg border border-line bg-panel px-3 py-1.5 text-ink">
       <span className="mr-2 text-slate-500">{label}</span>
       <span className="font-mono font-semibold">{value}</span>
     </div>

@@ -14,10 +14,16 @@ import (
 	"github.com/fix-gateway/backend/internal/domain"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-var ErrNotFound = errors.New("not found")
+var (
+	ErrNotFound      = errors.New("not found")
+	ErrAccountExists = errors.New("счёт с таким code или trading_account уже существует у брокера")
+	ErrAccountFields = errors.New("укажите trading_account или code")
+	ErrAccountStatus = errors.New("status: допустимо ACTIVE или DISABLED")
+)
 
 type Store struct {
 	pool   *pgxpool.Pool
@@ -235,7 +241,7 @@ func (s *Store) CreateTokenExt(ctx context.Context, in CreateTokenInput) (Create
 	if err != nil {
 		return CreatedToken{}, err
 	}
-	hash := auth.HashToken(raw, s.pepper)
+	hash := auth.HashAPIToken(raw, s.pepper)
 	permsJSON, _ := json.Marshal(perms)
 	t, err := scanToken(s.pool.QueryRow(ctx, `
 		INSERT INTO api_tokens (
@@ -270,6 +276,48 @@ func (s *Store) ListTokens(ctx context.Context, brokerID int64) ([]domain.APITok
 	return out, rows.Err()
 }
 
+type TokenWithBroker struct {
+	Token      domain.APIToken
+	BrokerCode string
+	BrokerName string
+}
+
+func (s *Store) ListAllTokens(ctx context.Context) ([]TokenWithBroker, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT t.id, t.broker_id, t.name, COALESCE(t.description, ''), t.token_hash, t.token_prefix, t.status,
+		       t.permissions, COALESCE(t.quik_firm, ''), t.expires_at, t.created_at, t.revoked_at, t.last_used_at, t.last_used_ip,
+		       t.created_by, t.revoked_by, t.rotated_from, b.code, b.name
+		FROM api_tokens t
+		JOIN brokers b ON b.id = t.broker_id
+		ORDER BY t.created_at DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []TokenWithBroker
+	for rows.Next() {
+		var t domain.APIToken
+		var perms []byte
+		var code, name string
+		err := rows.Scan(
+			&t.ID, &t.BrokerID, &t.Name, &t.Description, &t.TokenHash, &t.TokenPrefix, &t.Status,
+			&perms, &t.QuikFirm, &t.ExpiresAt, &t.CreatedAt, &t.RevokedAt, &t.LastUsedAt, &t.LastUsedIP,
+			&t.CreatedBy, &t.RevokedBy, &t.RotatedFrom, &code, &name,
+		)
+		if err != nil {
+			return nil, err
+		}
+		if len(perms) > 0 {
+			_ = json.Unmarshal(perms, &t.Permissions)
+		}
+		if t.Permissions == nil {
+			t.Permissions = []string{}
+		}
+		out = append(out, TokenWithBroker{Token: t, BrokerCode: code, BrokerName: name})
+	}
+	return out, rows.Err()
+}
+
 func (s *Store) GetToken(ctx context.Context, tokenID uuid.UUID) (domain.APIToken, error) {
 	t, err := scanToken(s.pool.QueryRow(ctx, tokenSelect+` WHERE id=$1`, tokenID))
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -298,7 +346,7 @@ func (s *Store) RevokeTokenBy(ctx context.Context, tokenID uuid.UUID, revokedBy 
 }
 
 // RotateToken creates a new ACTIVE token copying settings from the old one.
-// Old token remains ACTIVE for zero-downtime migration.
+// The previous token stays ACTIVE for 24h (or its existing sooner expiry), then expires.
 func (s *Store) RotateToken(ctx context.Context, tokenID uuid.UUID, createdBy *uuid.UUID) (CreatedToken, error) {
 	old, err := s.GetToken(ctx, tokenID)
 	if err != nil {
@@ -320,7 +368,7 @@ func (s *Store) RotateToken(ctx context.Context, tokenID uuid.UUID, createdBy *u
 	if old.ExpiresAt != nil {
 		remaining := time.Until(*old.ExpiresAt)
 		if remaining < 24*time.Hour {
-			remaining = 30 * 24 * time.Hour
+			remaining = 24 * time.Hour
 		}
 		t := time.Now().UTC().Add(remaining)
 		in.ExpiresAt = &t
@@ -328,7 +376,23 @@ func (s *Store) RotateToken(ctx context.Context, tokenID uuid.UUID, createdBy *u
 		zero := 0
 		in.ExpiresInDays = &zero
 	}
-	return s.CreateTokenExt(ctx, in)
+	const rotateGrace = 24 * time.Hour
+	created, err := s.CreateTokenExt(ctx, in)
+	if err != nil {
+		return CreatedToken{}, err
+	}
+	grace := time.Now().UTC().Add(rotateGrace)
+	_, err = s.pool.Exec(ctx, `
+		UPDATE api_tokens
+		SET expires_at = CASE
+			WHEN expires_at IS NULL OR expires_at > $2 THEN $2
+			ELSE expires_at
+		END
+		WHERE id=$1 AND status='ACTIVE'`, old.ID, grace)
+	if err != nil {
+		return created, err
+	}
+	return created, nil
 }
 
 // UpdateTokenQuikFirm sets FIX firm code (tag 5018) on an existing token.
@@ -351,14 +415,22 @@ func (s *Store) UpdateTokenQuikFirm(ctx context.Context, tokenID uuid.UUID, quik
 	return t, err
 }
 
+// Infrastructure failures must not be counted as bad credentials or block an IP.
+var ErrAuthenticationUnavailable = errors.New("authentication backend unavailable")
+
 func (s *Store) AuthenticateToken(ctx context.Context, raw, ip string) (domain.Broker, domain.APIToken, error) {
-	hash := auth.HashToken(raw, s.pepper)
+	hash := auth.HashAPIToken(raw, s.pepper)
 	t, err := scanToken(s.pool.QueryRow(ctx, tokenSelect+` WHERE token_hash=$1`, hash))
+	if errors.Is(err, pgx.ErrNoRows) {
+		// Preserve existing credentials until their normal expiry or rotation.
+		legacyHash := auth.HashToken(raw, s.pepper)
+		t, err = scanToken(s.pool.QueryRow(ctx, tokenSelect+` WHERE token_hash=$1`, legacyHash))
+	}
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.Broker{}, t, fmt.Errorf("invalid token")
 	}
 	if err != nil {
-		return domain.Broker{}, t, err
+		return domain.Broker{}, t, fmt.Errorf("%w: %w", ErrAuthenticationUnavailable, err)
 	}
 	if t.Status != domain.TokenActive {
 		return domain.Broker{}, t, fmt.Errorf("token not active")
@@ -370,7 +442,7 @@ func (s *Store) AuthenticateToken(ctx context.Context, raw, ip string) (domain.B
 	}
 	b, err := s.GetBroker(ctx, t.BrokerID)
 	if err != nil {
-		return b, t, err
+		return b, t, fmt.Errorf("%w: %w", ErrAuthenticationUnavailable, err)
 	}
 	if b.Status != domain.BrokerActive {
 		return b, t, fmt.Errorf("broker not active")
@@ -378,7 +450,7 @@ func (s *Store) AuthenticateToken(ctx context.Context, raw, ip string) (domain.B
 	if b.IPWhitelistEnabled {
 		ok, err := s.IPAllowed(ctx, b.ID, ip)
 		if err != nil {
-			return b, t, err
+			return b, t, fmt.Errorf("%w: %w", ErrAuthenticationUnavailable, err)
 		}
 		if !ok {
 			return b, t, fmt.Errorf("ip not allowed")
@@ -490,17 +562,17 @@ func (s *Store) RecordAuthFailure(ctx context.Context, ip, endpoint, reason stri
 }
 
 type SecurityStats struct {
-	ActiveTokens             int64      `json:"active_tokens"`
-	ExpiredTokens            int64      `json:"expired_tokens"`
-	RevokedTokens            int64      `json:"revoked_tokens"`
-	DisabledTokens           int64      `json:"disabled_tokens"`
-	LastAPIActivity          *time.Time `json:"last_api_activity,omitempty"`
-	LastUsedIP               *string    `json:"last_used_ip,omitempty"`
-	FailedAuthAttempts24h    int64      `json:"failed_auth_attempts_24h"`
-	IPWhitelistEnabled       bool       `json:"ip_whitelist_enabled"`
-	IPWhitelistCount         int64      `json:"ip_whitelist_count"`
-	RateLimitRPS             int        `json:"rate_limit_rps"`
-	RateLimitOrdersPerSec    int        `json:"rate_limit_orders_per_sec"`
+	ActiveTokens          int64      `json:"active_tokens"`
+	ExpiredTokens         int64      `json:"expired_tokens"`
+	RevokedTokens         int64      `json:"revoked_tokens"`
+	DisabledTokens        int64      `json:"disabled_tokens"`
+	LastAPIActivity       *time.Time `json:"last_api_activity,omitempty"`
+	LastUsedIP            *string    `json:"last_used_ip,omitempty"`
+	FailedAuthAttempts24h int64      `json:"failed_auth_attempts_24h"`
+	IPWhitelistEnabled    bool       `json:"ip_whitelist_enabled"`
+	IPWhitelistCount      int64      `json:"ip_whitelist_count"`
+	RateLimitRPS          int        `json:"rate_limit_rps"`
+	RateLimitOrdersPerSec int        `json:"rate_limit_orders_per_sec"`
 }
 
 func (s *Store) SecurityStats(ctx context.Context, brokerID int64) (SecurityStats, error) {
@@ -528,14 +600,125 @@ func (s *Store) SecurityStats(ctx context.Context, brokerID int64) (SecurityStat
 }
 
 func (s *Store) CreateAccount(ctx context.Context, brokerID int64, code, name, quikFirm, tradingAccount string) (domain.BrokerAccount, error) {
+	code, name, quikFirm, tradingAccount, err := normalizeAccountInput(code, name, quikFirm, tradingAccount)
+	if err != nil {
+		return domain.BrokerAccount{}, err
+	}
+	taken, err := s.accountRefTaken(ctx, brokerID, 0, code, tradingAccount)
+	if err != nil {
+		return domain.BrokerAccount{}, err
+	}
+	if taken {
+		return domain.BrokerAccount{}, ErrAccountExists
+	}
 	var a domain.BrokerAccount
-	err := s.pool.QueryRow(ctx, `
+	err = s.pool.QueryRow(ctx, `
 		INSERT INTO broker_accounts (broker_id, code, name, quik_firm, trading_account)
 		VALUES ($1,$2,$3,$4,$5)
 		RETURNING id, broker_id, code, name, quik_firm, trading_account, status, created_at, updated_at`,
 		brokerID, code, name, quikFirm, tradingAccount,
 	).Scan(&a.ID, &a.BrokerID, &a.Code, &a.Name, &a.QuikFirm, &a.TradingAccount, &a.Status, &a.CreatedAt, &a.UpdatedAt)
+	if isUniqueViolation(err) {
+		return a, ErrAccountExists
+	}
 	return a, err
+}
+
+type AccountUpdate struct {
+	Code           *string
+	Name           *string
+	QuikFirm       *string
+	TradingAccount *string
+	Status         *string
+}
+
+func (s *Store) UpdateAccount(ctx context.Context, brokerID, accountID int64, upd AccountUpdate) (domain.BrokerAccount, error) {
+	cur, err := s.GetAccountForBroker(ctx, brokerID, accountID)
+	if err != nil {
+		return domain.BrokerAccount{}, err
+	}
+	code, name, quikFirm, tradingAccount := cur.Code, cur.Name, cur.QuikFirm, cur.TradingAccount
+	status := cur.Status
+	if upd.Code != nil {
+		code = *upd.Code
+	}
+	if upd.Name != nil {
+		name = *upd.Name
+	}
+	if upd.QuikFirm != nil {
+		quikFirm = *upd.QuikFirm
+	}
+	if upd.TradingAccount != nil {
+		tradingAccount = *upd.TradingAccount
+	}
+	if upd.Status != nil {
+		status = strings.ToUpper(strings.TrimSpace(*upd.Status))
+		if status != "ACTIVE" && status != "DISABLED" {
+			return domain.BrokerAccount{}, ErrAccountStatus
+		}
+	}
+	code, name, quikFirm, tradingAccount, err = normalizeAccountInput(code, name, quikFirm, tradingAccount)
+	if err != nil {
+		return domain.BrokerAccount{}, err
+	}
+	taken, err := s.accountRefTaken(ctx, brokerID, accountID, code, tradingAccount)
+	if err != nil {
+		return domain.BrokerAccount{}, err
+	}
+	if taken {
+		return domain.BrokerAccount{}, ErrAccountExists
+	}
+	var a domain.BrokerAccount
+	err = s.pool.QueryRow(ctx, `
+		UPDATE broker_accounts
+		SET code=$3, name=$4, quik_firm=$5, trading_account=$6, status=$7, updated_at=now()
+		WHERE id=$1 AND broker_id=$2
+		RETURNING id, broker_id, code, name, quik_firm, trading_account, status, created_at, updated_at`,
+		accountID, brokerID, code, name, quikFirm, tradingAccount, status,
+	).Scan(&a.ID, &a.BrokerID, &a.Code, &a.Name, &a.QuikFirm, &a.TradingAccount, &a.Status, &a.CreatedAt, &a.UpdatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return a, ErrNotFound
+	}
+	if isUniqueViolation(err) {
+		return a, ErrAccountExists
+	}
+	return a, err
+}
+
+func normalizeAccountInput(code, name, quikFirm, tradingAccount string) (string, string, string, string, error) {
+	code = strings.TrimSpace(code)
+	name = strings.TrimSpace(name)
+	quikFirm = strings.TrimSpace(quikFirm)
+	tradingAccount = strings.TrimSpace(tradingAccount)
+	if tradingAccount == "" && code == "" {
+		return "", "", "", "", ErrAccountFields
+	}
+	if tradingAccount == "" {
+		tradingAccount = code
+	}
+	if code == "" {
+		code = tradingAccount
+	}
+	if name == "" {
+		name = code
+	}
+	return code, name, quikFirm, tradingAccount, nil
+}
+
+func (s *Store) accountRefTaken(ctx context.Context, brokerID, excludeID int64, code, tradingAccount string) (bool, error) {
+	var n int64
+	err := s.pool.QueryRow(ctx, `
+		SELECT COUNT(*) FROM broker_accounts
+		WHERE broker_id=$1 AND id<>$2
+		  AND (code=$3 OR trading_account=$3 OR code=$4 OR trading_account=$4)`,
+		brokerID, excludeID, code, tradingAccount,
+	).Scan(&n)
+	return n > 0, err
+}
+
+func isUniqueViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23505"
 }
 
 func (s *Store) ListAccounts(ctx context.Context, brokerID int64) ([]domain.BrokerAccount, error) {
@@ -562,6 +745,26 @@ func (s *Store) GetAccountForBroker(ctx context.Context, brokerID, accountID int
 	err := s.pool.QueryRow(ctx, `
 		SELECT id, broker_id, code, name, quik_firm, trading_account, status, created_at, updated_at
 		FROM broker_accounts WHERE id=$1 AND broker_id=$2`, accountID, brokerID,
+	).Scan(&a.ID, &a.BrokerID, &a.Code, &a.Name, &a.QuikFirm, &a.TradingAccount, &a.Status, &a.CreatedAt, &a.UpdatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return a, ErrNotFound
+	}
+	return a, err
+}
+
+// ResolveActiveAccount matches account_id against trading_account or code for this broker.
+func (s *Store) ResolveActiveAccount(ctx context.Context, brokerID int64, accountRef string) (domain.BrokerAccount, error) {
+	accountRef = strings.TrimSpace(accountRef)
+	if accountRef == "" {
+		return domain.BrokerAccount{}, ErrNotFound
+	}
+	var a domain.BrokerAccount
+	err := s.pool.QueryRow(ctx, `
+		SELECT id, broker_id, code, name, quik_firm, trading_account, status, created_at, updated_at
+		FROM broker_accounts
+		WHERE broker_id=$1 AND status='ACTIVE' AND (trading_account=$2 OR code=$2)
+		ORDER BY CASE WHEN trading_account=$2 THEN 0 ELSE 1 END, id
+		LIMIT 1`, brokerID, accountRef,
 	).Scan(&a.ID, &a.BrokerID, &a.Code, &a.Name, &a.QuikFirm, &a.TradingAccount, &a.Status, &a.CreatedAt, &a.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return a, ErrNotFound

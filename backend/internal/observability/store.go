@@ -95,12 +95,20 @@ func (s *Store) Get(ctx context.Context, id uuid.UUID) (Event, error) {
 	return scanEvent(row)
 }
 
-func (s *Store) List(ctx context.Context, f Filter) ([]Event, bool, error) {
-	if f.Limit <= 0 || f.Limit > 200 {
-		f.Limit = 20
+func clampLogListLimit(n int) int {
+	if n <= 0 {
+		return 25
 	}
+	if n > 100 {
+		return 100
+	}
+	return n
+}
+
+func (s *Store) List(ctx context.Context, f Filter) ([]Event, bool, error) {
+	f.Limit = clampLogListLimit(f.Limit)
 	where, args := f.where(1)
-	q := eventSelect + where + ` ORDER BY ts DESC, id DESC LIMIT $` + strconv.Itoa(len(args)+1)
+	q := eventListSelect + where + ` ORDER BY ts DESC, id DESC LIMIT $` + strconv.Itoa(len(args)+1)
 	args = append(args, f.Limit+1)
 	rows, err := s.pool.Query(ctx, q, args...)
 	if err != nil {
@@ -121,6 +129,9 @@ func (s *Store) List(ctx context.Context, f Filter) ([]Event, bool, error) {
 	more := len(out) > f.Limit
 	if more {
 		out = out[:f.Limit]
+	}
+	if out == nil {
+		out = []Event{}
 	}
 	return out, more, nil
 }
@@ -238,6 +249,18 @@ SELECT id, ts, event_type, subtype, severity, request_id, trace_id,
        adapter_id, session_id, fix_msg_type, fix_direction, fix_seq_num,
        error_code, error_message, failure_stage, message,
        actor_type, actor_id, target_type, target_id, before_state, after_state, metadata, ts
+FROM obs_events`
+
+// eventListSelect omits bulky JSON blobs so the logs table can page cheaply.
+const eventListSelect = `
+SELECT id, ts, event_type, subtype, severity, request_id, trace_id,
+       broker_id, broker_code, broker_name, token_id,
+       client_ip, forwarded_for, user_agent, http_method, endpoint, route, query_params, protocol,
+       status_code, response_time_ms, request_size, response_size, perf_class, result,
+       order_id, client_order_id, account_id, instrument, side, quantity, price,
+       adapter_id, session_id, fix_msg_type, fix_direction, fix_seq_num,
+       error_code, error_message, failure_stage, message,
+       actor_type, actor_id, target_type, target_id, NULL::jsonb, NULL::jsonb, NULL::jsonb, ts
 FROM obs_events`
 
 func scanEvent(row pgx.Row) (Event, error) {
@@ -391,7 +414,7 @@ func (s *Store) UpsertNotification(ctx context.Context, n Notification, window t
 		WHERE fingerprint=$1 AND window_start > now() - ($2 * interval '1 millisecond')
 		ORDER BY window_start DESC LIMIT 1`, n.Fingerprint, window.Milliseconds()))
 	if err == nil {
-		existing.Count++
+		existing.Count += max(1, n.Count)
 		existing.LastSeenAt = time.Now().UTC()
 		existing.Severity = worseSeverity(existing.Severity, n.Severity)
 		existing.Title = aggregateTitle(n, existing.Count, window)
@@ -405,11 +428,10 @@ func (s *Store) UpsertNotification(ctx context.Context, n Notification, window t
 		return n, false, err
 	}
 	n.ID = uuid.New()
-	n.Count = 1
+	n.Count = max(1, n.Count)
 	n.WindowStart = time.Now().UTC()
 	n.LastSeenAt = n.WindowStart
 	n.CreatedAt = n.WindowStart
-	n.Title = n.Title
 	_, err = s.pool.Exec(ctx, `
 		INSERT INTO obs_notifications (
 			id, fingerprint, severity, event_type, subtype, error_code, broker_id, broker_name,

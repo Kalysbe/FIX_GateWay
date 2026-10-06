@@ -95,10 +95,17 @@ func (m *Manager) SubscribeMarketData(ctx context.Context, q domain.MarketDataQu
 			m.log.Warn("market data subscribe failed", "adapter_id", c.id, "error", err)
 			continue
 		}
+		if len(items) == 0 {
+			m.log.Warn("market data subscribe returned no quotes", "adapter_id", c.id)
+			continue
+		}
 		return c.id, reqID, items, nil
 	}
 	if firstErr != nil {
 		return "", "", nil, firstErr
+	}
+	if len(list) > 0 {
+		return "", "", nil, fmt.Errorf("market data subscribe returned no quotes")
 	}
 	return "", "", nil, fmt.Errorf("no online FIX adapter available for Market Data subscribe")
 }

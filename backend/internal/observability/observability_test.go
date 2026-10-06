@@ -94,6 +94,15 @@ func TestClientIPUntrusted(t *testing.T) {
 	}
 }
 
+func TestRequestProtoUntrusted(t *testing.T) {
+	r := httptest.NewRequest(http.MethodGet, "/", nil)
+	r.RemoteAddr = "203.0.113.50:9"
+	r.Header.Set("X-Forwarded-Proto", "https")
+	if RequestProto(r, nil) != "http" {
+		t.Fatal("spoofed proto must not win without trusted proxy")
+	}
+}
+
 func TestRequestIDFormat(t *testing.T) {
 	id := NewRequestID()
 	if !strings.HasPrefix(id, "req_") || len(id) < 10 {
@@ -108,8 +117,23 @@ func TestAuthSubtype(t *testing.T) {
 	if AuthSubtypeFromReason("ip not allowed") != AuthIPNotAllowed {
 		t.Fatal("ip")
 	}
+	if AuthSubtypeFromReason("ip not allowed: 172.19.0.1") != AuthIPNotAllowed {
+		t.Fatal("ip with address")
+	}
 	if AuthSubtypeFromReason("token expired") != AuthTokenExpired {
 		t.Fatal("expired")
+	}
+}
+
+func TestIPNotAllowedMessage(t *testing.T) {
+	if got := IPNotAllowedMessage("172.19.0.1", ""); got != "ip not allowed: 172.19.0.1" {
+		t.Fatalf("got %q", got)
+	}
+	if got := IPNotAllowedMessage("172.19.0.1", "203.0.113.10"); got != "ip not allowed: 172.19.0.1 (X-Forwarded-For: 203.0.113.10)" {
+		t.Fatalf("got %q", got)
+	}
+	if got := IPNotAllowedMessage("172.19.0.1", "172.19.0.1"); got != "ip not allowed: 172.19.0.1" {
+		t.Fatalf("duplicate xff: %q", got)
 	}
 }
 
@@ -129,18 +153,30 @@ func TestCursorRoundtrip(t *testing.T) {
 	}
 }
 
+func TestClampLogListLimit(t *testing.T) {
+	if clampLogListLimit(0) != 25 || clampLogListLimit(-1) != 25 {
+		t.Fatal("default")
+	}
+	if clampLogListLimit(25) != 25 || clampLogListLimit(100) != 100 {
+		t.Fatal("passthrough")
+	}
+	if clampLogListLimit(101) != 100 || clampLogListLimit(5000) != 100 {
+		t.Fatal("cap")
+	}
+}
+
 func TestIsInternalUIRequest(t *testing.T) {
 	skip := skipHTTPHosts(nil)
 	admin := httptest.NewRequest(http.MethodGet, "/api/v1/admin/dashboard", nil)
 	admin.Host = "localhost:5173"
-	if !IsInternalUIRequest(admin, skip) {
-		t.Fatal("vite proxy host 5173 must skip")
+	if IsInternalUIRequest(admin, skip) {
+		t.Fatal("admin API must be logged")
 	}
 	fromOrigin := httptest.NewRequest(http.MethodGet, "/api/v1/admin/dashboard", nil)
 	fromOrigin.Host = "localhost:8080"
 	fromOrigin.Header.Set("Origin", "http://localhost:5173")
-	if !IsInternalUIRequest(fromOrigin, skip) {
-		t.Fatal("origin 5173 must skip")
+	if IsInternalUIRequest(fromOrigin, skip) {
+		t.Fatal("origin cannot suppress API logging")
 	}
 	broker := httptest.NewRequest(http.MethodGet, "/api/v1/orders", nil)
 	broker.Host = "localhost:5174"

@@ -39,7 +39,7 @@ export default function SettingsPanel() {
         <label className="label">Gateway URL</label>
         <input
           className="input font-mono"
-          placeholder="пусто = proxy → localhost:8080"
+          placeholder={import.meta.env.DEV ? "пусто = proxy → localhost:8080" : "пусто = текущий адрес сайта"}
           value={s.gatewayUrl}
           onChange={(e) => updateSettings({ gatewayUrl: e.target.value })}
         />
@@ -87,7 +87,7 @@ export default function SettingsPanel() {
         <button
           className="btn-danger"
           onClick={() => {
-            if (confirm("Сбросить сессии и токены в localStorage?")) resetAll();
+            if (confirm("Сбросить профили и токены текущей вкладки?")) resetAll();
           }}
         >
           Reset all

@@ -9,6 +9,8 @@ export default defineConfig({
       "/api": { target: "http://localhost:8080", ws: true },
       "/health": "http://localhost:8080",
       "/ready": "http://localhost:8080",
+      "/swagger": "http://localhost:8080",
+      "/broker-swagger": "http://localhost:8080",
     },
   },
 });

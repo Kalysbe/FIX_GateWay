@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/fix-gateway/backend/internal/domain"
 	"github.com/jackc/pgx/v5"
@@ -39,22 +41,38 @@ func (s *Store) SyncFromFIX(ctx context.Context, items []domain.SecurityRef) (Sy
 	keep := make(map[key]struct{}, len(items))
 	keepIDs := make([]int64, 0, len(items))
 
+	hasBoard := map[string]bool{}
 	for _, it := range items {
-		sym := strings.TrimSpace(firstNonEmpty(it.SecurityID, it.Symbol))
-		board := strings.TrimSpace(it.Board)
-		if sym == "" {
+		sym := fixText(firstNonEmpty(it.SecurityID, it.Symbol))
+		board := fixText(it.Board)
+		if usableSymbol(sym) && board != "" && !strings.EqualFold(board, "UNKNOWN") {
+			hasBoard[sym] = true
+		}
+	}
+
+	for _, it := range items {
+		sym := fixText(firstNonEmpty(it.SecurityID, it.Symbol))
+		board := fixText(it.Board)
+		if !usableSymbol(sym) {
 			continue
 		}
 		if board == "" {
 			board = "UNKNOWN"
 		}
-		currency := strings.TrimSpace(it.Currency)
+		if strings.EqualFold(board, "UNKNOWN") && hasBoard[sym] {
+			continue
+		}
+		currency := fixText(it.Currency)
 		if currency == "" {
 			currency = "KGS"
 		}
-		secType := strings.TrimSpace(it.SecurityType)
+		secType := domain.NormalizeSecurityType(fixText(it.SecurityType))
 		if secType == "" {
-			secType = "CS"
+			if strings.Contains(strings.ToUpper(board), "BND") || strings.EqualFold(board, "LIST_GBA") {
+				secType = "GO"
+			} else {
+				secType = "CS"
+			}
 		}
 		internal := board + "/" + sym
 		k := key{board: board, sym: sym}
@@ -65,7 +83,7 @@ func (s *Store) SyncFromFIX(ctx context.Context, items []domain.SecurityRef) (Sy
 
 		id, err := upsertInstrumentTx(ctx, tx, internal, sym, board, currency, secType)
 		if err != nil {
-			return res, err
+			continue
 		}
 		keepIDs = append(keepIDs, id)
 		res.InstrumentsUpserted++
@@ -217,4 +235,27 @@ func firstNonEmpty(vals ...string) string {
 		}
 	}
 	return ""
+}
+
+func fixText(s string) string {
+	s = strings.ToValidUTF8(strings.TrimSpace(s), "")
+	s = strings.Map(func(r rune) rune {
+		if r == utf8.RuneError || unicode.IsControl(r) {
+			return -1
+		}
+		return r
+	}, s)
+	return strings.TrimSpace(s)
+}
+
+func usableSymbol(s string) bool {
+	if utf8.RuneCountInString(s) < 3 {
+		return false
+	}
+	for _, r := range s {
+		if unicode.IsLetter(r) {
+			return true
+		}
+	}
+	return false
 }

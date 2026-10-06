@@ -9,13 +9,14 @@ import (
 )
 
 type AdminClaims struct {
-	UserID   string `json:"uid"`
-	Email    string `json:"email"`
-	RoleCode string `json:"role"`
+	UserID      string `json:"uid"`
+	Email       string `json:"email"`
+	RoleCode    string `json:"role"`
+	UserVersion int64  `json:"uv"`
 	jwt.RegisteredClaims
 }
 
-func IssueAdminJWT(secret string, userID uuid.UUID, email, role string, ttl time.Duration) (string, error) {
+func IssueAdminJWT(secret string, userID uuid.UUID, email, role string, ttl time.Duration, version ...int64) (string, error) {
 	claims := AdminClaims{
 		UserID:   userID.String(),
 		Email:    email,
@@ -25,6 +26,9 @@ func IssueAdminJWT(secret string, userID uuid.UUID, email, role string, ttl time
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
 			Subject:   userID.String(),
 		},
+	}
+	if len(version) > 0 {
+		claims.UserVersion = version[0]
 	}
 	t := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	return t.SignedString([]byte(secret))
@@ -36,13 +40,17 @@ func ParseAdminJWT(secret, token string) (*AdminClaims, error) {
 			return nil, errors.New("unexpected signing method")
 		}
 		return []byte(secret), nil
-	})
+	}, jwt.WithExpirationRequired(), jwt.WithIssuedAt())
 	if err != nil {
 		return nil, err
 	}
 	claims, ok := parsed.Claims.(*AdminClaims)
 	if !ok || !parsed.Valid {
 		return nil, errors.New("invalid token")
+	}
+	uid, err := uuid.Parse(claims.UserID)
+	if err != nil || uid == uuid.Nil || claims.Subject != claims.UserID || claims.IssuedAt == nil || !HasAnyRole(claims.RoleCode, RolesAll...) {
+		return nil, errors.New("invalid principal")
 	}
 	return claims, nil
 }

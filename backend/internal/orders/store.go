@@ -11,11 +11,17 @@ import (
 	"github.com/fix-gateway/backend/internal/domain"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/shopspring/decimal"
 )
 
+var ErrSendAlreadyAttempted = errors.New("fix send already attempted")
+var ErrCannotFailover = errors.New("cannot failover after send attempted")
+
 var ErrNotFound = errors.New("order not found")
+var ErrInvalidCancel = errors.New("invalid cancel")
+var ErrInstrumentNotFound = errors.New("instrument not found")
 
 type Store struct {
 	pool *pgxpool.Pool
@@ -47,7 +53,8 @@ SELECT o.id, o.broker_id, COALESCE(o.account_id, 0), o.client_order_id, o.instru
        COALESCE(NULLIF(o.fix_firm, ''), '') AS quik_firm,
        COALESCE(NULLIF(o.fix_client_id, ''), '') AS client_code,
        COALESCE(NULLIF(f.firm_name, ''), NULLIF(bf.name, ''), NULLIF(b.name, ''), '') AS firm_name,
-       COALESCE(o.request_id, ''), COALESCE(o.trace_id, '')
+       COALESCE(o.request_id, ''), COALESCE(o.trace_id, ''),
+       o.fix_send_attempted_at
 FROM orders o
 JOIN instruments i ON i.id = o.instrument_id
 LEFT JOIN brokers b ON b.id = o.broker_id
@@ -74,7 +81,7 @@ func (s *Store) scanOrder(row pgx.Row) (domain.Order, error) {
 		&o.TimeInForce, &o.Quantity, &price, &o.FilledQuantity, &o.AvgPrice, &o.Status, &o.AdapterID,
 		&o.FixClOrdID, &o.QuikOrderID, &o.RejectReason, &o.CreatedAt, &o.UpdatedAt,
 		&o.Symbol, &o.Board, &o.TradingAccount, &o.Currency, &o.QuikFirm, &o.ClientCode, &o.FirmName,
-		&o.RequestID, &o.TraceID,
+		&o.RequestID, &o.TraceID, &o.FixSendAttemptedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return o, ErrNotFound
@@ -109,6 +116,10 @@ func (s *Store) CreateWithOutbox(ctx context.Context, in CreateInput) (domain.Or
 		return domain.Order{}, false, err
 	}
 	defer tx.Rollback(ctx)
+	policies, err := lockTradingLimits(ctx, tx, in.BrokerID)
+	if err != nil {
+		return domain.Order{}, false, err
+	}
 
 	var existingID uuid.UUID
 	err = tx.QueryRow(ctx, `SELECT id FROM orders WHERE broker_id=$1 AND client_order_id=$2`, in.BrokerID, in.ClientOrderID).Scan(&existingID)
@@ -120,6 +131,9 @@ func (s *Store) CreateWithOutbox(ctx context.Context, in CreateInput) (domain.Or
 		return o, true, err
 	}
 	if !errors.Is(err, pgx.ErrNoRows) {
+		return domain.Order{}, false, err
+	}
+	if err := checkTradingLimits(ctx, tx, in, policies); err != nil {
 		return domain.Order{}, false, err
 	}
 
@@ -136,6 +150,11 @@ func (s *Store) CreateWithOutbox(ctx context.Context, in CreateInput) (domain.Or
 		in.ClientCode, in.QuikFirm, nullIfEmpty(in.RequestID), nullIfEmpty(in.TraceID),
 	)
 	if err != nil {
+		_ = tx.Rollback(ctx)
+		if isUniqueViolation(err) {
+			o, gerr := s.FindByClientOrderID(ctx, in.BrokerID, in.ClientOrderID)
+			return o, true, gerr
+		}
 		return domain.Order{}, false, err
 	}
 
@@ -263,6 +282,12 @@ func (s *Store) MarkSent(ctx context.Context, id uuid.UUID, adapterID, rawFIX st
 		return domain.Order{}, err
 	}
 	to := domain.OrderSent
+	if from == to || IsExternallyAccepted(domain.Order{Status: from}) || IsTerminal(from) {
+		if err := tx.Commit(ctx); err != nil {
+			return domain.Order{}, err
+		}
+		return s.Get(ctx, id)
+	}
 	if !CanTransition(from, to) {
 		return domain.Order{}, fmt.Errorf("illegal transition %s -> %s", from, to)
 	}
@@ -303,12 +328,17 @@ func (s *Store) ClearRouteForFailover(ctx context.Context, id uuid.UUID, reason 
 
 	var status domain.OrderStatus
 	var quik *string
-	err = tx.QueryRow(ctx, `SELECT status, quik_order_id FROM orders WHERE id=$1 FOR UPDATE`, id).Scan(&status, &quik)
+	var attempted *time.Time
+	err = tx.QueryRow(ctx, `SELECT status, quik_order_id, fix_send_attempted_at FROM orders WHERE id=$1 FOR UPDATE`, id).Scan(&status, &quik, &attempted)
 	if err != nil {
 		return err
 	}
-	if IsExternallyAccepted(domain.Order{Status: status, QuikOrderID: quik}) {
-		return fmt.Errorf("cannot failover externally accepted order")
+	cur := domain.Order{Status: status, QuikOrderID: quik, FixSendAttemptedAt: attempted}
+	if !CanClearRouteForFailover(cur) {
+		if IsExternallyAccepted(cur) {
+			return fmt.Errorf("cannot failover externally accepted order")
+		}
+		return ErrCannotFailover
 	}
 	_, err = tx.Exec(ctx, `
 		UPDATE orders SET status=$2, adapter_id=NULL, updated_at=now() WHERE id=$1`, id, domain.OrderQueued)
@@ -324,6 +354,22 @@ func (s *Store) ClearRouteForFailover(ctx context.Context, id uuid.UUID, reason 
 		return err
 	}
 	return tx.Commit(ctx)
+}
+
+// FenceSendAttempt records that a FIX NewOrderSingle is about to go on the wire.
+// After this succeeds the worker must never SendOrder or failover this ClOrdID.
+func (s *Store) FenceSendAttempt(ctx context.Context, id uuid.UUID) error {
+	tag, err := s.pool.Exec(ctx, `
+		UPDATE orders SET fix_send_attempted_at=now(), updated_at=now()
+		WHERE id=$1 AND fix_send_attempted_at IS NULL
+		  AND status IN ('QUEUED', 'ROUTING')`, id)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrSendAlreadyAttempted
+	}
+	return nil
 }
 
 const orderLockSelect = `
@@ -446,8 +492,47 @@ func (s *Store) ApplyExecutionReport(ctx context.Context, fixClOrdID, origClOrdI
 	to := mapExecStatus(execType, ordStatus, o.Status)
 	erMsg := formatExecutionMessage(execType, ordStatus, text, ordRejReason)
 	payload := fixWirePayload(rawFIX)
+	filled := effectiveFillQty(o.FilledQuantity, lastQty, cumQty)
+	var exec *domain.Execution
+	if lastQty.GreaterThan(decimal.Zero) {
+		if execID == "" {
+			return domain.Order{}, nil, fmt.Errorf("fill report missing ExecID")
+		}
+		exec, err = insertExecution(ctx, tx, o.ID, execID, lastQty, lastPx, filled, leavesQty, adapterID)
+		if err != nil {
+			return domain.Order{}, nil, err
+		}
+		if exec == nil {
+			// Replayed fills must not recalculate totals, average price or status.
+			if err := tx.Commit(ctx); err != nil {
+				return domain.Order{}, nil, err
+			}
+			out, err := s.Get(ctx, o.ID)
+			return out, nil, err
+		}
+	}
+
+	avg := o.AvgPrice
+	if lastQty.GreaterThan(decimal.Zero) {
+		prevNotional := o.FilledQuantity.Mul(o.AvgPrice)
+		newNotional := lastQty.Mul(lastPx)
+		totalQty := o.FilledQuantity.Add(lastQty)
+		if totalQty.GreaterThan(decimal.Zero) {
+			avg = prevNotional.Add(newNotional).Div(totalQty)
+		}
+	}
+
 	if !CanTransition(o.Status, to) && o.Status != to {
-		// still record event for audit visibility
+		if lastQty.GreaterThan(decimal.Zero) {
+			_, err = tx.Exec(ctx, `
+				UPDATE orders SET filled_quantity=$2, avg_price=$3,
+				                  quik_order_id=COALESCE(NULLIF($4,''), quik_order_id),
+				                  adapter_id=COALESCE(NULLIF($5,''), adapter_id), updated_at=now()
+				WHERE id=$1`, o.ID, filled, avg, quikOrderID, adapterID)
+			if err != nil {
+				return domain.Order{}, nil, err
+			}
+		}
 		_, _ = tx.Exec(ctx, `
 			INSERT INTO order_events (order_id, event_type, from_status, to_status, adapter_id, message, payload)
 			VALUES ($1,'EXECUTION_REPORT',$2,$3,$4,$5,$6)`,
@@ -456,18 +541,7 @@ func (s *Store) ApplyExecutionReport(ctx context.Context, fixClOrdID, origClOrdI
 			return domain.Order{}, nil, err
 		}
 		out, err := s.Get(ctx, o.ID)
-		return out, nil, err
-	}
-
-	avg := o.AvgPrice
-	if lastQty.GreaterThan(decimal.Zero) {
-		// weighted average
-		prevNotional := o.FilledQuantity.Mul(o.AvgPrice)
-		newNotional := lastQty.Mul(lastPx)
-		totalQty := o.FilledQuantity.Add(lastQty)
-		if totalQty.GreaterThan(decimal.Zero) {
-			avg = prevNotional.Add(newNotional).Div(totalQty)
-		}
+		return out, exec, err
 	}
 
 	rejectReason := o.RejectReason
@@ -480,7 +554,7 @@ func (s *Store) ApplyExecutionReport(ctx context.Context, fixClOrdID, origClOrdI
 	_, err = tx.Exec(ctx, `
 		UPDATE orders SET status=$2, filled_quantity=$3, avg_price=$4, quik_order_id=COALESCE(NULLIF($5,''), quik_order_id),
 		                adapter_id=COALESCE(NULLIF($6,''), adapter_id), reject_reason=$7, updated_at=now()
-		WHERE id=$1`, o.ID, to, cumQty, avg, quikOrderID, adapterID, rejectReason)
+		WHERE id=$1`, o.ID, to, filled, avg, quikOrderID, adapterID, rejectReason)
 	if err != nil {
 		return domain.Order{}, nil, err
 	}
@@ -494,29 +568,11 @@ func (s *Store) ApplyExecutionReport(ctx context.Context, fixClOrdID, origClOrdI
 		return domain.Order{}, nil, err
 	}
 
-	var exec *domain.Execution
-	if lastQty.GreaterThan(decimal.Zero) && execID != "" {
-		var exists bool
-		_ = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM executions WHERE exec_id=$1)`, execID).Scan(&exists)
-		if !exists {
-			eid := uuid.New()
-			_, err = tx.Exec(ctx, `
-				INSERT INTO executions (id, order_id, exec_id, last_qty, last_px, cum_qty, leaves_qty, adapter_id)
-				VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`, eid, o.ID, execID, lastQty, lastPx, cumQty, leavesQty, adapterID)
-			if err != nil {
-				return domain.Order{}, nil, err
-			}
-			exec = &domain.Execution{
-				ID: eid, OrderID: o.ID, ExecID: execID, LastQty: lastQty, LastPx: lastPx,
-				CumQty: cumQty, LeavesQty: leavesQty, AdapterID: &adapterID, CreatedAt: time.Now().UTC(),
-			}
-		}
-	}
-
 	if err := tx.Commit(ctx); err != nil {
 		return domain.Order{}, nil, err
 	}
 	out, err := s.Get(ctx, o.ID)
+	out.ExecutionBecameTerminal = !IsTerminal(o.Status) && IsTerminal(to)
 	return out, exec, err
 }
 
@@ -712,7 +768,7 @@ func (s *Store) ResolveInstrument(ctx context.Context, brokerID int64, brokerSym
 			LIMIT 1`, brokerSymbol, board,
 		).Scan(&i.ID, &i.InternalSymbol, &i.QuikSymbol, &i.Board, &i.Currency, &i.SecurityType, &i.Status)
 		if errors.Is(err, pgx.ErrNoRows) {
-			return i, fmt.Errorf("instrument not found")
+			return i, ErrInstrumentNotFound
 		}
 	}
 	return i, err
@@ -731,6 +787,17 @@ func (s *Store) EnqueueCancel(ctx context.Context, orderID uuid.UUID) (already b
 	if status == domain.OrderCancelled {
 		return true, nil
 	}
+	// A retry of the HTTP request must not create a second cancellation while
+	// the first is queued or has an uncertain wire outcome.
+	var unresolved bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS (
+		SELECT 1 FROM outbox_events WHERE aggregate_id=$1 AND event_type='ORDER_CANCEL'
+		AND status IN ('PENDING','PROCESSING','FAILED'))`, orderID.String()).Scan(&unresolved); err != nil {
+		return false, err
+	}
+	if unresolved {
+		return true, nil
+	}
 	var last *time.Time
 	if err := tx.QueryRow(ctx, `
 		SELECT MAX(created_at)
@@ -743,7 +810,7 @@ func (s *Store) EnqueueCancel(ctx context.Context, orderID uuid.UUID) (already b
 		return true, nil
 	}
 	if status == domain.OrderCancelPending {
-		if last != nil && time.Since(*last) < 30*time.Second {
+		if last != nil {
 			return true, nil
 		}
 		payload, _ := json.Marshal(map[string]any{"order_id": orderID.String()})
@@ -756,7 +823,7 @@ func (s *Store) EnqueueCancel(ctx context.Context, orderID uuid.UUID) (already b
 		return false, tx.Commit(ctx)
 	}
 	if !CanTransition(status, domain.OrderCancelPending) {
-		return false, fmt.Errorf("cannot cancel from status %s", status)
+		return false, fmt.Errorf("%w: cannot cancel from status %s", ErrInvalidCancel, status)
 	}
 	_, err = tx.Exec(ctx, `UPDATE orders SET status=$2, updated_at=now() WHERE id=$1`, orderID, domain.OrderCancelPending)
 	if err != nil {
@@ -926,4 +993,45 @@ func nullIfEmpty(s string) any {
 		return nil
 	}
 	return s
+}
+
+func isUniqueViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23505"
+}
+
+func effectiveFillQty(prior, lastQty, cumQty decimal.Decimal) decimal.Decimal {
+	if !cumQty.IsZero() {
+		return cumQty
+	}
+	if lastQty.GreaterThan(decimal.Zero) {
+		return prior.Add(lastQty)
+	}
+	return prior
+}
+
+func insertExecution(ctx context.Context, tx pgx.Tx, orderID uuid.UUID, execID string, lastQty, lastPx, cumQty, leavesQty decimal.Decimal, adapterID string) (*domain.Execution, error) {
+	eid := uuid.New()
+	result, err := tx.Exec(ctx, `
+		INSERT INTO executions (id, order_id, exec_id, last_qty, last_px, cum_qty, leaves_qty, adapter_id)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT(exec_id) DO NOTHING`, eid, orderID, execID, lastQty, lastPx, cumQty, leavesQty, adapterID)
+	if err != nil {
+		return nil, err
+	}
+	if result.RowsAffected() == 0 {
+		var previousOrder uuid.UUID
+		var qty, px decimal.Decimal
+		if err := tx.QueryRow(ctx, `SELECT order_id,last_qty,last_px FROM executions WHERE exec_id=$1`, execID).Scan(&previousOrder, &qty, &px); err != nil {
+			return nil, err
+		}
+		if previousOrder != orderID || !qty.Equal(lastQty) || !px.Equal(lastPx) {
+			return nil, fmt.Errorf("conflicting execution ID %s", execID)
+		}
+		return nil, nil
+	}
+	ad := adapterID
+	return &domain.Execution{
+		ID: eid, OrderID: orderID, ExecID: execID, LastQty: lastQty, LastPx: lastPx,
+		CumQty: cumQty, LeavesQty: leavesQty, AdapterID: &ad, CreatedAt: time.Now().UTC(),
+	}, nil
 }

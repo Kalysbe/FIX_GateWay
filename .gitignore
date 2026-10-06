@@ -12,6 +12,7 @@ coverage.out
 .env.*.local
 !**/.env.example
 deploy/.env
+backend/certs/
 backend/.gateway_run.env
 
 # IDE / OS
@@ -27,3 +28,5 @@ backend/bin/
 **/fix-gateway-sessions/
 *.log
 gateway.out.log
+logs/
+artifacts/

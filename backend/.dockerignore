@@ -1,4 +1,8 @@
 bin/
+certs/
+.env
+.env.*
+*.key
 tmp/
 *.exe
 *.test

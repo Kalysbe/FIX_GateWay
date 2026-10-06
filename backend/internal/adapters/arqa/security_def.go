@@ -13,12 +13,15 @@ import (
 	"github.com/quickfixgo/tag"
 )
 
-func buildSecurityDefinitionRequest(reqID string) *quickfix.Message {
+func buildSecurityDefinitionRequest(reqID, board string) *quickfix.Message {
 	msg := quickfix.NewMessage()
 	msg.Header.SetField(tag.MsgType, field.NewMsgType(enum.MsgType_SECURITY_DEFINITION_REQUEST))
 	msg.Body.SetString(tag.SecurityReqID, reqID)
 	// ARQA HowTo / FIX: 3 = Request List Securities
 	msg.Body.SetString(tag.SecurityRequestType, string(enum.SecurityRequestType_REQUEST_LIST_SECURITIES))
+	if b := strings.TrimSpace(board); b != "" {
+		msg.Body.SetString(tag.ExDestination, b)
+	}
 	return msg
 }
 
@@ -45,7 +48,7 @@ func parseSecurityDefinitionMessage(msg *quickfix.Message) (reqID string, totalH
 				SecurityID:   firstNonEmpty(get(tag.UnderlyingSecurityID), get(tag.SecurityID), sym),
 				Board:        board,
 				Currency:     firstNonEmpty(get(tag.UnderlyingCurrency), get(tag.Currency)),
-				SecurityType: firstNonEmpty(get(tag.UnderlyingSecurityType), get(tag.SecurityType), "CS"),
+				SecurityType: firstNonEmpty(get(tag.UnderlyingSecurityType), get(tag.SecurityType)),
 				Name:         firstNonEmpty(get(tag.SecurityDesc), get(tag.UnderlyingSecurityDesc)),
 			})
 		}
@@ -75,9 +78,6 @@ func parseRelatedSymFromRaw(raw string) []domain.SecurityRef {
 		}
 		if cur.SecurityID == "" {
 			cur.SecurityID = sym
-		}
-		if cur.SecurityType == "" {
-			cur.SecurityType = "CS"
 		}
 		out = append(out, *cur)
 		cur = nil

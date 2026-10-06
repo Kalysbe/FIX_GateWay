@@ -10,6 +10,136 @@ info:
 servers:
   - url: http://localhost:8080
 paths:
+  /api/v1/admin/trading-limits/history:
+    get:
+      summary: Trading limit changes with before and after values
+      description: ADMIN, SUPER_ADMIN, OPERATOR or AUDITOR. Descending ID cursor keeps pages stable while new changes arrive.
+      security:
+        - bearerAuth: []
+      parameters:
+        - {in: query, name: broker_id, schema: {type: integer, format: int64, minimum: 0}, description: Zero selects the global policy; omit for all policies}
+        - {in: query, name: before_id, schema: {type: integer, format: int64, minimum: 1}}
+        - {in: query, name: limit, schema: {type: integer, minimum: 1, maximum: 100, default: 50}}
+      responses:
+        "200":
+          description: history containing actor_id, reason, before, after and created_at; next_before_id is null on the final page
+        "400":
+          description: Invalid filter or cursor
+        "403":
+          description: Role cannot read audit history
+  /api/v1/admin/trading-limits:
+    get:
+      summary: List global and broker trading limits
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Policies with broker_id, paused, max_quantity, max_open_orders and revision. broker_id=0 applies to every broker; open-order limits are per broker.
+    put:
+      summary: Update trading limits with an atomic history record
+      description: ADMIN or SUPER_ADMIN only. Global and broker policies both apply. Pause blocks new acceptance, keeps cancellations available and does not stop previously accepted orders. Empty limits are null. Existing policies require their current revision; new broker policies use revision=0.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [broker_id, paused, max_quantity, max_open_orders, revision, reason]
+              properties:
+                broker_id: {type: integer, format: int64, minimum: 0}
+                paused: {type: boolean}
+                max_quantity: {type: string, nullable: true, description: Positive decimal quantity; maximum 10000000000000000}
+                max_open_orders: {type: integer, nullable: true, minimum: 1, maximum: 1000000}
+                revision: {type: integer, format: int64, minimum: 0}
+                reason: {type: string, minLength: 3, maxLength: 1000}
+      responses:
+        "200":
+          description: Policy and history committed
+        "400":
+          description: Invalid policy or broker
+        "403":
+          description: Role cannot modify policies
+        "409":
+          description: Stale policy revision; reload before saving
+  /api/v1/admin/reconciliation:
+    get:
+      summary: List unresolved FIX outcomes and operator resolution history
+      description: Open cases are listed first. Evidence is a persisted applied FIX execution report; SENT or a QUIK order ID alone is insufficient.
+      security:
+        - bearerAuth: []
+      parameters:
+        - {in: query, name: order_id, schema: {type: string, format: uuid}}
+        - {in: query, name: limit, schema: {type: integer, minimum: 1, maximum: 500, default: 100}}
+      responses:
+        "200":
+          description: Cases with evidence_event_id and optional resolved_at, actor_id and note
+        "400":
+          description: Invalid filter
+  /api/v1/admin/reconciliation/{id}/resolve:
+    post:
+      summary: Close an uncertain queue outcome using persisted FIX evidence
+      description: OPERATOR, ADMIN or SUPER_ADMIN only. Atomically records operator, note, evidence and original error, then completes the queue event. Does not resend or modify the order. Cancel cases require a terminal execution report; cancel rejects need separate investigation.
+      security:
+        - bearerAuth: []
+      parameters:
+        - {in: path, name: id, required: true, schema: {type: integer, format: int64, minimum: 1}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [note]
+              properties:
+                note: {type: string, minLength: 1, maxLength: 2000}
+      responses:
+        "200":
+          description: Resolution committed
+        "400":
+          description: Invalid ID or note
+        "403":
+          description: Role cannot resolve cases
+        "409":
+          description: Case is already closed or conclusive evidence is absent
+  /api/v1/admin/rate-limits:
+    get:
+      summary: Effective rate limits and per-instance usage
+      description: Includes inherited broker category limits. Counters belong to individual admission layers, not final order acceptance.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Explicit policies, effective usage and operation names
+    put:
+      summary: Configure a rate limit without restarting Gateway
+      description: ADMIN or SUPER_ADMIN only. Broker subject is the numeric broker ID. Global and admin subjects are '*'. Changes and their before/after values are audited atomically. Parent limits continue to apply when an operation limit is disabled.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [scope, subject, operation, rate, burst, concurrent, enabled, reason]
+              properties:
+                scope: {type: string, enum: [global, broker, admin]}
+                subject: {type: string}
+                operation: {type: string}
+                rate: {type: integer, minimum: 1, maximum: 1000000}
+                burst: {type: integer, minimum: 1, maximum: 1000000}
+                concurrent: {type: integer, minimum: 1, maximum: 1000000}
+                enabled: {type: boolean}
+                reason: {type: string, minLength: 3, maxLength: 1000}
+      responses:
+        "200": {description: Policy saved and refreshed}
+        "400": {description: Invalid policy}
+        "403": {description: Administrator role required}
+        "503": {description: Policy saved but local refresh is pending}
   /health:
     get:
       summary: Liveness
@@ -180,6 +310,27 @@ paths:
                       $ref: "#/components/schemas/Instrument"
         "401":
           description: Unauthorized
+  /api/v1/orderbook:
+    get:
+      tags: [Broker]
+      summary: Live order book per instrument
+      security:
+        - bearerAuth: []
+      description: |
+        Requires `orders:read`. Visible bid/offer levels from FIX Market Data (full book).
+        Optional `symbol` and `board` filters.
+      parameters:
+        - in: query
+          name: symbol
+          schema:
+            type: string
+        - in: query
+          name: board
+          schema:
+            type: string
+      responses:
+        "200":
+          description: OK
   /api/v1/trades:
     get:
       tags: [Broker]
@@ -216,8 +367,10 @@ paths:
         в снимке QUIK (колонка «Фирма» / FIX PartyRole 13). Отдаются только позиции
         этой фирмы: инструменты (DL/FP) и деньги (ML). Чужие фирмы не возвращаются.
 
-        Это кэш последнего успешного Request For Positions, не live-стрим.
-        Если снимка ещё нет, `instruments` и `cash` пустые, в `note` будет пояснение.
+        Это кэш последнего успешного Request For Positions (`35=AN` → `35=AP`), не live-стрим.
+        PUT отправляет Position Maintenance Request (`35=AL`) в QUIK через FIX-адаптер
+        и после `35=AM` обновляет снимок через `AN`/`AP`. Если снимка ещё нет,
+        `instruments` и `cash` пустые, в `note` будет пояснение.
       responses:
         "200":
           description: OK
@@ -253,6 +406,155 @@ paths:
           description: Unauthorized
         "403":
           description: Missing `positions:read`
+    put:
+      tags: [Broker]
+      summary: Set cash and/or securities positions
+      security:
+        - bearerAuth: []
+      description: |
+        Requires `positions:write`.
+
+        Отправляет в QUIK Position Maintenance Request (`35=AL`, PosTransType=3,
+        PosMaintAction=2 Replace) с блоками ML (деньги) и/или DL (бумаги)
+        в разметке ARQA §2.33 (PosKey 5026/5027, PosItem 5029/5030).
+        Дожидается `35=AM` и обновляет снимок через `35=AN`/`35=AP`.
+        Фирма берётся из кода брокера.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SetPositionsRequest"
+            example:
+              client_code: kalys
+              account_code: "1-3101-2040"
+              cash:
+                - currency: KGS
+                  amount: "1500000"
+                  tag: EQTV
+              instruments:
+                - symbol: KG0105166315
+                  board: LISTEDSTOCKK
+                  quantity: "100"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SetPositionsResponse"
+        "400":
+          description: Validation error
+        "401":
+          description: Unauthorized
+        "403":
+          description: Missing `positions:write`
+  /api/v1/positions/cash:
+    put:
+      tags: [Broker]
+      summary: Set a cash (money) position
+      security:
+        - bearerAuth: []
+      description: Requires `positions:write`. Отправляет в QUIK `35=AL` (ML / CUR_BAL).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SetCashRequest"
+            example:
+              client_code: kalys
+              currency: KGS
+              amount: "1500000"
+              tag: EQTV
+      responses:
+        "200":
+          description: OK
+        "400":
+          description: Validation error
+        "401":
+          description: Unauthorized
+        "403":
+          description: Missing `positions:write`
+    delete:
+      tags: [Broker]
+      summary: Delete a cash position in QUIK
+      security:
+        - bearerAuth: []
+      description: Requires `positions:write`. `35=AL` PosMaintAction=3 Cancel, PosUpdateAction=2 Delete.
+      parameters:
+        - in: query
+          name: client_code
+          required: true
+          schema:
+            type: string
+        - in: query
+          name: currency
+          required: true
+          schema:
+            type: string
+        - in: query
+          name: tag
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Cleared
+        "404":
+          description: Position not found
+  /api/v1/positions/instruments:
+    put:
+      tags: [Broker]
+      summary: Set a securities position
+      security:
+        - bearerAuth: []
+      description: Requires `positions:write`. Отправляет в QUIK `35=AL` (DL / CUR_BAL).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SetInstrumentRequest"
+            example:
+              client_code: kalys
+              symbol: KG0105166315
+              board: LISTEDSTOCKK
+              quantity: "100"
+      responses:
+        "200":
+          description: OK
+        "400":
+          description: Validation error
+        "401":
+          description: Unauthorized
+        "403":
+          description: Missing `positions:write`
+    delete:
+      tags: [Broker]
+      summary: Delete a securities position in QUIK
+      security:
+        - bearerAuth: []
+      description: Requires `positions:write`. `35=AL` Cancel/Delete в QUIK.
+      parameters:
+        - in: query
+          name: client_code
+          required: true
+          schema:
+            type: string
+        - in: query
+          name: symbol
+          required: true
+          schema:
+            type: string
+        - in: query
+          name: board
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Cleared
+        "404":
+          description: Position not found
   /api/v1/admin/login:
     post:
       summary: Admin login
@@ -359,6 +661,25 @@ paths:
       responses:
         "201":
           description: Created
+  /api/v1/admin/tokens:
+    get:
+      tags: [Admin]
+      summary: List all API tokens
+      description: Flat inventory of tokens across brokers (`broker_id`, `broker_code`, `broker_name`).
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  tokens:
+                    type: array
+                    items:
+                      type: object
   /api/v1/admin/tokens/{id}/revoke:
     post:
       summary: Revoke token (idempotent)
@@ -473,10 +794,35 @@ paths:
       responses:
         "200":
           description: OK
+  /api/v1/admin/monitoring:
+    get:
+      tags: [Admin]
+      summary: Live gateway process and adapter counters
+      description: Process CPU seconds, RSS, Go heap and goroutines, database pool usage, outbox depth and per-adapter send attempt/error counters. Rates require consecutive samples. Remote adapter CPU and memory are not available.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Timestamped monitoring snapshot
+        "401":
+          description: Authentication required
+        "403":
+          description: Insufficient permissions
+  /api/v1/admin/monitoring/history:
+    get:
+      tags: [Admin]
+      summary: Ready-to-display Prometheus history for the last 10 minutes
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Series and adapter rates, refreshed every 15 seconds; recent cached data may be served during refresh
+        "503":
+          description: Prometheus unavailable or not configured
   /api/v1/admin/dashboard:
     get:
       tags: [Admin]
-      summary: Dashboard stats
+      summary: PostgreSQL dashboard snapshot with a shared 5-second server cache
       security:
         - bearerAuth: []
       responses:
@@ -532,9 +878,65 @@ paths:
         - bearerAuth: []
       parameters:
         - $ref: "#/components/parameters/BrokerID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                trading_account:
+                  type: string
+                  example: "1-3101-2040"
+                code:
+                  type: string
+                name:
+                  type: string
+                quik_firm:
+                  type: string
       responses:
         "201":
           description: Created
+        "409":
+          description: Account code or trading_account already exists
+  /api/v1/admin/brokers/{id}/accounts/{account_id}:
+    patch:
+      tags: [Admin]
+      summary: Update broker account (fields and ACTIVE/DISABLED)
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/BrokerID"
+        - in: path
+          name: account_id
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                trading_account:
+                  type: string
+                code:
+                  type: string
+                name:
+                  type: string
+                quik_firm:
+                  type: string
+                status:
+                  type: string
+                  enum: [ACTIVE, DISABLED]
+      responses:
+        "200":
+          description: Updated
+        "404":
+          description: Not found
+        "409":
+          description: Account code or trading_account already exists
   /api/v1/admin/brokers/{id}/ip-whitelist/{entry_id}:
     delete:
       tags: [Admin]
@@ -669,6 +1071,117 @@ paths:
       responses:
         "200":
           description: OK
+    put:
+      tags: [Admin]
+      summary: Set cash and/or securities positions
+      security:
+        - bearerAuth: []
+      description: |
+        SUPER_ADMIN / ADMIN. Отправляет `35=AL` в QUIK через FIX-адаптер и обновляет снимок `AN`/`AP`.
+        Фирма задаётся через `firm_id` или `broker_id`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SetPositionsRequest"
+      responses:
+        "200":
+          description: OK
+        "400":
+          description: Validation error
+  /api/v1/admin/positions/cash:
+    put:
+      tags: [Admin]
+      summary: Set a cash (money) position
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SetCashRequest"
+      responses:
+        "200":
+          description: OK
+    delete:
+      tags: [Admin]
+      summary: Clear a manual cash position
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: query
+          name: firm_id
+          schema:
+            type: string
+        - in: query
+          name: broker_id
+          schema:
+            type: integer
+        - in: query
+          name: client_code
+          required: true
+          schema:
+            type: string
+        - in: query
+          name: currency
+          required: true
+          schema:
+            type: string
+        - in: query
+          name: tag
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Cleared
+  /api/v1/admin/positions/instruments:
+    put:
+      tags: [Admin]
+      summary: Set a securities position
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SetInstrumentRequest"
+      responses:
+        "200":
+          description: OK
+    delete:
+      tags: [Admin]
+      summary: Clear a manual securities position
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: query
+          name: firm_id
+          schema:
+            type: string
+        - in: query
+          name: broker_id
+          schema:
+            type: integer
+        - in: query
+          name: client_code
+          required: true
+          schema:
+            type: string
+        - in: query
+          name: symbol
+          required: true
+          schema:
+            type: string
+        - in: query
+          name: board
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Cleared
   /api/v1/admin/positions/sync:
     post:
       tags: [Admin]
@@ -696,6 +1209,115 @@ paths:
       responses:
         "200":
           description: Sync result
+  /api/v1/admin/quik-api/settings:
+    get:
+      tags: [QUIK API]
+      summary: QUIK Module API base URL
+      description: |
+        Returns the origin of the internal QUIK Module API used as a proxy
+        (default `http://192.168.0.89:5000`). Operators can change the host from
+        the admin UI when the machine address changes.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Current origin
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QuikAPISettings"
+              example:
+                base_url: "http://192.168.0.89:5000"
+                default_base_url: "http://192.168.0.89:5000"
+    patch:
+      tags: [QUIK API]
+      summary: Update QUIK Module API base URL
+      description: |
+        Persist a new origin (`http://host:port`). Gateway then proxies
+        `/api/quotes` and later QUIK Module endpoints from that host.
+        Requires operator role or above.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/QuikAPISettingsUpdate"
+            example:
+              base_url: "http://192.168.0.89:5000"
+      responses:
+        "200":
+          description: Saved
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QuikAPISettings"
+        "400":
+          description: Invalid URL (only http/https origins)
+  /api/v1/admin/quik-api/quotes:
+    get:
+      tags: [QUIK API]
+      summary: Active QUIK quotes (orders)
+      description: |
+        Proxies `GET {base_url}/api/quotes` from the internal QUIK Module API.
+        Returns only active orders (`State = "Активна"`).
+        Fields: operation, order_num, class_code, sec_code, price, value, qty.
+        Optional query filters are forwarded upstream.
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: query
+          name: operation
+          schema:
+            type: string
+          description: Купля / Продажа
+        - in: query
+          name: order_num
+          schema:
+            type: string
+        - in: query
+          name: class_code
+          schema:
+            type: string
+          example: LIST_GBA
+        - in: query
+          name: sec_code
+          schema:
+            type: string
+        - in: query
+          name: price
+          schema:
+            type: string
+        - in: query
+          name: value
+          schema:
+            type: string
+        - in: query
+          name: qty
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Active quotes
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QuikAPIQuotesResponse"
+              example:
+                source: quik_api
+                base_url: "http://192.168.0.89:5000"
+                count: 1
+                quotes:
+                  - operation: Продажа
+                    order_num: "1793"
+                    class_code: LIST_GBA
+                    sec_code: GBA02280810
+                    price: "90.00000000"
+                    value: "90000000.00000000"
+                    qty: "1000000.00000000"
+        "502":
+          description: Upstream QUIK Module API unavailable
   /api/v1/admin/adapters/{id}:
     patch:
       tags: [Admin]
@@ -830,9 +1452,15 @@ paths:
           name: error_code
           schema:
             type: string
+        - in: query
+          name: include_total
+          schema:
+            type: string
+            enum: ["1"]
+          description: Optional. Full COUNT(*) is expensive and omitted unless set to 1.
       responses:
         "200":
-          description: Page of events (`logs`, `next_cursor`, `total`)
+          description: Page of events (`logs`, `next_cursor`; `total` only if include_total=1)
   /api/v1/admin/logs/{id}:
     get:
       tags: [Observability]
@@ -979,20 +1607,24 @@ paths:
       responses:
         "200":
           description: OK
-  /api/v1/admin/ws:
+  /api/v1/admin/events/stream:
     get:
       tags: [Observability]
-      summary: Admin WebSocket (query token=JWT)
-      description: Real-time `obs.event`, `notification.new`, `order.updated`, `adapter.status_changed`.
-      parameters:
-        - in: query
-          name: token
-          required: true
-          schema:
-            type: string
+      summary: Browser event stream backed by native TLS/mTLS gRPC
+      description: SSE adapter for RealtimeService.Stream. Events are filtered by current admin role. Send JWT in Authorization header. Reconnect and refresh REST state after disconnection; no replay.
+      security:
+        - bearerAuth: []
       responses:
-        "101":
-          description: Switching Protocols
+        "200":
+          description: Live events and heartbeat comments
+          content:
+            text/event-stream:
+              schema:
+                type: string
+        "401":
+          description: Invalid or revoked session
+        "503":
+          description: Native gRPC transport unavailable
 components:
   securitySchemes:
     bearerAuth:
@@ -1040,8 +1672,8 @@ components:
       schema:
         type: integer
         minimum: 1
-        maximum: 200
-        default: 20
+        maximum: 100
+        default: 25
     LogCursor:
       in: query
       name: cursor
@@ -1141,6 +1773,7 @@ components:
               - "orders:replace"
               - "trades:read"
               - "positions:read"
+              - "positions:write"
     BrokerAccount:
       type: object
       properties:
@@ -1251,6 +1884,10 @@ components:
           type: string
         settl_price:
           type: string
+        source:
+          type: string
+          enum: [fix, manual]
+          description: fix — из снимка QUIK; manual — задано через API
         keys:
           type: object
           additionalProperties:
@@ -1287,6 +1924,7 @@ components:
       properties:
         source:
           type: string
+          enum: [fix, manual, mixed]
           example: fix
         firm_id:
           type: string
@@ -1305,6 +1943,124 @@ components:
         note:
           type: string
           description: Пояснение, если снимка ещё нет
+    SetCashRequest:
+      type: object
+      required: [client_code, currency, amount]
+      properties:
+        firm_id:
+          type: string
+          description: Код фирмы. У брокера необязателен (берётся из токена).
+        broker_id:
+          type: integer
+          description: Только admin — альтернатива firm_id
+        client_code:
+          type: string
+          example: kalys
+        account_code:
+          type: string
+        currency:
+          type: string
+          example: KGS
+        tag:
+          type: string
+          description: Ключ денежной позиции (EQTV). Если пусто — currency.
+          example: EQTV
+        amount:
+          oneOf:
+            - type: string
+            - type: number
+          description: CUR_BAL
+          example: "1500000"
+        open_bal:
+          oneOf:
+            - type: string
+            - type: number
+        limit:
+          oneOf:
+            - type: string
+            - type: number
+          description: CUR_LIM
+        locked:
+          oneOf:
+            - type: string
+            - type: number
+    SetInstrumentRequest:
+      type: object
+      required: [client_code, symbol]
+      properties:
+        firm_id:
+          type: string
+        broker_id:
+          type: integer
+        client_code:
+          type: string
+        account_code:
+          type: string
+        symbol:
+          type: string
+          example: KG0105166315
+        security_id:
+          type: string
+        board:
+          type: string
+          example: LISTEDSTOCKK
+        currency:
+          type: string
+        quantity:
+          oneOf:
+            - type: string
+            - type: number
+          description: Нетто. Если нет — long_qty минус short_qty.
+          example: "100"
+        long_qty:
+          oneOf:
+            - type: string
+            - type: number
+        short_qty:
+          oneOf:
+            - type: string
+            - type: number
+        settl_price:
+          oneOf:
+            - type: string
+            - type: number
+    SetPositionsRequest:
+      type: object
+      required: [client_code]
+      properties:
+        firm_id:
+          type: string
+        broker_id:
+          type: integer
+        client_code:
+          type: string
+        account_code:
+          type: string
+        cash:
+          type: array
+          items:
+            $ref: "#/components/schemas/SetCashRequest"
+        instruments:
+          type: array
+          items:
+            $ref: "#/components/schemas/SetInstrumentRequest"
+    SetPositionsResponse:
+      type: object
+      properties:
+        ok:
+          type: boolean
+        firm_id:
+          type: string
+        cash:
+          type: array
+          items:
+            $ref: "#/components/schemas/Position"
+        instruments:
+          type: array
+          items:
+            $ref: "#/components/schemas/Position"
+        result:
+          $ref: "#/components/schemas/PositionsResponse"
     EmitentOrdersResponse:
       type: object
       properties:
@@ -1338,4 +2094,59 @@ components:
           items:
             type: object
             additionalProperties: true
+    QuikAPISettings:
+      type: object
+      properties:
+        base_url:
+          type: string
+          example: "http://192.168.0.89:5000"
+        default_base_url:
+          type: string
+          example: "http://192.168.0.89:5000"
+    QuikAPISettingsUpdate:
+      type: object
+      required: [base_url]
+      properties:
+        base_url:
+          type: string
+          description: Origin of the QUIK Module API (scheme + host + optional port)
+          example: "http://192.168.0.89:5000"
+    QuikAPIQuote:
+      type: object
+      properties:
+        operation:
+          type: string
+          example: Продажа
+        order_num:
+          type: string
+          example: "1793"
+        class_code:
+          type: string
+          example: LIST_GBA
+        sec_code:
+          type: string
+          example: GBA02280810
+        price:
+          type: string
+          example: "90.00000000"
+        value:
+          type: string
+          example: "90000000.00000000"
+        qty:
+          type: string
+          example: "1000000.00000000"
+    QuikAPIQuotesResponse:
+      type: object
+      properties:
+        source:
+          type: string
+          example: quik_api
+        base_url:
+          type: string
+        count:
+          type: integer
+        quotes:
+          type: array
+          items:
+            $ref: "#/components/schemas/QuikAPIQuote"
 

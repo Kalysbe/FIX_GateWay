@@ -1,6 +1,7 @@
 package observability
 
 import (
+	"net/url"
 	"regexp"
 	"strings"
 )
@@ -31,7 +32,12 @@ func RedactQuery(raw string) string {
 		if len(kv) != 2 {
 			continue
 		}
-		k := strings.ToLower(kv[0])
+		decoded, err := url.QueryUnescape(kv[0])
+		if err != nil {
+			parts[i] = "invalid=***"
+			continue
+		}
+		k := strings.ToLower(decoded)
 		if secretKey(k) {
 			parts[i] = kv[0] + "=***"
 		}
@@ -42,7 +48,7 @@ func RedactQuery(raw string) string {
 func secretKey(k string) bool {
 	k = strings.ToLower(strings.ReplaceAll(k, "-", "_"))
 	switch k {
-	case "authorization", "token", "access_token", "refresh_token", "password", "passwd",
+	case "authorization", "ticket", "token", "access_token", "refresh_token", "password", "passwd",
 		"secret", "api_token", "api_key", "private_key", "hmac", "jwt", "jwt_secret", "fix_password":
 		return true
 	}

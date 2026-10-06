@@ -7,8 +7,9 @@ const (
 	PermOrdersRead    = "orders:read"
 	PermOrdersCancel  = "orders:cancel"
 	PermOrdersReplace = "orders:replace"
-	PermTradesRead    = "trades:read"
-	PermPositionsRead = "positions:read"
+	PermTradesRead     = "trades:read"
+	PermPositionsRead  = "positions:read"
+	PermPositionsWrite = "positions:write"
 )
 
 var AllPermissions = []string{
@@ -18,6 +19,7 @@ var AllPermissions = []string{
 	PermOrdersReplace,
 	PermTradesRead,
 	PermPositionsRead,
+	PermPositionsWrite,
 }
 
 var ReadOnlyPermissions = []string{

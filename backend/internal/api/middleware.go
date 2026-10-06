@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -9,9 +10,10 @@ import (
 
 	"github.com/fix-gateway/backend/internal/audit"
 	"github.com/fix-gateway/backend/internal/auth"
+	"github.com/fix-gateway/backend/internal/brokers"
 	"github.com/fix-gateway/backend/internal/domain"
 	"github.com/fix-gateway/backend/internal/observability"
-	"github.com/fix-gateway/backend/internal/ratelimit"
+
 	"github.com/google/uuid"
 )
 
@@ -40,9 +42,11 @@ const (
 )
 
 type AdminPrincipal struct {
-	UserID   string
-	Email    string
-	RoleCode string
+	UserID      string
+	Email       string
+	RoleCode    string
+	UserVersion int64
+	ExpiresAt   time.Time
 }
 
 func BrokerFromContext(ctx context.Context) (domain.Broker, bool) {
@@ -84,15 +88,7 @@ func (s *Server) requireHTTPS(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		proto := r.Header.Get("X-Forwarded-Proto")
-		if proto == "" {
-			if r.TLS != nil {
-				proto = "https"
-			} else {
-				proto = "http"
-			}
-		}
-		if !strings.EqualFold(proto, "https") {
+		if observability.RequestProto(r, s.trusted) != "https" {
 			writeErr(w, http.StatusForbidden, "HTTPS required")
 			return
 		}
@@ -102,7 +98,7 @@ func (s *Server) requireHTTPS(next http.Handler) http.Handler {
 
 func (s *Server) brokerAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ip := clientIP(r)
+		ip, xff := s.clientIP(r)
 
 		if s.authFailLimiter.Blocked(ip) {
 			observability.AnnotateError(r, observability.AuthRateLimitExceeded, "too many failed authentication attempts", "auth")
@@ -123,6 +119,14 @@ func (s *Server) brokerAuth(next http.Handler) http.Handler {
 
 		b, tok, err := s.brokers.AuthenticateToken(r.Context(), raw, ip)
 		if err != nil {
+			if errors.Is(err, brokers.ErrAuthenticationUnavailable) {
+				writeErr(w, http.StatusServiceUnavailable, "authentication temporarily unavailable; request not accepted, retry later")
+				return
+			}
+			if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+				s.writeInternal(w, err)
+				return
+			}
 			var tid *uuid.UUID
 			var bid *int64
 			if tok.ID != uuid.Nil {
@@ -131,11 +135,15 @@ func (s *Server) brokerAuth(next http.Handler) http.Handler {
 			}
 			reason := err.Error()
 			if reason == "ip not allowed" {
-				s.recordAuthFail(r, ip, reason, tid, bid)
-				s.auditToken(r, "TOKEN_AUTH_FAILED", bid, tid, "denied", reason)
-				observability.AnnotateError(r, observability.AuthIPNotAllowed, reason, "auth")
-				s.emitAuth(r, observability.AuthIPNotAllowed, ip, bid, tid, reason)
-				writeErr(w, http.StatusForbidden, "ip not allowed")
+				msg := observability.IPNotAllowedMessage(ip, xff)
+				s.recordAuthFail(r, ip, msg, tid, bid)
+				s.auditToken(r, "TOKEN_AUTH_FAILED", bid, tid, "denied", msg)
+				if tok.ID != uuid.Nil {
+					observability.AnnotateBroker(r, b.ID, b.Code, b.Name, tok.ID)
+				}
+				observability.AnnotateError(r, observability.AuthIPNotAllowed, msg, "auth")
+				s.emitAuth(r, observability.AuthIPNotAllowed, ip, bid, tid, msg)
+				writeErr(w, http.StatusForbidden, msg)
 				return
 			}
 			s.authFailLimiter.Record(ip)
@@ -152,40 +160,20 @@ func (s *Server) brokerAuth(next http.Handler) http.Handler {
 			return
 		}
 
-		if s.cfg.HMACRequired || r.Header.Get("X-Signature") != "" {
+		if s.cfg.HMACRequired || r.Header.Get("X-Signature") != "" || r.Header.Get("X-Timestamp") != "" || r.Header.Get("X-Nonce") != "" {
 			if err := s.verifyOptionalHMAC(r, raw); err != nil {
 				bid := b.ID
 				tid := tok.ID
 				s.authFailLimiter.Record(ip)
 				s.recordAuthFail(r, ip, "hmac_failed", &tid, &bid)
 				s.auditToken(r, "TOKEN_AUTH_FAILED", &bid, &tid, "denied", "hmac_failed")
-				observability.AnnotateError(r, observability.AuthHMACFailed, "invalid signature", "auth")
-				s.emitAuth(r, observability.AuthHMACFailed, ip, &bid, &tid, "hmac_failed")
+				sub := observability.AuthHMACFailed
+				if errors.Is(err, auth.ErrNonceReplay) {
+					sub = observability.AuthNonceReplay
+				}
+				observability.AnnotateError(r, sub, "invalid signature", "auth")
+				s.emitAuth(r, sub, ip, &bid, &tid, "hmac_failed")
 				writeErr(w, http.StatusUnauthorized, "invalid signature")
-				return
-			}
-		}
-
-		rps := b.RateLimitRPS
-		if rps <= 0 {
-			rps = s.cfg.DefaultRateLimitRPS
-		}
-		reqKey := "req:" + tok.ID.String()
-		if lim, ok := s.brokerReqLimiters.Load(reqKey); ok {
-			if !lim.(*ratelimit.Limiter).Allow(reqKey) {
-				observability.AnnotateError(r, observability.AuthRateLimitExceeded, "rate limit exceeded", "auth")
-				s.emitAuth(r, observability.AuthRateLimitExceeded, ip, &b.ID, &tok.ID, "rate limit exceeded")
-				writeErr(w, http.StatusTooManyRequests, "rate limit exceeded")
-				return
-			}
-		} else {
-			lim := ratelimit.New(rps, rps)
-			s.brokerReqLimiters.Store(reqKey, lim)
-			if !lim.Allow(reqKey) {
-				observability.AnnotateBroker(r, b.ID, b.Code, b.Name, tok.ID)
-				observability.AnnotateError(r, observability.AuthRateLimitExceeded, "rate limit exceeded", "auth")
-				s.emitAuth(r, observability.AuthRateLimitExceeded, ip, &b.ID, &tok.ID, "rate limit exceeded")
-				writeErr(w, http.StatusTooManyRequests, "rate limit exceeded")
 				return
 			}
 		}
@@ -199,7 +187,7 @@ func (s *Server) brokerAuth(next http.Handler) http.Handler {
 		ctx = context.WithValue(ctx, ctxTokenID, tok.ID)
 		ctx = context.WithValue(ctx, ctxToken, tok)
 		ctx = context.WithValue(ctx, ctxPermissions, tok.Permissions)
-		next.ServeHTTP(w, r.WithContext(ctx))
+		s.admitBroker(next).ServeHTTP(w, r.WithContext(ctx))
 	})
 }
 
@@ -213,7 +201,8 @@ func (s *Server) requirePermission(perm string) func(http.Handler) http.Handler 
 				bid := b.ID
 				s.auditToken(r, "TOKEN_PERMISSION_DENIED", &bid, &tid, "denied", perm)
 				observability.AnnotateError(r, observability.AuthPermissionDenied, perm, "auth")
-				s.emitAuth(r, observability.AuthPermissionDenied, clientIP(r), &bid, &tid, perm)
+				ip, _ := s.clientIP(r)
+				s.emitAuth(r, observability.AuthPermissionDenied, ip, &bid, &tid, perm)
 				writeErr(w, http.StatusForbidden, "insufficient permissions")
 				return
 			}
@@ -222,42 +211,12 @@ func (s *Server) requirePermission(perm string) func(http.Handler) http.Handler 
 	}
 }
 
-func (s *Server) orderRateLimit(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		b, ok := BrokerFromContext(r.Context())
-		if !ok {
-			writeErr(w, http.StatusUnauthorized, "unauthorized")
-			return
-		}
-		tid, _ := TokenIDFromContext(r.Context())
-		ops := b.RateLimitOrdersPerSec
-		if ops <= 0 {
-			ops = s.cfg.DefaultOrderRateLimit
-		}
-		key := "ord:" + tid.String()
-		var lim *ratelimit.Limiter
-		if v, ok := s.brokerOrderLimiters.Load(key); ok {
-			lim = v.(*ratelimit.Limiter)
-		} else {
-			lim = ratelimit.New(ops, ops)
-			s.brokerOrderLimiters.Store(key, lim)
-		}
-		if !lim.Allow(key) {
-			observability.AnnotateError(r, observability.AuthRateLimitExceeded, "order rate limit exceeded", "auth")
-			s.emitAuth(r, observability.AuthRateLimitExceeded, clientIP(r), &b.ID, &tid, "order rate limit exceeded")
-			writeErr(w, http.StatusTooManyRequests, "order rate limit exceeded")
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
-}
-
 func (s *Server) verifyOptionalHMAC(r *http.Request, secret string) error {
 	sig := r.Header.Get("X-Signature")
 	ts := r.Header.Get("X-Timestamp")
 	nonce := r.Header.Get("X-Nonce")
 	if sig == "" || ts == "" || nonce == "" {
-		if s.cfg.HMACRequired {
+		if s.cfg.HMACRequired || sig != "" || ts != "" || nonce != "" {
 			return errHMAC("missing hmac headers")
 		}
 		return nil
@@ -265,11 +224,19 @@ func (s *Server) verifyOptionalHMAC(r *http.Request, secret string) error {
 	if err := auth.ValidateTimestamp(ts, 5*time.Minute); err != nil {
 		return err
 	}
-	body, _ := io.ReadAll(r.Body)
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		return errHMAC("body too large")
+	}
 	r.Body = io.NopCloser(strings.NewReader(string(body)))
-	payload := auth.BuildHMACPayload(ts, nonce, r.Method, r.URL.Path, string(body))
+	payload := auth.BuildHMACPayload(ts, nonce, r.Method, r.URL.RequestURI(), string(body))
 	if !auth.VerifyHMACSHA256(secret, payload, sig) {
 		return errHMAC("bad signature")
+	}
+	if s.hmacNonces != nil {
+		if err := s.hmacNonces.UseScoped(auth.HashToken(secret, "hmac-nonce"), nonce); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -301,7 +268,8 @@ func (s *Server) auditToken(r *http.Request, action string, brokerID *int64, tok
 	} else if tokenID != nil {
 		actorType = "broker"
 	}
-	_ = s.audit.Write(r.Context(), auditEntry(action, actorType, actorID, brokerID, entityID, clientIP(r), result, errMsg))
+	ip, _ := s.clientIP(r)
+	_ = s.audit.Write(r.Context(), auditEntry(action, actorType, actorID, brokerID, entityID, ip, result, errMsg))
 }
 
 func (s *Server) auditAuthSuccessThrottled(r *http.Request, brokerID *int64, tokenID *uuid.UUID) {
@@ -316,12 +284,15 @@ func (s *Server) auditAuthSuccessThrottled(r *http.Request, brokerID *int64, tok
 	}
 	s.authSuccessThrottle.Store(key, time.Now())
 	s.auditToken(r, "TOKEN_AUTH_SUCCESS", brokerID, tokenID, "ok", "")
-	s.emitAuth(r, observability.AuthSuccess, clientIP(r), brokerID, tokenID, "")
+	ip, _ := s.clientIP(r)
+	s.emitAuth(r, observability.AuthSuccess, ip, brokerID, tokenID, "")
 }
 
 func (s *Server) emitAuth(r *http.Request, subtype, ip string, brokerID *int64, tokenID *uuid.UUID, reason string) {
+	_, xff := s.clientIP(r)
 	e := observability.Event{
-		Type: observability.TypeAuth, Subtype: subtype, ClientIP: ip, Endpoint: r.URL.Path,
+		Type: observability.TypeAuth, Subtype: subtype, ClientIP: ip, ForwardedFor: xff,
+		UserAgent: r.UserAgent(), Endpoint: r.URL.Path,
 		HTTPMethod: r.Method, RequestID: observability.RequestIDFrom(r.Context()),
 		TraceID: observability.TraceIDFrom(r.Context()), BrokerID: brokerID, TokenID: tokenID,
 		Message: reason, ErrorCode: subtype, ErrorMessage: reason, FailureStage: "auth",
@@ -342,16 +313,57 @@ func (s *Server) adminAuth(next http.Handler) http.Handler {
 			writeErr(w, http.StatusUnauthorized, "missing bearer token")
 			return
 		}
-		claims, err := auth.ParseAdminJWT(s.cfg.JWTSecret, raw)
+		claims, err := s.users.AuthenticateSession(r.Context(), s.cfg.JWTSecret, raw)
 		if err != nil {
+			if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+				s.writeInternal(w, err)
+				return
+			}
 			writeErr(w, http.StatusUnauthorized, "invalid token")
 			return
 		}
 		ctx := context.WithValue(r.Context(), ctxAdmin, AdminPrincipal{
-			UserID: claims.UserID, Email: claims.Email, RoleCode: claims.RoleCode,
+			UserID: claims.UserID, Email: claims.Email, RoleCode: claims.RoleCode, UserVersion: claims.UserVersion, ExpiresAt: claims.ExpiresAt.Time,
 		})
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
+}
+
+func (s *Server) requireAdminRole(roles ...string) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			admin, ok := AdminFromContext(r.Context())
+			if !ok {
+				writeErr(w, http.StatusUnauthorized, "unauthorized")
+				return
+			}
+			if !auth.HasAnyRole(admin.RoleCode, roles...) {
+				writeErr(w, http.StatusForbidden, "insufficient role")
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+func (s *Server) adminRO(h http.HandlerFunc) http.Handler {
+	return s.adminAuth(s.requireAdminRole(auth.RolesAll...)(h))
+}
+
+func (s *Server) adminWrite(h http.HandlerFunc) http.Handler {
+	return s.adminAuth(s.requireAdminRole(auth.RolesWrite...)(h))
+}
+
+func (s *Server) adminOps(h http.HandlerFunc) http.Handler {
+	return s.adminAuth(s.requireAdminRole(auth.RolesOps...)(h))
+}
+
+func (s *Server) adminAudit(h http.HandlerFunc) http.Handler {
+	return s.adminAuth(s.requireAdminRole(auth.RolesAudit...)(h))
+}
+
+func (s *Server) adminUsers(h http.HandlerFunc) http.Handler {
+	return s.adminAuth(s.requireAdminRole(auth.RolesUsers...)(h))
 }
 
 func bearer(r *http.Request) string {
@@ -366,20 +378,6 @@ func bearer(r *http.Request) string {
 	return strings.TrimSpace(parts[1])
 }
 
-func clientIP(r *http.Request) string {
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		return strings.TrimSpace(strings.Split(xff, ",")[0])
-	}
-	host := r.RemoteAddr
-	if i := strings.LastIndex(host, ":"); i >= 0 {
-		// handle host:port and [ipv6]:port
-		if strings.Count(host, ":") == 1 || strings.HasPrefix(host, "[") {
-			return strings.Trim(host[:i], "[]")
-		}
-	}
-	return host
-}
-
 func (s *Server) cors(next http.Handler) http.Handler {
 	allowed := map[string]bool{}
 	for _, o := range s.cfg.CORSOrigins {
@@ -392,11 +390,14 @@ func (s *Server) cors(next http.Handler) http.Handler {
 			w.Header().Set("Vary", "Origin")
 			w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Timestamp, X-Nonce, X-Signature, X-Request-ID, X-Trace-ID")
 			w.Header().Set("Access-Control-Allow-Methods", "GET,POST,PATCH,DELETE,OPTIONS")
-			w.Header().Set("Access-Control-Expose-Headers", "X-Request-ID, X-Trace-ID")
+			w.Header().Set("Access-Control-Expose-Headers", "X-Request-ID, X-Trace-ID, Retry-After")
 		}
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("Referrer-Policy", "no-referrer")
+		if observability.RequestProto(r, s.trusted) == "https" {
+			w.Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+		}
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
 			return

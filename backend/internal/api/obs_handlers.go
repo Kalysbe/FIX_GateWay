@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"strconv"
@@ -83,10 +84,13 @@ func (s *Server) listLogs(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"logs": []any{}, "next_cursor": nil})
 		return
 	}
-	f := s.parseLogFilter(r)
+	s.writeLogList(w, r, s.parseLogFilter(r))
+}
+
+func (s *Server) writeLogList(w http.ResponseWriter, r *http.Request, f observability.Filter) {
 	list, more, err := s.obs.Store().List(r.Context(), f)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
+		s.writeInternal(w, err)
 		return
 	}
 	var next any
@@ -94,8 +98,18 @@ func (s *Server) listLogs(w http.ResponseWriter, r *http.Request) {
 		last := list[len(list)-1]
 		next = observability.EncodeCursor(last.Timestamp, last.ID)
 	}
-	total, _ := s.obs.Store().Count(r.Context(), f)
-	writeJSON(w, http.StatusOK, map[string]any{"logs": list, "next_cursor": next, "total": total})
+	out := map[string]any{"logs": list, "next_cursor": next}
+	if r.URL.Query().Get("include_total") == "1" {
+		cf := f
+		cf.CursorTS = time.Time{}
+		cf.CursorID = uuid.Nil
+		ctx, cancel := context.WithTimeout(r.Context(), 1500*time.Millisecond)
+		defer cancel()
+		if total, err := s.obs.Store().Count(ctx, cf); err == nil {
+			out["total"] = total
+		}
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 func (s *Server) getLog(w http.ResponseWriter, r *http.Request) {
@@ -124,18 +138,7 @@ func (s *Server) listBrokerLogs(w http.ResponseWriter, r *http.Request) {
 	}
 	f := s.parseLogFilter(r)
 	f.BrokerID = &id
-	list, more, err := s.obs.Store().List(r.Context(), f)
-	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	var next any
-	if more && len(list) > 0 {
-		last := list[len(list)-1]
-		next = observability.EncodeCursor(last.Timestamp, last.ID)
-	}
-	total, _ := s.obs.Store().Count(r.Context(), f)
-	writeJSON(w, http.StatusOK, map[string]any{"logs": list, "next_cursor": next, "total": total})
+	s.writeLogList(w, r, f)
 }
 
 func (s *Server) listErrors(w http.ResponseWriter, r *http.Request) {
@@ -159,7 +162,7 @@ func (s *Server) listWithFilter(w http.ResponseWriter, r *http.Request, f observ
 	}
 	list, more, err := s.obs.Store().List(r.Context(), f)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
+		s.writeInternal(w, err)
 		return
 	}
 	var next any
@@ -200,7 +203,7 @@ func (s *Server) listNotifications(w http.ResponseWriter, r *http.Request) {
 	list, unread, total, err := s.obs.Store().ListNotifications(r.Context(), unreadOnly, limit, offset)
 	if err != nil {
 		observability.AnnotateError(r, observability.ErrDatabase, err.Error(), "observability")
-		writeErr(w, http.StatusInternalServerError, err.Error())
+		s.writeInternal(w, err)
 		return
 	}
 	page = offset/limit + 1
@@ -226,7 +229,7 @@ func (s *Server) readNotification(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.obs.Store().MarkNotificationRead(r.Context(), id); err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
+		s.writeInternal(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
@@ -256,7 +259,7 @@ func (s *Server) brokerStatistics(w http.ResponseWriter, r *http.Request) {
 	}
 	st, err := s.obs.Store().BrokerStatistics(r.Context(), id, from, trunc)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
+		s.writeInternal(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"statistics": st})
@@ -270,7 +273,7 @@ func (s *Server) brokerStatisticsPeriod(w http.ResponseWriter, r *http.Request, 
 	}
 	st, err := s.obs.Store().BrokerStatistics(r.Context(), id, from, trunc)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
+		s.writeInternal(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"statistics": st, "series": st.Series})
@@ -308,7 +311,7 @@ func (s *Server) exportLogs(w http.ResponseWriter, r *http.Request) {
 		}
 		job, err := s.obs.StartExport(r.Context(), adminID, format, f)
 		if err != nil {
-			writeErr(w, http.StatusInternalServerError, err.Error())
+			s.writeInternal(w, err)
 			return
 		}
 		writeJSON(w, http.StatusAccepted, map[string]any{"job": job, "async": true})
@@ -373,7 +376,7 @@ func (s *Server) orderTrace(w http.ResponseWriter, r *http.Request) {
 	f := observability.Filter{OrderID: &id, Limit: 200}
 	list, _, err := s.obs.Store().List(r.Context(), f)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
+		s.writeInternal(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"events": list})
@@ -422,10 +425,7 @@ func toMap(v any) map[string]any {
 }
 
 func (s *Server) clientIP(r *http.Request) (string, string) {
-	if s.obs != nil {
-		return observability.ClientIP(r, observability.ParseTrustedProxies(s.cfg.TrustedProxies))
-	}
-	return clientIP(r), r.Header.Get("X-Forwarded-For")
+	return observability.ClientIP(r, s.trusted)
 }
 
 func fmtInt(n int64) string { return strconv.FormatInt(n, 10) }

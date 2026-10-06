@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-// HMAC helpers prepare the gateway for request signing without requiring it for MVP.
+// HMAC signs the exact escaped request-target, including the raw query string.
 // Expected headers when enabled:
 //   X-Timestamp — unix seconds
 //   X-Nonce     — unique request nonce

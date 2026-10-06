@@ -3,13 +3,15 @@ package main
 import (
 	"context"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
-	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
+	pb "github.com/fix-gateway/backend/gen/realtime/v1"
 	"github.com/fix-gateway/backend/internal/adapters"
 	"github.com/fix-gateway/backend/internal/admin"
 	"github.com/fix-gateway/backend/internal/api"
@@ -17,7 +19,9 @@ import (
 	"github.com/fix-gateway/backend/internal/brokers"
 	"github.com/fix-gateway/backend/internal/config"
 	"github.com/fix-gateway/backend/internal/domain"
+	"github.com/fix-gateway/backend/internal/grpcstream"
 	"github.com/fix-gateway/backend/internal/marketdata"
+	"github.com/fix-gateway/backend/internal/metrics"
 	"github.com/fix-gateway/backend/internal/observability"
 	"github.com/fix-gateway/backend/internal/orders"
 	"github.com/fix-gateway/backend/internal/outbox"
@@ -26,14 +30,21 @@ import (
 	"github.com/fix-gateway/backend/internal/platform/migrate"
 	"github.com/fix-gateway/backend/internal/positions"
 	"github.com/fix-gateway/backend/internal/quikexport"
+	"github.com/fix-gateway/backend/internal/ratelimit"
 	"github.com/fix-gateway/backend/internal/realtime"
 	"github.com/fix-gateway/backend/internal/refdata"
 	"github.com/fix-gateway/backend/internal/routing"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/keepalive"
 )
 
 func main() {
 	cfg := config.Load()
 	log := logx.New()
+	if err := cfg.Validate(); err != nil {
+		log.Error("invalid production config", "error", err)
+		os.Exit(1)
+	}
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
@@ -109,10 +120,20 @@ func main() {
 				server.OnExecution(report)
 			}
 		},
-		filepath.Join(os.TempDir(), "fix-gateway-sessions"),
+		cfg.FIXSessionDir,
 		cfg.HealthInterval,
 	)
 	manager.SetHostOverride(cfg.AdapterHostOverride)
+	hub.MarketDataSnapshot = func() any {
+		_, quotes, ok := manager.LiveQuotes()
+		if !ok {
+			return nil
+		}
+		for i := range quotes {
+			quotes[i].RawFIX = ""
+		}
+		return map[string]any{"quotes": quotes}
+	}
 	manager.SetMarketDataListener(func(quotes []domain.MarketQuote) {
 		slim := make([]domain.MarketQuote, len(quotes))
 		for i, q := range quotes {
@@ -167,7 +188,50 @@ func main() {
 	})
 
 	server = api.NewServer(cfg, log, pool, brokerStore, orderSvc, orderStore, adapterStore, manager, outboxStore, auditStore, users, hub, obs)
+	go server.RunDashboardRefresh(ctx)
 	server.SetQuikExport(quikExportStore)
+	admission := ratelimit.NewAdmissionWithCapacity(int64(cfg.RateLimitMaxStates))
+	rateStore := &ratelimit.Store{Pool: pool, Admission: admission, DefaultRead: cfg.DefaultRateLimitRPS, DefaultTrade: cfg.DefaultOrderRateLimit}
+	if err := rateStore.Refresh(ctx); err != nil {
+		log.Error("rate limit configuration unavailable", "error", err)
+		os.Exit(1)
+	}
+	server.SetAdmission(rateStore)
+	metrics.RegisterAdmission(admission)
+	go rateStore.Run(ctx, func(err error) { log.Warn("rate limit refresh failed; retaining previous policies", "error", err) })
+
+	grpcCreds, err := grpcstream.ServerCredentials(cfg.GRPCCertFile, cfg.GRPCKeyFile, cfg.GRPCCAFile, cfg.GRPCRequireClientCert)
+	if err != nil {
+		log.Error("gRPC TLS configuration failed; provision certificates", "error", err)
+		os.Exit(1)
+	}
+	clientCreds, err := grpcstream.ClientCredentials(cfg.GRPCClientCertFile, cfg.GRPCClientKeyFile, cfg.GRPCCAFile, cfg.GRPCServerName)
+	if err != nil {
+		log.Error("gRPC bridge TLS configuration failed", "error", err)
+		os.Exit(1)
+	}
+	grpcListener, err := net.Listen("tcp", cfg.GRPCAddr)
+	if err != nil {
+		log.Error("gRPC listen failed", "error", err)
+		os.Exit(1)
+	}
+	grpcServer := grpc.NewServer(grpc.Creds(grpcCreds), grpc.MaxRecvMsgSize(16<<10), grpc.MaxSendMsgSize(8<<20), grpc.MaxConcurrentStreams(128), grpc.KeepaliveParams(keepalive.ServerParameters{MaxConnectionIdle: 2 * time.Minute, Time: time.Minute, Timeout: 10 * time.Second}))
+	pb.RegisterRealtimeServiceServer(grpcServer, &grpcstream.Service{Hub: hub, Users: users, JWTSecret: cfg.JWTSecret, Admission: admission, Log: log})
+	go func() {
+		log.Info("gRPC realtime listening", "addr", cfg.GRPCAddr, "mtls", cfg.GRPCRequireClientCert)
+		if err := grpcServer.Serve(grpcListener); err != nil {
+			log.Error("gRPC serve failed", "error", err)
+			cancel()
+		}
+	}()
+	defer grpcServer.Stop()
+	grpcConn, err := grpc.NewClient(cfg.GRPCTarget, grpc.WithTransportCredentials(clientCreds), grpc.WithDefaultCallOptions(grpc.MaxCallRecvMsgSize(8<<20)))
+	if err != nil {
+		log.Error("gRPC bridge connection failed", "error", err)
+		os.Exit(1)
+	}
+	defer grpcConn.Close()
+	server.SetRealtimeClient(pb.NewRealtimeServiceClient(grpcConn))
 
 	if err := manager.StartAll(ctx); err != nil {
 		log.Error("adapter manager start failed", "error", err)
@@ -175,16 +239,20 @@ func main() {
 
 	go syncInstrumentsAfterLogon(ctx, log, manager, refStore)
 	go syncPositionsLoop(ctx, log, manager, positions.NewStore(pool), hub, cfg.PositionSyncInterval)
-	go syncMarketDataLoop(ctx, log, manager, marketdata.NewStore(pool), refStore, hub, cfg.MarketDataSyncInterval)
+	go syncMarketDataLoop(ctx, log, manager, marketdata.NewStore(pool), refStore, hub, cfg.MarketDataSyncInterval, cfg.MarketDataBoards)
 
 	worker := outbox.NewWorker(outboxStore, orderStore, manager, log, cfg.WorkerID, cfg.OutboxPollInterval, cfg.OutboxBatchSize)
 	worker.SetObserver(obs)
+	orderSvc.SetQueueNotifier(worker.Notify)
 	go worker.Run(ctx)
 
 	httpServer := &http.Server{
 		Addr:              cfg.HTTPAddr,
 		Handler:           server.Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		IdleTimeout:       120 * time.Second,
+		MaxHeaderBytes:    1 << 16,
 	}
 	go func() {
 		log.Info("gateway listening", "addr", cfg.HTTPAddr)
@@ -198,6 +266,7 @@ func main() {
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer shutdownCancel()
 	_ = httpServer.Shutdown(shutdownCtx)
+	grpcServer.Stop()
 	manager.StopAll(shutdownCtx)
 	log.Info("gateway stopped")
 }
@@ -263,7 +332,7 @@ func syncPositionsLoop(ctx context.Context, log *slog.Logger, manager *adapters.
 			log.Warn("background FIX position sync failed", "error", err)
 			return
 		}
-		log.Info("positions synced via FIX", "adapter_id", adapterID, "pos_req_id", reqID, "received", count)
+		log.Debug("positions synced via FIX", "adapter_id", adapterID, "pos_req_id", reqID, "received", count)
 		hub.Broadcast("positions.updated", map[string]any{
 			"adapter_id": adapterID, "pos_req_id": reqID, "received": count,
 		})
@@ -282,7 +351,7 @@ func syncPositionsLoop(ctx context.Context, log *slog.Logger, manager *adapters.
 	}
 }
 
-func syncMarketDataLoop(ctx context.Context, log *slog.Logger, manager *adapters.Manager, store *marketdata.Store, refStore *refdata.Store, hub *realtime.Hub, interval time.Duration) {
+func syncMarketDataLoop(ctx context.Context, log *slog.Logger, manager *adapters.Manager, store *marketdata.Store, refStore *refdata.Store, hub *realtime.Hub, interval time.Duration, boards []string) {
 	if interval <= 0 {
 		interval = 15 * time.Second
 	}
@@ -298,20 +367,52 @@ func syncMarketDataLoop(ctx context.Context, log *slog.Logger, manager *adapters
 		}
 	}
 
-	subscribe := func() bool {
+	if manager.AvailableCount() == 0 {
+		log.Warn("FIX market data subscribe: no online adapters yet")
+	}
+
+	// Wait until Security Definition has upserted configured classes (LIST_GBA).
+	waitUntil := time.Now().Add(25 * time.Second)
+	for time.Now().Before(waitUntil) {
 		list, err := refStore.ListActiveInstruments(ctx)
-		if err != nil || len(list) == 0 {
-			log.Info("market data subscribe skipped: no instruments yet")
-			return false
+		if err == nil {
+			have := map[string]bool{}
+			for _, it := range list {
+				have[strings.ToUpper(strings.TrimSpace(it.Board))] = true
+			}
+			ready := true
+			for _, b := range boards {
+				if !have[strings.ToUpper(b)] {
+					ready = false
+					break
+				}
+			}
+			if ready {
+				break
+			}
 		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(500 * time.Millisecond):
+		}
+	}
+
+	subscribe := func() bool {
 		syncCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()
-		adapterID, reqID, items, err := manager.SubscribeMarketData(syncCtx, domain.MarketDataQuery{Instruments: list})
+		// ARQA rejects empty 35=V. Dictionary covers LISTEDSTOCKK; remaining
+		// configured classes (LIST_GBA) go as 22=8|48=*|100=board.
+		q := domain.MarketDataQuery{Boards: boards}
+		if list, listErr := refStore.ListActiveInstruments(ctx); listErr == nil && len(list) > 0 {
+			q.Instruments = list
+		}
+		adapterID, reqID, items, err := manager.SubscribeMarketData(syncCtx, q)
 		if err != nil {
 			log.Warn("FIX market data subscribe failed", "error", err)
 			return false
 		}
-		log.Info("market data subscribed via FIX", "adapter_id", adapterID, "md_req_id", reqID, "quotes", len(items))
+		log.Debug("market data subscribed via FIX", "adapter_id", adapterID, "md_req_id", reqID, "quotes", len(items))
 		if len(items) > 0 {
 			hub.Broadcast("marketdata.tick", map[string]any{"quotes": items})
 			snapID, err := store.BeginSnapshot(syncCtx, adapterID, reqID)

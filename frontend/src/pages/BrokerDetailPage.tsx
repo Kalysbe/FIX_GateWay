@@ -1,22 +1,29 @@
-import { FormEvent, useEffect, useMemo, useState, type ReactElement, type ReactNode } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api";
-import { formatDate, formatDateTime, formatMs, formatNumber, formatPct, formatTime } from "../labels";
+import { formatDate, formatDateTime, formatTime } from "../labels";
+import { liveRefetchInterval } from "../lib/poll";
+import { useAdminStream } from "../hooks/useAdminStream";
 import { Icons } from "../components/icons";
 import { StatusBadge } from "../components/StatusBadge";
 import { useBreadcrumbs } from "../components/breadcrumbs";
+import { Modal } from "../components/Modal";
+import { ErrorBanner, PageSpinner } from "../components/feedback";
+import { ALL_PERMS, READ_ONLY_PERMS, type APIToken, type AuditRow, type Broker, type BrokerAccount, type IPWhitelistEntry, type ObsLog } from "../types/admin";
+import {
+  ActivityList,
+  BrokerActivity,
+  DetailRow,
+  Metric,
+  PERM_ICON,
+  RequestChart,
+  SummaryChip,
+  pctDelta,
+  type BrokerAPIStats,
+} from "./broker/widgets";
 
-const ALL_PERMS = [
-  "orders:create",
-  "orders:read",
-  "orders:cancel",
-  "orders:replace",
-  "trades:read",
-  "positions:read",
-] as const;
-
-const READ_ONLY = ["orders:read", "trades:read", "positions:read"];
+const READ_ONLY = READ_ONLY_PERMS;
 
 const TABS = [
   { id: "overview", label: "Обзор" },
@@ -32,51 +39,6 @@ const TABS = [
 
 type TabId = (typeof TABS)[number]["id"];
 
-type Token = {
-  id: string;
-  name: string;
-  description?: string;
-  status: string;
-  token_prefix: string;
-  quik_firm?: string;
-  permissions: string[];
-  created_at: string;
-  expires_at?: string;
-  last_used_at?: string;
-  last_used_ip?: string;
-};
-
-type AuditRow = {
-  id: number;
-  action: string;
-  result?: string | null;
-  error?: string | null;
-  ip?: string | null;
-  broker_id?: number | null;
-  created_at: string;
-};
-
-type BrokerAPIStats = {
-  today: { requests: number; successful: number; errors: number; success_rate: number; avg_latency_ms: number; p95_latency_ms: number; p99_latency_ms: number };
-  week: { requests: number; successful: number; errors: number; success_rate: number; avg_latency_ms: number; p95_latency_ms: number; p99_latency_ms: number };
-  month: { requests: number; successful: number; errors: number; success_rate: number; avg_latency_ms: number; p95_latency_ms: number; p99_latency_ms: number };
-  last_activity?: string;
-  top_errors?: Array<{ error: string; count: number; last_occurrence: string }>;
-  series?: Array<{ bucket: string; requests: number; successful: number; errors: number }>;
-};
-
-type ObsLog = {
-  id: string;
-  timestamp: string;
-  type: string;
-  subtype: string;
-  severity: string;
-  error_code?: string;
-  message?: string;
-  client_ip?: string;
-  endpoint?: string;
-};
-
 type BrokerStatsDTO = {
   days: number;
   today: { orders: number; filled: number; rejected: number; active: number };
@@ -85,52 +47,79 @@ type BrokerStatsDTO = {
   series: Array<{ date: string; orders: number }>;
 };
 
-const PERM_ICON: Record<string, (p: { size?: number; className?: string }) => ReactElement> = {
-  "orders:create": Icons.cart,
-  "orders:read": Icons.eye,
-  "orders:cancel": Icons.x,
-  "orders:replace": Icons.refresh,
-  "trades:read": Icons.book,
-  "positions:read": Icons.chart,
-};
-
 export default function BrokerDetailPage() {
   const { id } = useParams();
   const [params, setParams] = useSearchParams();
   const tab = (params.get("tab") as TabId) || "tokens";
   const qc = useQueryClient();
+  const { connected } = useAdminStream();
 
-  const broker = useQuery({ queryKey: ["broker", id], queryFn: () => api<any>(`/api/v1/admin/brokers/${id}`) });
-  const accounts = useQuery({ queryKey: ["accounts", id], queryFn: () => api<any>(`/api/v1/admin/brokers/${id}/accounts`) });
-  const security = useQuery({ queryKey: ["security", id], queryFn: () => api<any>(`/api/v1/admin/brokers/${id}/security`) });
-  const tokens = useQuery({ queryKey: ["tokens", id], queryFn: () => api<{ tokens: Token[] }>(`/api/v1/admin/brokers/${id}/tokens`) });
-  const whitelist = useQuery({ queryKey: ["ipwl", id], queryFn: () => api<any>(`/api/v1/admin/brokers/${id}/ip-whitelist`) });
-  const audit = useQuery({ queryKey: ["audit"], queryFn: () => api<{ audit: AuditRow[] }>("/api/v1/admin/audit") });
+  const broker = useQuery({
+    queryKey: ["broker", id],
+    queryFn: ({ signal }) => api<{ broker: Broker }>(`/api/v1/admin/brokers/${id}`, { signal }),
+  });
+  const accounts = useQuery({
+    queryKey: ["accounts", id],
+    queryFn: ({ signal }) => api<{ accounts: BrokerAccount[] }>(`/api/v1/admin/brokers/${id}/accounts`, { signal }),
+  });
+  const security = useQuery({
+    queryKey: ["security", id],
+    queryFn: ({ signal }) =>
+      api<{ security: { active_tokens?: number; revoked_tokens?: number; failed_auth_attempts_24h?: number } }>(
+        `/api/v1/admin/brokers/${id}/security`,
+        { signal },
+      ),
+  });
+  const tokens = useQuery({
+    queryKey: ["tokens", id],
+    queryFn: ({ signal }) => api<{ tokens: APIToken[] }>(`/api/v1/admin/brokers/${id}/tokens`, { signal }),
+    enabled: tab === "tokens" || tab === "overview" || tab === "rights",
+  });
+  const whitelist = useQuery({
+    queryKey: ["ipwl", id],
+    queryFn: ({ signal }) =>
+      api<{ entries: IPWhitelistEntry[]; ip_whitelist_enabled?: boolean }>(`/api/v1/admin/brokers/${id}/ip-whitelist`, { signal }),
+    enabled: tab === "ip" || tab === "tokens" || tab === "overview",
+  });
+  const audit = useQuery({
+    queryKey: ["audit"],
+    queryFn: ({ signal }) => api<{ audit: AuditRow[] }>("/api/v1/admin/audit", { signal }),
+    enabled: tab === "history" || tab === "overview",
+  });
   const [statsDays, setStatsDays] = useState(7);
   const brokerStats = useQuery({
     queryKey: ["broker-stats", id, statsDays],
-    queryFn: () => api<{ stats: BrokerStatsDTO }>(`/api/v1/admin/brokers/${id}/stats?days=${statsDays}`),
-    refetchInterval: 15000,
+    queryFn: ({ signal }) => api<{ stats: BrokerStatsDTO }>(`/api/v1/admin/brokers/${id}/stats?days=${statsDays}`, { signal }),
+    refetchInterval: liveRefetchInterval(connected, 15000),
+    enabled: tab === "tokens" || tab === "overview" || tab === "stats",
   });
   const [apiRange, setApiRange] = useState("24h");
   const apiStats = useQuery({
     queryKey: ["broker-api-stats", id, apiRange],
-    queryFn: () => api<{ statistics: BrokerAPIStats }>(`/api/v1/admin/brokers/${id}/statistics?range=${apiRange}`),
-    refetchInterval: 15000,
+    queryFn: ({ signal }) =>
+      api<{ statistics: BrokerAPIStats }>(`/api/v1/admin/brokers/${id}/statistics?range=${apiRange}`, { signal }),
+    refetchInterval: liveRefetchInterval(connected, 15000),
+    enabled: tab === "activity",
   });
   const brokerLogs = useQuery({
     queryKey: ["broker-logs", id],
-    queryFn: () => api<{ logs: ObsLog[] }>(`/api/v1/admin/brokers/${id}/logs?limit=30`),
-    refetchInterval: 8000,
+    queryFn: ({ signal }) => api<{ logs: ObsLog[] }>(`/api/v1/admin/brokers/${id}/logs?limit=30`, { signal }),
+    refetchInterval: liveRefetchInterval(connected, 8000),
+    enabled: tab === "logs",
   });
   const brokerErrors = useQuery({
     queryKey: ["broker-errors", id],
-    queryFn: () => api<{ logs: ObsLog[] }>(`/api/v1/admin/brokers/${id}/logs?kind=errors&limit=8`),
-    refetchInterval: 8000,
+    queryFn: ({ signal }) => api<{ logs: ObsLog[] }>(`/api/v1/admin/brokers/${id}/logs?kind=errors&limit=8`, { signal }),
+    refetchInterval: liveRefetchInterval(connected, 8000),
   });
 
-  const [accCode, setAccCode] = useState("001");
-  const [tradingAccount, setTradingAccount] = useState("L01+00000F00");
+  const emptyAccountForm = { trading_account: "", code: "", name: "", quik_firm: "" };
+  const [accountForm, setAccountForm] = useState(emptyAccountForm);
+  const [accountError, setAccountError] = useState("");
+  const [accountListError, setAccountListError] = useState("");
+  const [accountBusy, setAccountBusy] = useState(false);
+  const [showAccountForm, setShowAccountForm] = useState(false);
+  const [editingAccount, setEditingAccount] = useState<BrokerAccount | null>(null);
   const [showCreate, setShowCreate] = useState(false);
   const [tokenName, setTokenName] = useState("Production API");
   const [quikFirm, setQuikFirm] = useState("");
@@ -139,17 +128,21 @@ export default function BrokerDetailPage() {
   const [revealedToken, setRevealedToken] = useState<string | null>(null);
   const [revealTitle, setRevealTitle] = useState("ТОКЕН СОЗДАН");
   const [revealNote, setRevealNote] = useState("");
-  const [confirmRevoke, setConfirmRevoke] = useState<Token | null>(null);
+  const [confirmRevoke, setConfirmRevoke] = useState<APIToken | null>(null);
   const [menuToken, setMenuToken] = useState<string | null>(null);
-  const [editFirm, setEditFirm] = useState<Token | null>(null);
+  const [editFirm, setEditFirm] = useState<APIToken | null>(null);
   const [editFirmValue, setEditFirmValue] = useState("");
   const [newIP, setNewIP] = useState("");
   const [newIPNote, setNewIPNote] = useState("");
   const [manageIP, setManageIP] = useState(false);
+  const [editOpen, setEditOpen] = useState(false);
+  const [editName, setEditName] = useState("");
+  const [editDesc, setEditDesc] = useState("");
 
   const b = broker.data?.broker;
   const st = security.data?.security;
-  const accountList = accounts.data?.accounts || [];
+  const accountList: BrokerAccount[] = accounts.data?.accounts || [];
+  const activeAccountCount = accountList.filter((a) => (a.status || "").toUpperCase() === "ACTIVE").length;
   const tokenList = tokens.data?.tokens || [];
   const ipEntries = whitelist.data?.entries || [];
   const wlEnabled = !!(whitelist.data?.ip_whitelist_enabled ?? b?.ip_whitelist_enabled);
@@ -175,13 +168,74 @@ export default function BrokerDetailPage() {
     setParams({ tab: next });
   }
 
-  async function createAccount(e: FormEvent) {
-    e.preventDefault();
-    await api(`/api/v1/admin/brokers/${id}/accounts`, {
-      method: "POST",
-      body: JSON.stringify({ code: accCode, name: accCode, quik_firm: "FIRM", trading_account: tradingAccount }),
+  function openAccountCreate() {
+    setEditingAccount(null);
+    setAccountForm(emptyAccountForm);
+    setAccountError("");
+    setShowAccountForm(true);
+  }
+
+  function openAccountEdit(a: BrokerAccount) {
+    setEditingAccount(a);
+    setAccountForm({
+      trading_account: a.trading_account || "",
+      code: a.code || "",
+      name: a.name || "",
+      quik_firm: a.quik_firm || "",
     });
-    qc.invalidateQueries({ queryKey: ["accounts", id] });
+    setAccountError("");
+    setShowAccountForm(true);
+  }
+
+  async function saveAccount(e: FormEvent) {
+    e.preventDefault();
+    const trading = accountForm.trading_account.trim();
+    const code = accountForm.code.trim() || trading;
+    if (!trading && !code) {
+      setAccountError("Укажите торговый счёт — его брокер передаёт в account_id заявки");
+      return;
+    }
+    setAccountBusy(true);
+    setAccountError("");
+    try {
+      const body = {
+        trading_account: trading || code,
+        code,
+        name: accountForm.name.trim() || code,
+        quik_firm: accountForm.quik_firm.trim(),
+      };
+      if (editingAccount) {
+        await api(`/api/v1/admin/brokers/${id}/accounts/${editingAccount.id}`, {
+          method: "PATCH",
+          body: JSON.stringify(body),
+        });
+      } else {
+        await api(`/api/v1/admin/brokers/${id}/accounts`, {
+          method: "POST",
+          body: JSON.stringify(body),
+        });
+      }
+      setShowAccountForm(false);
+      setEditingAccount(null);
+      qc.invalidateQueries({ queryKey: ["accounts", id] });
+    } catch (err) {
+      setAccountError((err as Error).message || "Не удалось сохранить счёт");
+    } finally {
+      setAccountBusy(false);
+    }
+  }
+
+  async function setAccountStatus(a: BrokerAccount, status: "ACTIVE" | "DISABLED") {
+    setAccountListError("");
+    try {
+      await api(`/api/v1/admin/brokers/${id}/accounts/${a.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ status }),
+      });
+      qc.invalidateQueries({ queryKey: ["accounts", id] });
+    } catch (err) {
+      setAccountListError((err as Error).message || "Не удалось изменить статус счёта");
+    }
   }
 
   function openCreate() {
@@ -191,7 +245,7 @@ export default function BrokerDetailPage() {
 
   const createToken = useMutation({
     mutationFn: () =>
-      api<any>(`/api/v1/admin/brokers/${id}/tokens`, {
+      api<{ token: string }>(`/api/v1/admin/brokers/${id}/tokens`, {
         method: "POST",
         body: JSON.stringify({
           name: tokenName,
@@ -212,7 +266,7 @@ export default function BrokerDetailPage() {
   });
 
   async function rotate(tokenId: string) {
-    const res = await api<any>(`/api/v1/admin/tokens/${tokenId}/rotate`, { method: "POST" });
+    const res = await api<{ token: string }>(`/api/v1/admin/tokens/${tokenId}/rotate`, { method: "POST" });
     setRevealedToken(res.token);
     setRevealTitle("ТОКЕН РОТИРОВАН");
     setRevealNote("Старый токен продолжает работать. После переключения брокера необходимо отозвать старый токен.");
@@ -279,8 +333,8 @@ export default function BrokerDetailPage() {
     return "text-slate-600";
   }
 
-  if (broker.isLoading) return <div className="text-slate-500">Загрузка…</div>;
-  if (broker.error) return <div className="text-danger">{(broker.error as Error).message}</div>;
+  if (broker.isLoading) return <PageSpinner />;
+  if (broker.error) return <ErrorBanner error={broker.error} onRetry={() => broker.refetch()} />;
 
   const ordersToday = brokerStats.data?.stats?.today?.orders ?? "—";
 
@@ -292,9 +346,6 @@ export default function BrokerDetailPage() {
           <div className="flex flex-wrap items-center gap-2">
             <h1 className="text-2xl font-semibold tracking-tight">{b?.name}</h1>
             <StatusBadge status={b?.status} />
-            <button type="button" className="icon-btn text-slate-400 hover:text-warn" title="В избранное">
-              <Icons.star size={18} />
-            </button>
           </div>
           <p className="mt-1 text-sm text-slate-500">
             ID: {b?.id} · Создан: {formatDateTime(b?.created_at)}
@@ -302,9 +353,17 @@ export default function BrokerDetailPage() {
         </div>
         <div className="flex flex-wrap items-center gap-3">
           <SummaryChip label="Токены" value={`${st?.active_tokens ?? 0} активных`} />
-          <SummaryChip label="Счета" value={String(accountList.length)} />
+          <SummaryChip label="Счета" value={`${activeAccountCount} активных`} />
           <SummaryChip label="Заявки сегодня" value={String(ordersToday)} />
-          <button type="button" className="btn gap-1.5" onClick={() => setTab("overview")}>
+          <button
+            type="button"
+            className="btn gap-1.5"
+            onClick={() => {
+              setEditName(b?.name || "");
+              setEditDesc(b?.description || "");
+              setEditOpen(true);
+            }}
+          >
             <Icons.edit size={16} />
             Редактировать
           </button>
@@ -397,7 +456,7 @@ export default function BrokerDetailPage() {
                                 <Icons.more size={16} />
                               </button>
                               {menuToken === t.id && (
-                                <div className="absolute right-2 z-10 mt-1 w-40 rounded-lg border border-slate-200 bg-white py-1 shadow-lg">
+                                <div className="absolute right-2 z-10 mt-1 w-40 rounded-lg border border-line bg-panel py-1 shadow-lg">
                                   <button
                                     type="button"
                                     className="block w-full px-3 py-1.5 text-left text-sm hover:bg-slate-50"
@@ -454,42 +513,85 @@ export default function BrokerDetailPage() {
           )}
 
           {tab === "accounts" && (
-            <section className="card space-y-3">
-              <h2 className="font-semibold">Торговые счета</h2>
-              <form onSubmit={createAccount} className="grid gap-2 md:grid-cols-3">
-                <input className="input" placeholder="Код" value={accCode} onChange={(e) => setAccCode(e.target.value)} />
-                <input
-                  className="input"
-                  placeholder="Торговый счёт"
-                  value={tradingAccount}
-                  onChange={(e) => setTradingAccount(e.target.value)}
-                />
-                <button className="btn" type="submit">
+            <section className="card !p-0 overflow-hidden">
+              <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-4 py-3">
+                <div>
+                  <h2 className="font-semibold">Торговые счета</h2>
+                  <p className="text-xs text-slate-500">
+                    В заявке брокер передаёт <span className="font-mono">account_id</span> — он должен совпасть с торговым
+                    счётом или кодом активного счёта (FIX tag 1)
+                  </p>
+                </div>
+                <button type="button" className="btn gap-1.5" onClick={openAccountCreate}>
+                  <Icons.plus size={16} />
                   Добавить счёт
                 </button>
-              </form>
-              <table className="table">
-                <thead>
-                  <tr>
-                    <th>ID</th>
-                    <th>Код</th>
-                    <th>Торговый счёт</th>
-                    <th>Статус</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {accountList.map((a: any) => (
-                    <tr key={a.ID || a.id}>
-                      <td>{a.ID || a.id}</td>
-                      <td>{a.Code || a.code}</td>
-                      <td className="font-mono">{a.TradingAccount || a.trading_account}</td>
-                      <td>
-                        <StatusBadge status={a.Status || a.status} />
-                      </td>
+              </div>
+              {accountListError && <p className="px-4 pt-3 text-sm text-danger">{accountListError}</p>}
+              <div className="overflow-x-auto">
+                <table className="table">
+                  <thead>
+                    <tr>
+                      <th>Торговый счёт</th>
+                      <th>Код</th>
+                      <th>Название</th>
+                      <th>Статус</th>
+                      <th className="w-40"></th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {accountList.map((a) => {
+                      const active = (a.status || "").toUpperCase() === "ACTIVE";
+                      return (
+                        <tr key={a.id} className="align-middle">
+                          <td className="font-mono">{a.trading_account}</td>
+                          <td className="font-mono text-slate-600">{a.code}</td>
+                          <td>{a.name || "—"}</td>
+                          <td>
+                            <StatusBadge status={a.status} />
+                          </td>
+                          <td className="whitespace-nowrap">
+                            <button type="button" className="btn-muted mr-2" onClick={() => openAccountEdit(a)}>
+                              Изменить
+                            </button>
+                            {active ? (
+                              <button
+                                type="button"
+                                className="btn-muted"
+                                onClick={() => setAccountStatus(a, "DISABLED")}
+                              >
+                                Отключить
+                              </button>
+                            ) : (
+                              <button
+                                type="button"
+                                className="btn-muted"
+                                onClick={() => setAccountStatus(a, "ACTIVE")}
+                              >
+                                Включить
+                              </button>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                    {accountList.length === 0 && (
+                      <tr>
+                        <td colSpan={5} className="py-8 text-center text-slate-400">
+                          Счетов пока нет — добавьте торговый код, например 1-3101-2040
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+              <div className="m-4 flex gap-2 rounded-lg border border-sky-100 bg-sky-50 px-3 py-2.5 text-sm text-sky-900">
+                <Icons.info size={18} className="mt-0.5 shrink-0 text-sky-600" />
+                <p>
+                  Отключённый счёт остаётся в справочнике, но заявки с его <span className="font-mono">account_id</span>{" "}
+                  будут отклонены с 400.
+                </p>
+              </div>
             </section>
           )}
 
@@ -515,7 +617,7 @@ export default function BrokerDetailPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {ipEntries.slice(0, tab === "ip" ? 50 : 5).map((e: any) => (
+                    {ipEntries.slice(0, tab === "ip" ? 50 : 5).map((e) => (
                       <tr key={e.id}>
                         <td className="font-mono text-sm">{e.ip_cidr}</td>
                         <td className="text-slate-500">{e.note || "—"}</td>
@@ -537,7 +639,7 @@ export default function BrokerDetailPage() {
                   <div className="flex items-center justify-between">
                     <h2 className="font-semibold">Статистика заявок</h2>
                     <select
-                      className="rounded-md border border-slate-200 bg-white px-2 py-1 text-xs text-slate-600"
+                      className="rounded-md border border-line bg-panel px-2 py-1 text-xs text-muted"
                       value={statsDays}
                       onChange={(e) => setStatsDays(Number(e.target.value))}
                     >
@@ -670,8 +772,7 @@ export default function BrokerDetailPage() {
               <DetailRow label="Название" value={b?.name} />
               <DetailRow label="Статус" value={<StatusBadge status={b?.status} />} />
               <DetailRow label="Код" value={<span className="font-mono">{b?.code}</span>} />
-              <DetailRow label="Email" value="—" />
-              <DetailRow label="Телефон" value="—" />
+              <DetailRow label="Описание" value={b?.description || "—"} />
               <DetailRow label="Создан" value={formatDateTime(b?.created_at)} />
               <DetailRow label="Обновлён" value={formatDateTime(b?.updated_at)} />
             </dl>
@@ -732,7 +833,7 @@ export default function BrokerDetailPage() {
               </tr>
             </thead>
             <tbody>
-              {ipEntries.map((e: any) => (
+              {ipEntries.map((e) => (
                 <tr key={e.id}>
                   <td className="font-mono">{e.ip_cidr}</td>
                   <td>{e.note || "—"}</td>
@@ -745,6 +846,75 @@ export default function BrokerDetailPage() {
               ))}
             </tbody>
           </table>
+        </Modal>
+      )}
+
+      {showAccountForm && (
+        <Modal
+          title={editingAccount ? "Изменить счёт" : "Добавить торговый счёт"}
+          onClose={() => {
+            setShowAccountForm(false);
+            setEditingAccount(null);
+          }}
+        >
+          <form onSubmit={saveAccount} className="space-y-3">
+            <label className="block space-y-1 text-sm">
+              <span className="text-slate-500">Торговый счёт (FIX tag 1)</span>
+              <input
+                className="input font-mono"
+                placeholder="например 1-3101-2040"
+                value={accountForm.trading_account}
+                onChange={(e) => setAccountForm((f) => ({ ...f, trading_account: e.target.value }))}
+                required
+              />
+              <span className="text-xs text-slate-400">
+                Значение, которое брокер передаёт в <span className="font-mono">account_id</span> при создании заявки
+              </span>
+            </label>
+            <label className="block space-y-1 text-sm">
+              <span className="text-slate-500">Код</span>
+              <input
+                className="input font-mono"
+                placeholder="по умолчанию = торговый счёт"
+                value={accountForm.code}
+                onChange={(e) => setAccountForm((f) => ({ ...f, code: e.target.value }))}
+              />
+            </label>
+            <label className="block space-y-1 text-sm">
+              <span className="text-slate-500">Название</span>
+              <input
+                className="input"
+                placeholder="необязательно"
+                value={accountForm.name}
+                onChange={(e) => setAccountForm((f) => ({ ...f, name: e.target.value }))}
+              />
+            </label>
+            <label className="block space-y-1 text-sm">
+              <span className="text-slate-500">Код фирмы QUIK</span>
+              <input
+                className="input font-mono"
+                placeholder="необязательно"
+                value={accountForm.quik_firm}
+                onChange={(e) => setAccountForm((f) => ({ ...f, quik_firm: e.target.value }))}
+              />
+            </label>
+            {accountError && <p className="text-sm text-danger">{accountError}</p>}
+            <div className="flex justify-end gap-2 pt-1">
+              <button
+                type="button"
+                className="btn-muted"
+                onClick={() => {
+                  setShowAccountForm(false);
+                  setEditingAccount(null);
+                }}
+              >
+                Отмена
+              </button>
+              <button type="submit" className="btn" disabled={accountBusy}>
+                {accountBusy ? "Сохранение…" : editingAccount ? "Сохранить" : "Добавить"}
+              </button>
+            </div>
+          </form>
         </Modal>
       )}
 
@@ -863,239 +1033,41 @@ export default function BrokerDetailPage() {
           </div>
         </Modal>
       )}
-    </div>
-  );
-}
 
-function SummaryChip({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="min-w-[110px] rounded-xl border border-slate-200 bg-white px-3 py-2 shadow-sm">
-      <div className="text-[11px] text-slate-500">{label}</div>
-      <div className="text-sm font-semibold">{value}</div>
-    </div>
-  );
-}
-
-function DetailRow({ label, value }: { label: string; value: ReactNode }) {
-  return (
-    <div className="flex items-start justify-between gap-3">
-      <dt className="text-slate-500">{label}</dt>
-      <dd className="text-right font-medium text-ink">{value ?? "—"}</dd>
-    </div>
-  );
-}
-
-function pctDelta(current?: number, previous?: number): { text: string; up: boolean | null } {
-  const cur = Number(current ?? 0);
-  const prev = Number(previous ?? 0);
-  if (prev === 0 && cur === 0) return { text: "0%", up: null };
-  if (prev === 0) return { text: "+100%", up: true };
-  const pct = ((cur - prev) / prev) * 100;
-  const rounded = Math.round(pct * 10) / 10;
-  const sign = rounded > 0 ? "+" : "";
-  return { text: `${sign}${rounded}%`, up: rounded === 0 ? null : rounded > 0 };
-}
-
-function Metric({
-  label,
-  value,
-  delta,
-}: {
-  label: string;
-  value: string;
-  delta: { text: string; up: boolean | null };
-}) {
-  const tone =
-    delta.up === true ? "text-emerald-600" : delta.up === false ? "text-danger" : "text-slate-400";
-  return (
-    <div>
-      <div className="text-[11px] text-slate-500">{label}</div>
-      <div className="text-base font-semibold">{value}</div>
-      <div className={`text-xs font-medium ${tone}`}>{delta.text} к пред. периоду</div>
-    </div>
-  );
-}
-
-function RequestChart({ series }: { series: Array<{ date: string; orders: number }> }) {
-  const points = series.length ? series.map((s) => Number(s.orders) || 0) : [0];
-  const w = 320;
-  const h = 120;
-  const max = Math.max(...points, 1);
-  const step = points.length > 1 ? w / (points.length - 1) : w;
-  const coords = points.map((p, i) => `${i * step},${h - (p / max) * (h - 16) - 8}`).join(" ");
-  const area = `0,${h} ${coords} ${points.length > 1 ? w : 0},${h}`;
-  const empty = points.every((p) => p === 0);
-  return (
-    <div className="relative">
-      <svg viewBox={`0 0 ${w} ${h}`} className="h-32 w-full" preserveAspectRatio="none">
-        <defs>
-          <linearGradient id="reqFill" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="#57b6c0" stopOpacity="0.35" />
-            <stop offset="100%" stopColor="#57b6c0" stopOpacity="0.02" />
-          </linearGradient>
-        </defs>
-        <polygon points={area} fill="url(#reqFill)" />
-        <polyline points={coords} fill="none" stroke="#57b6c0" strokeWidth="2.5" strokeLinejoin="round" />
-      </svg>
-      {empty && (
-        <div className="pointer-events-none absolute inset-0 flex items-center justify-center text-xs text-slate-400">
-          Нет заявок за период
-        </div>
+      {editOpen && (
+        <Modal title="Редактировать брокера" onClose={() => setEditOpen(false)}>
+          <form
+            className="space-y-3"
+            onSubmit={async (e) => {
+              e.preventDefault();
+              await api(`/api/v1/admin/brokers/${id}`, {
+                method: "PATCH",
+                body: JSON.stringify({ name: editName.trim(), description: editDesc.trim() }),
+              });
+              setEditOpen(false);
+              qc.invalidateQueries({ queryKey: ["broker", id] });
+              qc.invalidateQueries({ queryKey: ["brokers"] });
+            }}
+          >
+            <label className="block space-y-1 text-sm">
+              <span className="text-slate-500">Название</span>
+              <input className="input" value={editName} onChange={(e) => setEditName(e.target.value)} required />
+            </label>
+            <label className="block space-y-1 text-sm">
+              <span className="text-slate-500">Описание</span>
+              <textarea className="input min-h-[80px]" value={editDesc} onChange={(e) => setEditDesc(e.target.value)} />
+            </label>
+            <div className="flex justify-end gap-2">
+              <button type="button" className="btn-muted" onClick={() => setEditOpen(false)}>
+                Отмена
+              </button>
+              <button type="submit" className="btn">
+                Сохранить
+              </button>
+            </div>
+          </form>
+        </Modal>
       )}
-    </div>
-  );
-}
-
-function activityMeta(action: string, result?: string | null, error?: string | null) {
-  const a = (action || "").toUpperCase();
-  const failed = !!(error || (result && /fail|error|deny|reject/i.test(result)));
-  if (failed || a.includes("FAIL") || a.includes("AUTH_FAIL")) {
-    return { label: "Ошибка аутентификации", tone: "bg-rose-50 text-danger", Icon: Icons.x };
-  }
-  if (a.includes("ORDER") || a.includes("CREATE")) {
-    return { label: "Заявка создана", tone: "bg-sky-50 text-sky-600", Icon: Icons.plus };
-  }
-  if (a.includes("TRADE") || a.includes("FILL") || a.includes("EXEC")) {
-    return { label: "Сделка получена", tone: "bg-sky-50 text-sky-600", Icon: Icons.trades };
-  }
-  if (a.includes("AUTH") || a.includes("LOGIN") || a.includes("TOKEN")) {
-    return { label: "Успешная аутентификация", tone: "bg-emerald-50 text-emerald-600", Icon: Icons.check };
-  }
-  return { label: action || "Событие", tone: "bg-slate-100 text-slate-600", Icon: Icons.info };
-}
-
-function ActivityList({ items, empty }: { items: AuditRow[]; empty: string }) {
-  if (!items.length) return <p className="text-sm text-slate-400">{empty}</p>;
-  return (
-    <ul className="space-y-3">
-      {items.map((item) => {
-        const meta = activityMeta(item.action, item.result, item.error);
-        return (
-          <li key={item.id} className="flex gap-2.5">
-            <span className={`mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full ${meta.tone}`}>
-              <meta.Icon size={14} />
-            </span>
-            <div className="min-w-0 flex-1">
-              <div className="text-sm font-medium">{meta.label}</div>
-              <div className="text-[11px] text-slate-400">
-                {formatTime(item.created_at)}
-                {item.ip ? ` · ${item.ip}` : ""}
-              </div>
-            </div>
-          </li>
-        );
-      })}
-    </ul>
-  );
-}
-
-function BrokerActivity({
-  st,
-  range,
-  onRange,
-  errors,
-  loading,
-}: {
-  st?: BrokerAPIStats;
-  range: string;
-  onRange: (v: string) => void;
-  errors: ObsLog[];
-  loading: boolean;
-}) {
-  if (loading && !st) return <div className="card text-slate-500">Загрузка…</div>;
-  const today = st?.today;
-  const week = st?.week;
-  const month = st?.month;
-  return (
-    <div className="space-y-4">
-      <section className="card space-y-4">
-        <h2 className="font-semibold">Активность</h2>
-        <div className="grid gap-3 sm:grid-cols-3">
-          <SummaryChip label="Сегодня" value={formatNumber(today?.requests)} />
-          <SummaryChip label="7 дней" value={formatNumber(week?.requests)} />
-          <SummaryChip label="Месяц" value={formatNumber(month?.requests)} />
-        </div>
-        <div className="grid gap-3 sm:grid-cols-5">
-          <SummaryChip label="Success rate" value={formatPct(today?.success_rate)} />
-          <SummaryChip label="Errors" value={formatNumber(today?.errors)} />
-          <SummaryChip label="Avg" value={formatMs(today?.avg_latency_ms)} />
-          <SummaryChip label="P95" value={formatMs(today?.p95_latency_ms)} />
-          <SummaryChip label="P99" value={formatMs(today?.p99_latency_ms)} />
-        </div>
-      </section>
-      <section className="card space-y-3">
-        <div className="flex items-center justify-between">
-          <h2 className="font-semibold">Запросы</h2>
-          <select className="input w-auto" value={range} onChange={(e) => onRange(e.target.value)}>
-            <option value="24h">24 часа</option>
-            <option value="7d">7 дней</option>
-            <option value="30d">30 дней</option>
-          </select>
-        </div>
-        <MiniSeries series={st?.series || []} />
-      </section>
-      <section className="card space-y-3">
-        <h2 className="font-semibold">Ошибки</h2>
-        <div className="grid gap-3 sm:grid-cols-3">
-          <SummaryChip label="Сегодня" value={formatNumber(today?.errors)} />
-          <SummaryChip label="Неделя" value={formatNumber(week?.errors)} />
-          <SummaryChip label="Месяц" value={formatNumber(month?.errors)} />
-        </div>
-        <div className="space-y-1 text-sm">
-          {(st?.top_errors || []).map((e) => (
-            <div key={e.error} className="flex justify-between rounded-lg bg-slate-50 px-3 py-2">
-              <span className="font-mono text-xs">{e.error}</span>
-              <span>{e.count}</span>
-            </div>
-          ))}
-        </div>
-        {errors.length === 0 ? (
-          <p className="text-sm text-slate-400">Ошибок за выбранный период не обнаружено.</p>
-        ) : (
-          <ul className="space-y-2">
-            {errors.map((e) => (
-              <li key={e.id} className="rounded-lg border border-rose-100 bg-rose-50 px-3 py-2 text-sm">
-                <div className="font-medium text-danger">
-                  {e.severity} · {e.error_code || e.subtype}
-                </div>
-                <div className="text-xs text-slate-500">{formatDateTime(e.timestamp)}</div>
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
-    </div>
-  );
-}
-
-function MiniSeries({ series }: { series: Array<{ bucket: string; requests: number; successful: number; errors: number }> }) {
-  const points = series.length ? series.map((s) => Number(s.requests) || 0) : [0];
-  const err = series.length ? series.map((s) => Number(s.errors) || 0) : [0];
-  const w = 480;
-  const h = 120;
-  const max = Math.max(...points, ...err, 1);
-  const step = points.length > 1 ? w / (points.length - 1) : w;
-  const line = (arr: number[]) => arr.map((p, i) => `${i * step},${h - (p / max) * (h - 16) - 8}`).join(" ");
-  return (
-    <svg viewBox={`0 0 ${w} ${h}`} className="h-32 w-full" preserveAspectRatio="none">
-      <polyline points={line(points)} fill="none" stroke="#57b6c0" strokeWidth="2" />
-      <polyline points={line(err)} fill="none" stroke="#d6455d" strokeWidth="2" />
-    </svg>
-  );
-}
-
-function Modal({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4" onClick={onClose}>
-      <div className="card max-h-[90vh] w-full max-w-lg overflow-y-auto" onClick={(e) => e.stopPropagation()}>
-        <div className="mb-4 flex items-center justify-between gap-3">
-          <h3 className="text-lg font-semibold">{title}</h3>
-          <button type="button" className="icon-btn" onClick={onClose} aria-label="Закрыть">
-            <Icons.x size={16} />
-          </button>
-        </div>
-        {children}
-      </div>
     </div>
   );
 }

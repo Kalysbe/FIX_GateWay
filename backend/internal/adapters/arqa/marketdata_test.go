@@ -7,6 +7,35 @@ import (
 	"github.com/fix-gateway/backend/internal/domain"
 )
 
+func TestParseMarketDataSnapshot_ArqaUnderlyingTags(t *testing.T) {
+	raw := strings.Join([]string{
+		"8=FIX.4.2", "9=200", "35=W", "49=QUIK", "56=TEST", "34=20",
+		"262=MD-GBA", "311=GBA02280810", "305=8", "100=LIST_GBA",
+		"309=GBA02280810", "308=LIST_GBA", "310=GO", "318=KGS",
+		"268=2",
+		"269=0", "270=99.5", "271=10",
+		"269=1", "270=100.5", "271=12",
+		"10=000",
+	}, "\x01")
+	_, quotes := parseMarketDataFromRaw(raw, "a1", false)
+	if len(quotes) != 1 {
+		t.Fatalf("got %d quotes: %+v", len(quotes), quotes)
+	}
+	q := quotes[0]
+	if q.SecurityID != "GBA02280810" || q.Symbol != "GBA02280810" || q.Board != "LIST_GBA" {
+		t.Fatalf("instrument %+v", q)
+	}
+	if q.Bid != "99.5" || q.Offer != "100.5" {
+		t.Fatalf("book %+v", q)
+	}
+	if len(q.Bids) != 1 || q.Bids[0].Price != "99.5" || q.Bids[0].Size != "10" {
+		t.Fatalf("bids %+v", q.Bids)
+	}
+	if len(q.Offers) != 1 || q.Offers[0].Price != "100.5" {
+		t.Fatalf("offers %+v", q.Offers)
+	}
+}
+
 func TestParseMarketDataSnapshot_CurrentTrades(t *testing.T) {
 	raw := strings.Join([]string{
 		"8=FIX.4.2", "9=200", "35=W", "49=QUIK", "56=TEST", "34=10",
@@ -99,5 +128,137 @@ func TestApplyLive_AccumulatesTurnoverFromLastTrade(t *testing.T) {
 		if n < 36526 || n > 36527 {
 			t.Fatalf("value %s", got.Value)
 		}
+	}
+}
+
+func TestBuildMarketDataRequest_AllClassesOmitsRelatedSym(t *testing.T) {
+	raw := strings.ReplaceAll(buildMarketDataRequest("MD1", domain.MarketDataQuery{}).String(), "\x01", "|")
+	if strings.Contains(raw, "146=") {
+		t.Fatalf("empty query must not pin 146: %s", raw)
+	}
+	if strings.Contains(raw, "100=") {
+		t.Fatalf("empty query must not set a single class: %s", raw)
+	}
+}
+
+func TestBuildMarketDataRequest_BoardOnly(t *testing.T) {
+	raw := strings.ReplaceAll(buildMarketDataRequest("MD1", domain.MarketDataQuery{Board: "LIST_GBA"}).String(), "\x01", "|")
+	if strings.Contains(raw, "146=") {
+		t.Fatalf("board-only must not send 146 without SecurityID 48: %s", raw)
+	}
+	if strings.Contains(raw, "48=") {
+		t.Fatalf("board-only must not invent a SecurityID: %s", raw)
+	}
+}
+
+func TestBuildMarketDataRequest_GovtType(t *testing.T) {
+	msg := buildMarketDataRequest("MD1", domain.MarketDataQuery{
+		Instruments: []domain.SecurityRef{
+			{Symbol: "GBA02280810", Board: "LIST_GBA", SecurityType: "GO"},
+		},
+	})
+	raw := strings.ReplaceAll(msg.String(), "\x01", "|")
+	if strings.Contains(raw, "146=") {
+		t.Fatalf("single instrument must not send 146: %s", raw)
+	}
+	if !strings.Contains(raw, "167=GO") {
+		t.Fatalf("expected 167=GO in %s", raw)
+	}
+	if strings.Contains(raw, "167=GOVT") {
+		t.Fatalf("ARQA uses GO not GOVT: %s", raw)
+	}
+	if !strings.Contains(raw, "100=LIST_GBA") {
+		t.Fatalf("expected 100=LIST_GBA in %s", raw)
+	}
+	if !strings.Contains(raw, "48=GBA02280810") {
+		t.Fatalf("expected 48=GBA02280810 in %s", raw)
+	}
+	if !strings.Contains(raw, "264=0") {
+		t.Fatalf("expected full book 264=0 in %s", raw)
+	}
+}
+
+func TestMarketDataSubscribeBatches_BoardsAndInstruments(t *testing.T) {
+	batches := marketDataSubscribeBatches(domain.MarketDataQuery{
+		Instruments: []domain.SecurityRef{{Symbol: "MAIR6", Board: "LISTEDSTOCKK"}},
+		Boards:      []string{"LISTEDSTOCKK", "LIST_GBA", "LIST_GBA"},
+	})
+	if len(batches) != 1 {
+		t.Fatalf("len=%d %#v", len(batches), batches)
+	}
+	if len(batches[0].Instruments) != 1 {
+		t.Fatalf("instrument batch: %#v", batches[0])
+	}
+}
+
+func TestParseMarketDataSnapshot_FullBook(t *testing.T) {
+	raw := strings.Join([]string{
+		"8=FIX.4.2", "9=200", "35=W", "49=QUIK", "56=TEST", "34=20",
+		"262=MD-BOOK", "48=MAIR6", "100=LISTEDSTOCKK",
+		"268=6",
+		"269=0", "270=99.0", "271=5",
+		"269=0", "270=99.5", "271=10",
+		"269=0", "270=98.5", "271=7",
+		"269=1", "270=101.0", "271=4",
+		"269=1", "270=100.5", "271=12",
+		"269=2", "270=100.0", "271=1",
+		"10=000",
+	}, "\x01")
+	_, quotes := parseMarketDataFromRaw(raw, "a1", false)
+	if len(quotes) != 1 {
+		t.Fatalf("got %d quotes: %+v", len(quotes), quotes)
+	}
+	q := quotes[0]
+	if q.Bid != "99.5" || q.BidSize != "10" {
+		t.Fatalf("best bid %+v", q)
+	}
+	if q.Offer != "100.5" || q.OfferSize != "12" {
+		t.Fatalf("best offer %+v", q)
+	}
+	if len(q.Bids) != 3 || q.Bids[0].Price != "99.5" || q.Bids[1].Price != "99.0" || q.Bids[2].Price != "98.5" {
+		t.Fatalf("bids %+v", q.Bids)
+	}
+	if len(q.Offers) != 2 || q.Offers[0].Price != "100.5" || q.Offers[1].Price != "101.0" {
+		t.Fatalf("offers %+v", q.Offers)
+	}
+	if !q.ReplaceBids || !q.ReplaceOffers {
+		t.Fatalf("snapshot must replace both sides")
+	}
+}
+
+func TestApplyLive_IncrementalBookUpdateAndDelete(t *testing.T) {
+	app := &sessionApp{mdBook: map[string]domain.MarketQuote{}}
+	_, snap := parseMarketDataFromRaw(strings.Join([]string{
+		"8=FIX.4.2", "35=W", "262=MD1",
+		"48=MAIR6", "100=LISTEDSTOCKK",
+		"268=3",
+		"269=0", "270=99.5", "271=10",
+		"269=0", "270=99.0", "271=5",
+		"269=1", "270=100.5", "271=12",
+		"10=000",
+	}, "\x01"), "a1", false)
+	app.applyLive(snap)
+	got := app.mdBook["LISTEDSTOCKK|MAIR6"]
+	if len(got.Bids) != 2 || got.Bid != "99.5" {
+		t.Fatalf("snapshot book %+v", got)
+	}
+
+	_, inc := parseMarketDataFromRaw(strings.Join([]string{
+		"8=FIX.4.2", "35=X", "262=MD1",
+		"268=2",
+		"279=1", "269=0", "270=99.5", "271=3", "48=MAIR6", "100=LISTEDSTOCKK",
+		"279=2", "269=0", "270=99.0", "48=MAIR6", "100=LISTEDSTOCKK",
+		"10=000",
+	}, "\x01"), "a1", true)
+	app.applyLive(inc)
+	got = app.mdBook["LISTEDSTOCKK|MAIR6"]
+	if len(got.Bids) != 1 || got.Bids[0].Price != "99.5" || got.Bids[0].Size != "3" {
+		t.Fatalf("after incremental %+v", got.Bids)
+	}
+	if got.Bid != "99.5" || got.BidSize != "3" {
+		t.Fatalf("best bid after incremental %+v", got)
+	}
+	if len(got.Offers) != 1 || got.Offers[0].Price != "100.5" {
+		t.Fatalf("offers must survive %+v", got.Offers)
 	}
 }

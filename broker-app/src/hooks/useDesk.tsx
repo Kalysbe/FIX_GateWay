@@ -19,6 +19,7 @@ import {
 import {
   createId,
   emptyState,
+  exportSafeState,
   loadState,
   makeBroker,
   mergeBrokerOrders,
@@ -35,6 +36,7 @@ import type {
   DeskSettings,
   LocalOrder,
 } from "../types";
+import { PollGate } from "../lib/pollGate";
 
 interface DeskApi {
   state: AppState;
@@ -72,6 +74,8 @@ function logEntry(
 export function DeskProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<AppState>(() => loadState());
   const stateRef = useRef(state);
+  const connectionAttempts = useRef(new Map<string, symbol>());
+  const pollGate = useRef(new PollGate());
   stateRef.current = state;
 
   useEffect(() => {
@@ -87,9 +91,15 @@ export function DeskProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const updateBroker = useCallback((id: string, patch: Partial<BrokerProfile>) => {
+    if (patch.apiToken !== undefined) connectionAttempts.current.delete(id);
     setState((s) => ({
       ...s,
-      brokers: s.brokers.map((b) => (b.id === id ? { ...b, ...patch } : b)),
+      brokers: s.brokers.map((b) => (b.id === id ? {
+        ...b, ...patch,
+        ...(patch.apiToken !== undefined && patch.apiToken !== b.apiToken
+          ? { connected: false, connectionStatus: "DISCONNECTED" as const, connectedAt: undefined }
+          : {}),
+      } : b)),
     }));
   }, []);
 
@@ -107,6 +117,8 @@ export function DeskProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const removeBroker = useCallback((id: string) => {
+    connectionAttempts.current.delete(id);
+    pollGate.current.success(id);
     setState((s) => ({
       ...s,
       brokers: s.brokers.filter((b) => b.id !== id),
@@ -119,12 +131,19 @@ export function DeskProvider({ children }: { children: ReactNode }) {
 
   const syncBrokerOrders = useCallback(async (broker: BrokerProfile) => {
     const gatewayUrl = stateRef.current.settings.gatewayUrl;
+    const attempt = connectionAttempts.current.get(broker.id);
     const remote = await listOrders(gatewayUrl, broker.apiToken);
     const mapped = remote.map((o) => mapGatewayOrder(broker.id, o));
-    setState((s) => ({
+    setState((s) => {
+      const current = s.brokers.find((b) => b.id === broker.id);
+      if (!current?.connected || current.apiToken !== broker.apiToken ||
+          s.settings.gatewayUrl !== gatewayUrl ||
+          connectionAttempts.current.get(broker.id) !== attempt) return s;
+      return {
       ...s,
       orders: mergeBrokerOrders(s.orders, broker.id, mapped),
-    }));
+      };
+    });
   }, []);
 
   const connect = useCallback(
@@ -132,25 +151,30 @@ export function DeskProvider({ children }: { children: ReactNode }) {
       const broker = stateRef.current.brokers.find((b) => b.id === id);
       if (!broker) return;
       const token = broker.apiToken.trim();
+      pollGate.current.success(id);
+      const attempt = Symbol();
+      connectionAttempts.current.set(id, attempt);
       if (!token) {
         updateBroker(id, {
           connectionStatus: "ERROR",
           connected: false,
-          lastError: "Вставьте API-токен (sk_live_… / sk_test_…)",
+          lastError: "Вставьте API-токен из админки",
         });
         pushLog(logEntry("error", `${broker.name}: нет токена`, id));
         return;
       }
 
-      updateBroker(id, { connectionStatus: "CONNECTING", lastError: undefined });
+      updateBroker(id, { connected: false, connectionStatus: "CONNECTING", lastError: undefined });
       pushLog(logEntry("info", `${broker.name}: проверка токена на gateway…`, id));
 
       try {
         const { orders, accounts } = await probeToken(stateRef.current.settings.gatewayUrl, token);
+        if (connectionAttempts.current.get(id) !== attempt) return;
         const firstAcc = accounts[0];
         const accountHint = firstAcc?.trading_account || broker.accountId;
 
         setState((s) => {
+          if (connectionAttempts.current.get(id) !== attempt || !s.brokers.some((b) => b.id === id)) return s;
           const patched = s.brokers.map((b) =>
             b.id === id
               ? {
@@ -175,6 +199,7 @@ export function DeskProvider({ children }: { children: ReactNode }) {
           };
         });
       } catch (e) {
+        if (connectionAttempts.current.get(id) !== attempt) return;
         const msg = e instanceof ApiError ? `${e.status}: ${e.message}` : e instanceof Error ? e.message : "connect failed";
         updateBroker(id, { connectionStatus: "ERROR", connected: false, lastError: msg });
         pushLog(logEntry("error", `${broker.name}: ${msg}`, id));
@@ -184,6 +209,7 @@ export function DeskProvider({ children }: { children: ReactNode }) {
   );
 
   const disconnect = useCallback((id: string) => {
+    connectionAttempts.current.delete(id);
     setState((s) => {
       const broker = s.brokers.find((b) => b.id === id);
       if (!broker) return s;
@@ -206,9 +232,7 @@ export function DeskProvider({ children }: { children: ReactNode }) {
 
   const connectAll = useCallback(async () => {
     const ids = stateRef.current.brokers.map((b) => b.id);
-    for (const id of ids) {
-      await connect(id);
-    }
+    await Promise.all(ids.map((id) => connect(id)));
   }, [connect]);
 
   const disconnectAll = useCallback(() => {
@@ -222,18 +246,27 @@ export function DeskProvider({ children }: { children: ReactNode }) {
       );
       await Promise.all(
         targets.map(async (b) => {
+          const pollKey = b.id;
+          if (!pollGate.current.begin(pollKey)) return;
+          const attempt = connectionAttempts.current.get(b.id);
           try {
             await syncBrokerOrders(b);
+            pollGate.current.success(pollKey);
           } catch (e) {
+            if (connectionAttempts.current.get(b.id) !== attempt) return;
             const msg = e instanceof Error ? e.message : "refresh failed";
             pushLog(logEntry("error", `${b.name}: poll ${msg}`, b.id));
-            if (e instanceof ApiError && (e.status === 401 || e.status === 403)) {
+            if (e instanceof ApiError && e.status >= 400 && e.status < 500 && e.status !== 429) {
               updateBroker(b.id, {
                 connected: false,
                 connectionStatus: "ERROR",
                 lastError: msg,
               });
+            } else {
+              pollGate.current.fail(pollKey, e instanceof ApiError ? e.retryAfterMs : 0);
             }
+          } finally {
+            pollGate.current.finish(pollKey);
           }
         }),
       );
@@ -328,7 +361,15 @@ export function DeskProvider({ children }: { children: ReactNode }) {
   );
 
   const updateSettings = useCallback((patch: Partial<DeskSettings>) => {
-    setState((s) => ({ ...s, settings: mergeSettings(s.settings, patch) }));
+    const gatewayChanged = patch.gatewayUrl !== undefined && patch.gatewayUrl !== stateRef.current.settings.gatewayUrl;
+    if (gatewayChanged) connectionAttempts.current.clear();
+    setState((s) => ({
+      ...s,
+      settings: mergeSettings(s.settings, patch),
+      brokers: gatewayChanged ? s.brokers.map((b) => ({
+        ...b, connected: false, connectionStatus: "DISCONNECTED" as const, connectedAt: undefined,
+      })) : s.brokers,
+    }));
   }, []);
 
   const clearOrders = useCallback(() => {
@@ -344,16 +385,18 @@ export function DeskProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const resetAll = useCallback(() => {
+    connectionAttempts.current.clear();
     const next = emptyState();
     setState(next);
     saveState(next);
   }, []);
 
-  const exportJson = useCallback(() => JSON.stringify(stateRef.current, null, 2), []);
+  const exportJson = useCallback(() => exportSafeState(stateRef.current), []);
 
   const importJson = useCallback(
     (raw: string) => {
       const parsed = JSON.parse(raw) as AppState;
+      connectionAttempts.current.clear();
       setState({
         ...emptyState(),
         ...parsed,

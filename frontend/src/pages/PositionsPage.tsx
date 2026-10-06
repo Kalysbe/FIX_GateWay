@@ -2,6 +2,9 @@ import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { api } from "../api";
+import { liveRefetchInterval } from "../lib/poll";
+import { useAdminStream } from "../hooks/useAdminStream";
+import { PageHeader } from "../components/PageHeader";
 
 type FIXPos = {
   adapter_id?: string;
@@ -18,6 +21,7 @@ type FIXPos = {
   currency: string;
   pos_type?: string;
   update_action?: string;
+  source?: string;
   keys?: Record<string, string>;
   items?: Record<string, string>;
   long_qty: string | number;
@@ -84,6 +88,7 @@ function posTypeLabel(t?: string): string {
 
 export default function PositionsPage() {
   const qc = useQueryClient();
+  const { connected } = useAdminStream();
   const [brokerFilter, setBrokerFilter] = useState("");
   const [firmFilter, setFirmFilter] = useState("");
   const [clientFilter, setClientFilter] = useState("");
@@ -101,12 +106,12 @@ export default function PositionsPage() {
       const qs = brokerFilter ? `?broker_id=${encodeURIComponent(brokerFilter)}` : "";
       return api<PositionsResp>(`/api/v1/admin/positions${qs}`);
     },
-    refetchInterval: 10000,
+    refetchInterval: liveRefetchInterval(connected, 10000),
   });
 
   const sync = useMutation({
     mutationFn: () =>
-      api<any>("/api/v1/admin/positions/sync", {
+      api<{ summary?: string; received?: number; adapter_id?: string }>("/api/v1/admin/positions/sync", {
         method: "POST",
         body: JSON.stringify({
           broker_id: brokerFilter ? Number(brokerFilter) : undefined,
@@ -153,32 +158,26 @@ export default function PositionsPage() {
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-end justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-semibold">Позиции</h1>
-          <p className="text-sm text-slate-500">
-            ARQA FIX AN→AP (ML/DL/FL/FP) · автообновление с адаптера каждые ~30 с
-          </p>
-        </div>
-        <div className="flex flex-wrap gap-2 text-xs">
-          <Pill label="Инструменты" value={filteredInstruments.length} />
-          <Pill label="Денежные" value={filteredCash.length} />
-          {snapshot && (
-            <Pill
-              label="Снимок"
-              value={new Date(snapshot.requested_at).toLocaleString("ru-RU")}
-            />
-          )}
-        </div>
-      </div>
+      <PageHeader
+        title="Позиции"
+        subtitle="Снимок позиций по FIX Request For Positions (AN→AP)"
+        actions={
+          <div className="flex flex-wrap gap-2 text-xs">
+            <Pill label="Инструменты" value={filteredInstruments.length} />
+            <Pill label="Денежные" value={filteredCash.length} />
+            {positions.data?.source && <Pill label="Источник" value={positions.data.source} />}
+            {snapshot && <Pill label="Снимок" value={new Date(snapshot.requested_at).toLocaleString("ru-RU")} />}
+          </div>
+        }
+      />
 
       <div className="card space-y-3">
         <div className="flex flex-wrap items-center gap-2">
-          <div className="flex rounded-lg border border-slate-200 bg-slate-50 p-0.5">
+          <div className="flex rounded-lg border border-line bg-surface p-0.5">
             <button
               type="button"
               className={`rounded-md px-3 py-1.5 text-sm font-medium ${
-                tab === "instruments" ? "bg-white text-accent shadow-sm" : "text-slate-500"
+                tab === "instruments" ? "bg-panel text-accent shadow-sm" : "text-muted"
               }`}
               onClick={() => setTab("instruments")}
             >
@@ -187,7 +186,7 @@ export default function PositionsPage() {
             <button
               type="button"
               className={`rounded-md px-3 py-1.5 text-sm font-medium ${
-                tab === "cash" ? "bg-white text-accent shadow-sm" : "text-slate-500"
+                tab === "cash" ? "bg-panel text-accent shadow-sm" : "text-muted"
               }`}
               onClick={() => setTab("cash")}
             >
@@ -262,7 +261,7 @@ export default function PositionsPage() {
                     (h) => (
                       <th
                         key={h}
-                        className="border-b border-slate-200 px-3 py-2.5 text-xs font-semibold uppercase tracking-wide text-slate-500"
+                        className="border-b border-line px-3 py-2.5 text-[12px] font-medium text-muted"
                       >
                         {h}
                       </th>
@@ -317,7 +316,7 @@ export default function PositionsPage() {
                   {["Фирма", "Клиент", "Валюта", "TAG", "CUR_BAL", "OPEN_BAL", "CUR_LIM", "LOCKED", "KIND", "Дата"].map((h) => (
                     <th
                       key={h}
-                      className="border-b border-slate-200 px-3 py-2.5 text-xs font-semibold uppercase tracking-wide text-slate-500"
+                      className="border-b border-line px-3 py-2.5 text-[12px] font-medium text-muted"
                     >
                       {h}
                     </th>
@@ -377,7 +376,7 @@ export default function PositionsPage() {
 
 function Pill({ label, value }: { label: string; value: string | number }) {
   return (
-    <div className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-ink">
+    <div className="rounded-lg border border-line bg-panel px-3 py-1.5 text-ink">
       <span className="mr-2 text-slate-500">{label}</span>
       <span className="font-mono font-semibold">{value}</span>
     </div>

@@ -2,7 +2,6 @@ package auth
 
 import (
 	"strconv"
-	"strings"
 	"testing"
 	"time"
 )
@@ -19,29 +18,15 @@ func TestHashTokenStable(t *testing.T) {
 	}
 }
 
-func TestGenerateAPITokenPrefix(t *testing.T) {
+func TestGenerateAPITokenIgnoresEnvironment(t *testing.T) {
 	t.Setenv("TOKEN_PREFIX", "sk_live_")
+	t.Setenv("APP_ENV", "production")
 	raw, prefix, err := GenerateAPIToken()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasPrefix(raw, "sk_live_") {
-		t.Fatalf("expected sk_live_ prefix, got %s", raw)
-	}
-	if len(raw) < 40 || len(prefix) == 0 {
-		t.Fatalf("unexpected token raw=%s prefix=%s", raw, prefix)
-	}
-}
-
-func TestTokenPrefixEnv(t *testing.T) {
-	t.Setenv("TOKEN_PREFIX", "")
-	t.Setenv("APP_ENV", "production")
-	if TokenPrefix() != "sk_live_" {
-		t.Fatalf("prod prefix: %s", TokenPrefix())
-	}
-	t.Setenv("APP_ENV", "development")
-	if TokenPrefix() != "sk_test_" {
-		t.Fatalf("dev prefix: %s", TokenPrefix())
+	if len(raw) != 64 || prefix != raw[:8] {
+		t.Fatal("unexpected token format")
 	}
 }
 
@@ -74,6 +59,19 @@ func TestHMACRoundTrip(t *testing.T) {
 	ts := strconv.FormatInt(time.Now().Unix(), 10)
 	if err := ValidateTimestamp(ts, time.Minute); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestNonceCacheRejectsReplay(t *testing.T) {
+	c := NewNonceCache(time.Minute)
+	if err := c.Use("nonce-ok-1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Use("nonce-ok-1"); err != ErrNonceReplay {
+		t.Fatalf("got %v", err)
+	}
+	if err := c.Use("short"); err != ErrNonceInvalid {
+		t.Fatalf("got %v", err)
 	}
 }
 

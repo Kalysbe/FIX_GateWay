@@ -1,0 +1,111 @@
+name: Validate gateway
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: gateway
+          POSTGRES_PASSWORD: ci-only
+          POSTGRES_DB: gateway_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U gateway -d gateway_test"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      DATABASE_URL: postgres://gateway:ci-only@localhost:5432/gateway_test?sslmode=disable
+      SECURITY_AUDIT_DATABASE_URL: postgres://gateway:ci-only@localhost:5432/gateway_security_test?sslmode=disable
+      SECURITY_AUDIT_MIGRATIONS: ../../migrations
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+      - name: Create separate security test database
+        run: PGPASSWORD=ci-only psql -h localhost -U gateway -d gateway_test -c 'CREATE DATABASE gateway_security_test'
+      - run: go vet -tags integration ./...
+      - run: go test -race -tags integration ./...
+
+  interfaces:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        project: [frontend, broker-app]
+    defaults:
+      run:
+        working-directory: ${{ matrix.project }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: ${{ matrix.project }}/package-lock.json
+      - run: npm ci
+      - run: npm test --if-present
+      - run: npm run build
+
+  supervisor:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: node --test scripts/stack-health.test.cjs
+      - run: node --check scripts/pm2-supervisor.cjs
+      - run: docker compose -f deploy/docker-compose.local.yml config --quiet
+
+  local-end-to-end:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Build isolated simulator stack
+        run: docker compose -f deploy/docker-compose.local.yml up -d --build --wait --wait-timeout 180
+      - name: Verify REST, FIX, trades, cancellation and realtime
+        run: node scripts/local-smoke.mjs
+      - name: Verify overload, durable queue and outage recovery
+        run: node scripts/local-reliability.mjs
+      - name: Show container logs on failure
+        if: failure()
+        run: docker compose -f deploy/docker-compose.local.yml logs --tail 100
+      - name: Clean disposable CI stack
+        if: always()
+        run: docker compose -f deploy/docker-compose.local.yml down -v
+
+  trading-release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Build separate trading verification stack
+        run: docker compose -p fix-gateway-verification -f deploy/docker-compose.local.yml -f deploy/docker-compose.verification.yml up -d --build --wait --wait-timeout 180 access
+      - name: Verify FIX recovery, trading limits and restart persistence
+        run: node scripts/verify-trading-release.mjs
+      - name: Show verification logs on failure
+        if: failure()
+        run: docker compose -p fix-gateway-verification -f deploy/docker-compose.local.yml -f deploy/docker-compose.verification.yml logs --tail 100
+      - name: Clean separate verification stack
+        if: always()
+        run: docker compose -p fix-gateway-verification -f deploy/docker-compose.local.yml -f deploy/docker-compose.verification.yml down -v

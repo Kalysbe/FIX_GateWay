@@ -5,12 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	pb "github.com/fix-gateway/backend/gen/realtime/v1"
 	"github.com/fix-gateway/backend/internal/adapters"
 	"github.com/fix-gateway/backend/internal/admin"
 	"github.com/fix-gateway/backend/internal/audit"
@@ -24,40 +26,46 @@ import (
 	"github.com/fix-gateway/backend/internal/orders"
 	"github.com/fix-gateway/backend/internal/outbox"
 	"github.com/fix-gateway/backend/internal/positions"
+	"github.com/fix-gateway/backend/internal/quikapi"
 	"github.com/fix-gateway/backend/internal/quikexport"
 	"github.com/fix-gateway/backend/internal/ratelimit"
 	"github.com/fix-gateway/backend/internal/realtime"
 	"github.com/fix-gateway/backend/internal/refdata"
 	"github.com/google/uuid"
-	"github.com/gorilla/websocket"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/shopspring/decimal"
 )
 
 type Server struct {
-	cfg        config.Config
-	log        *slog.Logger
-	pool       *pgxpool.Pool
-	brokers    *brokers.Store
-	orders     *orders.Service
-	orderStore *orders.Store
-	adapters   *adapters.Store
-	manager    *adapters.Manager
-	outbox     *outbox.Store
-	audit      *audit.Store
-	users      *admin.UserStore
-	hub        *realtime.Hub
-	refdata    *refdata.Store
-	positions  *positions.Store
-	marketdata *marketdata.Store
-	quikExport *quikexport.Store
-	obs        *observability.Pipeline
-	upgrader   websocket.Upgrader
+	dashboardCache     snapshotCache
+	dashboardRefreshMu sync.Mutex
+	monitoringCache    snapshotCache
+	cfg                config.Config
+	log                *slog.Logger
+	pool               *pgxpool.Pool
+	brokers            *brokers.Store
+	orders             *orders.Service
+	orderStore         *orders.Store
+	adapters           *adapters.Store
+	manager            *adapters.Manager
+	outbox             *outbox.Store
+	audit              *audit.Store
+	users              *admin.UserStore
+	hub                *realtime.Hub
+	refdata            *refdata.Store
+	positions          *positions.Store
+	marketdata         *marketdata.Store
+	quikExport         *quikexport.Store
+	quikAPI            *quikapi.Client
+	obs                *observability.Pipeline
+	realtimeClient     pb.RealtimeServiceClient
+	ratePolicies       *ratelimit.Store
 
+	trusted             []*net.IPNet
+	hmacNonces          *auth.NonceCache
+	maxBody             int64
 	authFailLimiter     *ratelimit.SlidingWindow
-	brokerReqLimiters   sync.Map
-	brokerOrderLimiters sync.Map
 	authSuccessThrottle sync.Map
 }
 
@@ -68,16 +76,24 @@ func NewServer(
 	auditStore *audit.Store, users *admin.UserStore, hub *realtime.Hub,
 	obs *observability.Pipeline,
 ) *Server {
-	return &Server{
+	s := &Server{
 		cfg: cfg, log: log, pool: pool, brokers: brokerStore, orders: orderSvc, orderStore: orderStore,
 		adapters: adapterStore, manager: manager, outbox: outboxStore, audit: auditStore, users: users, hub: hub,
 		refdata:         refdata.NewStore(pool),
 		positions:       positions.NewStore(pool),
 		marketdata:      marketdata.NewStore(pool),
+		quikAPI:         quikapi.NewClient(quikapi.NewStore(pool, cfg.QuikAPIBaseURL), nil),
 		obs:             obs,
-		upgrader:        websocket.Upgrader{CheckOrigin: func(r *http.Request) bool { return true }},
+		trusted:         observability.ParseTrustedProxies(cfg.TrustedProxies),
+		hmacNonces:      auth.NewNonceCache(10 * time.Minute),
+		maxBody:         1 << 20,
 		authFailLimiter: ratelimit.NewSlidingWindow(time.Minute, cfg.AuthFailMaxPerMinute),
 	}
+	// Refill an expired persisted snapshot before the first dashboard visit.
+	if pool != nil {
+		s.refreshDashboardSnapshot()
+	}
+	return s
 }
 
 func (s *Server) SetQuikExport(store *quikexport.Store) {
@@ -85,91 +101,120 @@ func (s *Server) SetQuikExport(store *quikexport.Store) {
 }
 
 func (s *Server) Handler() http.Handler {
-	mux := http.NewServeMux()
+	mux := newDocMux()
 
-	mux.HandleFunc("GET /health", s.handleHealth)
-	mux.HandleFunc("GET /ready", s.handleReady)
-	mux.Handle("GET /metrics", promhttp.Handler())
-	mux.HandleFunc("GET /api/openapi.yaml", s.handleOpenAPI)
+	mux.Handle("GET /health", http.HandlerFunc(s.handleHealth))
+	mux.Handle("GET /ready", http.HandlerFunc(s.handleReady))
+	mux.Handle("GET /metrics", s.restrictInternal(promhttp.Handler()))
+	mux.HandleFunc("GET /api/openapi.yaml", func(w http.ResponseWriter, r *http.Request) {
+		s.serveMergedOpenAPI(w, r, mux.routes, "docs/openapi.yaml", false)
+	})
 	mux.HandleFunc("GET /swagger", s.handleSwaggerUI)
-	mux.HandleFunc("GET /api/broker-openapi.yaml", s.handleBrokerOpenAPI)
+	mux.HandleFunc("GET /api/broker-openapi.yaml", func(w http.ResponseWriter, r *http.Request) {
+		s.serveMergedOpenAPI(w, r, mux.routes, "docs/broker-openapi.yaml", true)
+	})
 	mux.HandleFunc("GET /broker-swagger", s.handleBrokerSwaggerUI)
 	mux.HandleFunc("GET /docs/kse-logo.png", s.handleDocsAsset)
 	mux.HandleFunc("GET /docs/kse-favicon.png", s.handleDocsAsset)
 
-	mux.Handle("POST /api/v1/orders", s.brokerAuth(s.requirePermission(auth.PermOrdersCreate)(s.orderRateLimit(http.HandlerFunc(s.createOrder)))))
+	mux.Handle("POST /api/v1/orders", s.brokerAuth(s.requirePermission(auth.PermOrdersCreate)(http.HandlerFunc(s.createOrder))))
 	mux.Handle("GET /api/v1/orders", s.brokerAuth(s.requirePermission(auth.PermOrdersRead)(http.HandlerFunc(s.listBrokerOrders))))
 	mux.Handle("GET /api/v1/orders/{id}", s.brokerAuth(s.requirePermission(auth.PermOrdersRead)(http.HandlerFunc(s.getBrokerOrder))))
 	mux.Handle("POST /api/v1/orders/{id}/cancel", s.brokerAuth(s.requirePermission(auth.PermOrdersCancel)(http.HandlerFunc(s.cancelBrokerOrder))))
 	mux.Handle("GET /api/v1/accounts", s.brokerAuth(s.requirePermission(auth.PermOrdersRead)(http.HandlerFunc(s.listBrokerAccounts))))
-	mux.Handle("GET /api/v1/firm", s.brokerAuth(http.HandlerFunc(s.getBrokerFirm)))
+	mux.Handle("GET /api/v1/firm", s.brokerAuth(s.requirePermission(auth.PermOrdersRead)(http.HandlerFunc(s.getBrokerFirm))))
 	mux.Handle("GET /api/v1/instruments", s.brokerAuth(s.requirePermission(auth.PermOrdersRead)(http.HandlerFunc(s.listInstruments))))
+	mux.Handle("GET /api/v1/orderbook", s.brokerAuth(s.requirePermission(auth.PermOrdersRead)(http.HandlerFunc(s.listBrokerOrderBook))))
 	mux.Handle("GET /api/v1/trades", s.brokerAuth(s.requirePermission(auth.PermTradesRead)(http.HandlerFunc(s.listTrades))))
 	mux.Handle("GET /api/v1/positions", s.brokerAuth(s.requirePermission(auth.PermPositionsRead)(http.HandlerFunc(s.listBrokerPositions))))
+	mux.Handle("PUT /api/v1/positions", s.brokerAuth(s.requirePermission(auth.PermPositionsWrite)(http.HandlerFunc(s.setBrokerPositions))))
+	mux.Handle("PUT /api/v1/positions/cash", s.brokerAuth(s.requirePermission(auth.PermPositionsWrite)(http.HandlerFunc(s.setBrokerCash))))
+	mux.Handle("DELETE /api/v1/positions/cash", s.brokerAuth(s.requirePermission(auth.PermPositionsWrite)(http.HandlerFunc(s.deleteBrokerCash))))
+	mux.Handle("PUT /api/v1/positions/instruments", s.brokerAuth(s.requirePermission(auth.PermPositionsWrite)(http.HandlerFunc(s.setBrokerInstrument))))
+	mux.Handle("DELETE /api/v1/positions/instruments", s.brokerAuth(s.requirePermission(auth.PermPositionsWrite)(http.HandlerFunc(s.deleteBrokerInstrument))))
 
 	mux.HandleFunc("POST /api/v1/admin/login", s.adminLogin)
-	mux.Handle("GET /api/v1/admin/dashboard", s.adminAuth(http.HandlerFunc(s.dashboard)))
-	mux.Handle("POST /api/v1/admin/brokers", s.adminAuth(http.HandlerFunc(s.createBroker)))
-	mux.Handle("GET /api/v1/admin/brokers", s.adminAuth(http.HandlerFunc(s.listBrokers)))
-	mux.Handle("GET /api/v1/admin/brokers/{id}", s.adminAuth(http.HandlerFunc(s.getBroker)))
-	mux.Handle("PATCH /api/v1/admin/brokers/{id}", s.adminAuth(http.HandlerFunc(s.patchBroker)))
-	mux.Handle("POST /api/v1/admin/brokers/{id}/tokens", s.adminAuth(http.HandlerFunc(s.createToken)))
-	mux.Handle("GET /api/v1/admin/brokers/{id}/tokens", s.adminAuth(http.HandlerFunc(s.listTokens)))
-	mux.Handle("GET /api/v1/admin/brokers/{id}/security", s.adminAuth(http.HandlerFunc(s.brokerSecurity)))
-	mux.Handle("GET /api/v1/admin/brokers/{id}/stats", s.adminAuth(http.HandlerFunc(s.brokerStats)))
-	mux.Handle("GET /api/v1/admin/brokers/{id}/ip-whitelist", s.adminAuth(http.HandlerFunc(s.listIPWhitelist)))
-	mux.Handle("POST /api/v1/admin/brokers/{id}/ip-whitelist", s.adminAuth(http.HandlerFunc(s.addIPWhitelist)))
-	mux.Handle("DELETE /api/v1/admin/brokers/{id}/ip-whitelist/{entry_id}", s.adminAuth(http.HandlerFunc(s.removeIPWhitelist)))
-	mux.Handle("POST /api/v1/admin/brokers/{id}/accounts", s.adminAuth(http.HandlerFunc(s.createAccount)))
-	mux.Handle("GET /api/v1/admin/brokers/{id}/accounts", s.adminAuth(http.HandlerFunc(s.listAccounts)))
-	mux.Handle("DELETE /api/v1/admin/tokens/{id}", s.adminAuth(http.HandlerFunc(s.revokeToken)))
-	mux.Handle("POST /api/v1/admin/tokens/{id}/revoke", s.adminAuth(http.HandlerFunc(s.revokeToken)))
-	mux.Handle("POST /api/v1/admin/tokens/{id}/rotate", s.adminAuth(http.HandlerFunc(s.rotateToken)))
-	mux.Handle("PATCH /api/v1/admin/tokens/{id}", s.adminAuth(http.HandlerFunc(s.patchToken)))
-	mux.Handle("GET /api/v1/admin/orders", s.adminAuth(http.HandlerFunc(s.listAdminOrders)))
-	mux.Handle("GET /api/v1/admin/orders/{id}", s.adminAuth(http.HandlerFunc(s.getAdminOrder)))
-	mux.Handle("GET /api/v1/admin/emitents/{symbol}/orders", s.adminAuth(http.HandlerFunc(s.listEmitentOrders)))
-	mux.Handle("GET /api/v1/admin/trades", s.adminAuth(http.HandlerFunc(s.listAdminTrades)))
-	mux.Handle("GET /api/v1/admin/positions", s.adminAuth(http.HandlerFunc(s.listAdminPositions)))
-	mux.Handle("POST /api/v1/admin/positions/sync", s.adminAuth(http.HandlerFunc(s.syncPositionsFIX)))
-	mux.Handle("GET /api/v1/admin/market-data", s.adminAuth(http.HandlerFunc(s.listAdminMarketData)))
-	mux.Handle("POST /api/v1/admin/market-data/sync", s.adminAuth(http.HandlerFunc(s.syncMarketDataFIX)))
-	mux.Handle("GET /api/v1/admin/adapters", s.adminAuth(http.HandlerFunc(s.listAdapters)))
-	mux.Handle("POST /api/v1/admin/adapters", s.adminAuth(http.HandlerFunc(s.createAdapter)))
-	mux.Handle("PATCH /api/v1/admin/adapters/{id}", s.adminAuth(http.HandlerFunc(s.patchAdapter)))
-	mux.Handle("POST /api/v1/admin/adapters/{id}/enable", s.adminAuth(http.HandlerFunc(s.enableAdapter)))
-	mux.Handle("POST /api/v1/admin/adapters/{id}/disable", s.adminAuth(http.HandlerFunc(s.disableAdapter)))
-	mux.Handle("POST /api/v1/admin/adapters/{id}/restart", s.adminAuth(http.HandlerFunc(s.restartAdapter)))
-	mux.Handle("GET /api/v1/admin/audit", s.adminAuth(http.HandlerFunc(s.listAudit)))
-	mux.Handle("GET /api/v1/admin/logs", s.adminAuth(http.HandlerFunc(s.listLogs)))
-	mux.Handle("GET /api/v1/admin/logs/export", s.adminAuth(http.HandlerFunc(s.exportLogs)))
-	mux.Handle("GET /api/v1/admin/logs/export/{id}", s.adminAuth(http.HandlerFunc(s.getExportJob)))
-	mux.Handle("GET /api/v1/admin/logs/export/{id}/download", s.adminAuth(http.HandlerFunc(s.downloadExportJob)))
-	mux.Handle("GET /api/v1/admin/logs/{id}", s.adminAuth(http.HandlerFunc(s.getLog)))
-	mux.Handle("GET /api/v1/admin/brokers/{id}/logs", s.adminAuth(http.HandlerFunc(s.listBrokerLogs)))
-	mux.Handle("GET /api/v1/admin/brokers/{id}/statistics", s.adminAuth(http.HandlerFunc(s.brokerStatistics)))
-	mux.Handle("GET /api/v1/admin/brokers/{id}/statistics/daily", s.adminAuth(http.HandlerFunc(s.brokerStatsDaily)))
-	mux.Handle("GET /api/v1/admin/brokers/{id}/statistics/weekly", s.adminAuth(http.HandlerFunc(s.brokerStatsWeekly)))
-	mux.Handle("GET /api/v1/admin/brokers/{id}/statistics/monthly", s.adminAuth(http.HandlerFunc(s.brokerStatsMonthly)))
-	mux.Handle("GET /api/v1/admin/errors", s.adminAuth(http.HandlerFunc(s.listErrors)))
-	mux.Handle("GET /api/v1/admin/events", s.adminAuth(http.HandlerFunc(s.listEvents)))
-	mux.Handle("GET /api/v1/admin/obs-audit", s.adminAuth(http.HandlerFunc(s.listObsAudit)))
-	mux.Handle("GET /api/v1/admin/notifications", s.adminAuth(http.HandlerFunc(s.listNotifications)))
-	mux.Handle("POST /api/v1/admin/notifications/read-all", s.adminAuth(http.HandlerFunc(s.readAllNotifications)))
-	mux.Handle("POST /api/v1/admin/notifications/{id}/read", s.adminAuth(http.HandlerFunc(s.readNotification)))
-	mux.Handle("GET /api/v1/admin/orders/{id}/trace", s.adminAuth(http.HandlerFunc(s.orderTrace)))
-	mux.Handle("GET /api/v1/admin/users", s.adminAuth(http.HandlerFunc(s.listUsers)))
-	mux.Handle("GET /api/v1/admin/instruments", s.adminAuth(http.HandlerFunc(s.listAdminInstruments)))
-	mux.Handle("GET /api/v1/admin/firms", s.adminAuth(http.HandlerFunc(s.listAdminFirms)))
-	mux.Handle("POST /api/v1/admin/instruments/sync", s.adminAuth(http.HandlerFunc(s.syncInstrumentsFIX)))
-	mux.Handle("POST /api/v1/admin/quik/sync", s.adminAuth(http.HandlerFunc(s.syncInstrumentsFIX))) // alias
-	mux.HandleFunc("GET /api/v1/admin/ws", s.handleWS)
+	mux.Handle("GET /api/v1/admin/dashboard", s.adminRO(s.dashboard))
+	mux.Handle("GET /api/v1/admin/monitoring", s.adminRO(s.monitoring))
+	mux.Handle("GET /api/v1/admin/monitoring/history", s.adminRO(s.monitoringHistory))
+	mux.Handle("POST /api/v1/admin/brokers", s.adminWrite(s.createBroker))
+	mux.Handle("GET /api/v1/admin/brokers", s.adminRO(s.listBrokers))
+	mux.Handle("GET /api/v1/admin/brokers/{id}", s.adminRO(s.getBroker))
+	mux.Handle("PATCH /api/v1/admin/brokers/{id}", s.adminWrite(s.patchBroker))
+	mux.Handle("POST /api/v1/admin/brokers/{id}/tokens", s.adminWrite(s.createToken))
+	mux.Handle("GET /api/v1/admin/tokens", s.adminRO(s.listAllTokens))
+	mux.Handle("GET /api/v1/admin/brokers/{id}/tokens", s.adminRO(s.listTokens))
+	mux.Handle("GET /api/v1/admin/brokers/{id}/security", s.adminRO(s.brokerSecurity))
+	mux.Handle("GET /api/v1/admin/brokers/{id}/stats", s.adminRO(s.brokerStats))
+	mux.Handle("GET /api/v1/admin/brokers/{id}/ip-whitelist", s.adminRO(s.listIPWhitelist))
+	mux.Handle("POST /api/v1/admin/brokers/{id}/ip-whitelist", s.adminWrite(s.addIPWhitelist))
+	mux.Handle("DELETE /api/v1/admin/brokers/{id}/ip-whitelist/{entry_id}", s.adminWrite(s.removeIPWhitelist))
+	mux.Handle("POST /api/v1/admin/brokers/{id}/accounts", s.adminWrite(s.createAccount))
+	mux.Handle("GET /api/v1/admin/brokers/{id}/accounts", s.adminRO(s.listAccounts))
+	mux.Handle("PATCH /api/v1/admin/brokers/{id}/accounts/{account_id}", s.adminWrite(s.patchAccount))
+	mux.Handle("DELETE /api/v1/admin/tokens/{id}", s.adminWrite(s.revokeToken))
+	mux.Handle("POST /api/v1/admin/tokens/{id}/revoke", s.adminWrite(s.revokeToken))
+	mux.Handle("POST /api/v1/admin/tokens/{id}/rotate", s.adminWrite(s.rotateToken))
+	mux.Handle("PATCH /api/v1/admin/tokens/{id}", s.adminWrite(s.patchToken))
+	mux.Handle("GET /api/v1/admin/orders", s.adminRO(s.listAdminOrders))
+	mux.Handle("GET /api/v1/admin/reconciliation", s.adminRO(s.listReconciliation))
+	mux.Handle("POST /api/v1/admin/reconciliation/{id}/resolve", s.adminOps(s.resolveReconciliation))
+	mux.Handle("GET /api/v1/admin/rate-limits", s.adminRO(s.listRateLimits))
+	mux.Handle("GET /api/v1/admin/trading-limits", s.adminRO(s.listTradingLimits))
+	mux.Handle("GET /api/v1/admin/trading-limits/history", s.adminAudit(s.tradingLimitHistory))
+	mux.Handle("PUT /api/v1/admin/trading-limits", s.adminWrite(s.updateTradingLimit))
+	mux.Handle("PUT /api/v1/admin/rate-limits", s.adminWrite(s.updateRateLimit))
+	mux.Handle("GET /api/v1/admin/orders/{id}", s.adminRO(s.getAdminOrder))
+	mux.Handle("GET /api/v1/admin/emitents/{symbol}/orders", s.adminRO(s.listEmitentOrders))
+	mux.Handle("GET /api/v1/admin/trades", s.adminRO(s.listAdminTrades))
+	mux.Handle("GET /api/v1/admin/positions", s.adminRO(s.listAdminPositions))
+	mux.Handle("PUT /api/v1/admin/positions", s.adminWrite(s.setAdminPositions))
+	mux.Handle("PUT /api/v1/admin/positions/cash", s.adminWrite(s.setAdminCash))
+	mux.Handle("DELETE /api/v1/admin/positions/cash", s.adminWrite(s.deleteAdminCash))
+	mux.Handle("PUT /api/v1/admin/positions/instruments", s.adminWrite(s.setAdminInstrument))
+	mux.Handle("DELETE /api/v1/admin/positions/instruments", s.adminWrite(s.deleteAdminInstrument))
+	mux.Handle("POST /api/v1/admin/positions/sync", s.adminOps(s.syncPositionsFIX))
+	mux.Handle("GET /api/v1/admin/market-data", s.adminRO(s.listAdminMarketData))
+	mux.Handle("POST /api/v1/admin/market-data/sync", s.adminOps(s.syncMarketDataFIX))
+	mux.Handle("GET /api/v1/admin/quik-api/settings", s.adminRO(s.getQuikAPISettings))
+	mux.Handle("PATCH /api/v1/admin/quik-api/settings", s.adminOps(s.patchQuikAPISettings))
+	mux.Handle("GET /api/v1/admin/quik-api/quotes", s.adminRO(s.listQuikAPIQuotes))
+	mux.Handle("GET /api/v1/admin/adapters", s.adminRO(s.listAdapters))
+	mux.Handle("POST /api/v1/admin/adapters", s.adminWrite(s.createAdapter))
+	mux.Handle("PATCH /api/v1/admin/adapters/{id}", s.adminWrite(s.patchAdapter))
+	mux.Handle("POST /api/v1/admin/adapters/{id}/enable", s.adminOps(s.enableAdapter))
+	mux.Handle("POST /api/v1/admin/adapters/{id}/disable", s.adminOps(s.disableAdapter))
+	mux.Handle("POST /api/v1/admin/adapters/{id}/restart", s.adminOps(s.restartAdapter))
+	mux.Handle("GET /api/v1/admin/audit", s.adminAudit(s.listAudit))
+	mux.Handle("GET /api/v1/admin/logs", s.adminAudit(s.listLogs))
+	mux.Handle("GET /api/v1/admin/logs/export", s.adminAudit(s.exportLogs))
+	mux.Handle("GET /api/v1/admin/logs/export/{id}", s.adminAudit(s.getExportJob))
+	mux.Handle("GET /api/v1/admin/logs/export/{id}/download", s.adminAudit(s.downloadExportJob))
+	mux.Handle("GET /api/v1/admin/logs/{id}", s.adminAudit(s.getLog))
+	mux.Handle("GET /api/v1/admin/brokers/{id}/logs", s.adminAudit(s.listBrokerLogs))
+	mux.Handle("GET /api/v1/admin/brokers/{id}/statistics", s.adminRO(s.brokerStatistics))
+	mux.Handle("GET /api/v1/admin/brokers/{id}/statistics/daily", s.adminRO(s.brokerStatsDaily))
+	mux.Handle("GET /api/v1/admin/brokers/{id}/statistics/weekly", s.adminRO(s.brokerStatsWeekly))
+	mux.Handle("GET /api/v1/admin/brokers/{id}/statistics/monthly", s.adminRO(s.brokerStatsMonthly))
+	mux.Handle("GET /api/v1/admin/errors", s.adminAudit(s.listErrors))
+	mux.Handle("GET /api/v1/admin/events", s.adminAudit(s.listEvents))
+	mux.Handle("GET /api/v1/admin/obs-audit", s.adminAudit(s.listObsAudit))
+	mux.Handle("GET /api/v1/admin/notifications", s.adminRO(s.listNotifications))
+	mux.Handle("POST /api/v1/admin/notifications/read-all", s.adminRO(s.readAllNotifications))
+	mux.Handle("POST /api/v1/admin/notifications/{id}/read", s.adminRO(s.readNotification))
+	mux.Handle("GET /api/v1/admin/orders/{id}/trace", s.adminRO(s.orderTrace))
+	mux.Handle("GET /api/v1/admin/users", s.adminUsers(s.listUsers))
+	mux.Handle("GET /api/v1/admin/instruments", s.adminRO(s.listAdminInstruments))
+	mux.Handle("GET /api/v1/admin/firms", s.adminRO(s.listAdminFirms))
+	mux.Handle("POST /api/v1/admin/instruments/sync", s.adminOps(s.syncInstrumentsFIX))
+	mux.Handle("POST /api/v1/admin/quik/sync", s.adminOps(s.syncInstrumentsFIX)) // alias
+	mux.Handle("GET /api/v1/admin/events/stream", s.adminRO(s.streamAdminEvents))
 
-	h := http.Handler(mux)
+	h := s.protectOverload(http.Handler(mux))
 	h = metrics.Middleware(h)
 	if s.obs != nil {
 		h = s.obs.HTTPMiddleware(observability.HTTPConfig{
-			TrustedProxies: observability.ParseTrustedProxies(s.cfg.TrustedProxies),
+			TrustedProxies: s.trusted,
 			FastMS:         s.cfg.ObsFastMS,
 			NormalMS:       s.cfg.ObsNormalMS,
 			SlowMS:         s.cfg.ObsSlowMS,
@@ -177,7 +222,7 @@ func (s *Server) Handler() http.Handler {
 		}, h)
 	}
 	h = observability.RequestIDMiddleware(h)
-	return s.requireHTTPS(s.cors(h))
+	return s.requireHTTPS(s.cors(s.limitBody(h)))
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
@@ -185,6 +230,9 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleReady(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+	defer cancel()
+	r = r.WithContext(ctx)
 	dbOK := s.pool.Ping(r.Context()) == nil
 	pending, _ := s.outbox.PendingCount(r.Context())
 	available := s.manager.AvailableCount()
@@ -213,7 +261,21 @@ func (s *Server) createOrder(w http.ResponseWriter, r *http.Request) {
 	ip, _ := s.clientIP(r)
 	order, idempotent, err := s.orders.Create(r.Context(), b, ip, req, tok.QuikFirm)
 	if err != nil {
+		var risk *orders.RiskRejected
+		if errors.As(err, &risk) {
+			observability.AnnotateError(r, risk.Code, risk.Message, "risk")
+			writeJSON(w, http.StatusUnprocessableEntity, map[string]any{"error": risk.Message, "code": risk.Code})
+			return
+		}
+		if errors.Is(err, orders.ErrPersistenceUnavailable) {
+			writeErr(w, http.StatusServiceUnavailable, "order storage unavailable; verify result and retry with the same client_order_id")
+			return
+		}
 		observability.AnnotateError(r, "ORDER_CREATE_FAILED", err.Error(), "order_service")
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+			s.writeInternal(w, err)
+			return
+		}
 		writeErrDetails(w, http.StatusBadRequest, err.Error(), orderFieldHints())
 		return
 	}
@@ -236,7 +298,7 @@ func (s *Server) listBrokerOrders(w http.ResponseWriter, r *http.Request) {
 	b, _ := BrokerFromContext(r.Context())
 	list, err := s.orders.ListForBroker(r.Context(), b.ID, 100)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
+		s.writeInternal(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"orders": mapOrders(list)})
@@ -251,6 +313,10 @@ func (s *Server) getBrokerOrder(w http.ResponseWriter, r *http.Request) {
 	}
 	order, err := s.orders.GetForBroker(r.Context(), b.ID, id)
 	if err != nil {
+		if !errors.Is(err, orders.ErrNotFound) {
+			s.writeInternal(w, err)
+			return
+		}
 		writeErr(w, http.StatusNotFound, "not found")
 		return
 	}
@@ -270,9 +336,18 @@ func (s *Server) cancelBrokerOrder(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "invalid id")
 		return
 	}
-	order, err := s.orders.Cancel(r.Context(), b.ID, id, clientIP(r))
+	ip, _ := s.clientIP(r)
+	order, err := s.orders.Cancel(r.Context(), b.ID, id, ip)
 	if err != nil {
+		if errors.Is(err, orders.ErrPersistenceUnavailable) {
+			writeErr(w, http.StatusServiceUnavailable, "order storage unavailable; verify cancellation result and retry later")
+			return
+		}
 		observability.AnnotateError(r, "ORDER_CANCEL_FAILED", err.Error(), "order_service")
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+			s.writeInternal(w, err)
+			return
+		}
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -285,7 +360,7 @@ func (s *Server) listBrokerAccounts(w http.ResponseWriter, r *http.Request) {
 	b, _ := BrokerFromContext(r.Context())
 	list, err := s.brokers.ListAccounts(r.Context(), b.ID)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
+		s.writeInternal(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"accounts": list})
@@ -300,7 +375,7 @@ func (s *Server) getBrokerFirm(w http.ResponseWriter, r *http.Request) {
 	}
 	firmName := ""
 	if f, found, err := s.refdata.GetFirmByID(r.Context(), tok.QuikFirm); err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
+		s.writeInternal(w, err)
 		return
 	} else if found {
 		firmName = f.FirmName
@@ -316,7 +391,7 @@ func (s *Server) listInstruments(w http.ResponseWriter, r *http.Request) {
 		SELECT id, internal_symbol, quik_symbol, board, currency, security_type, status
 		FROM instruments WHERE status='ACTIVE' ORDER BY id`)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
+		s.writeInternal(w, err)
 		return
 	}
 	defer rows.Close()
@@ -324,12 +399,68 @@ func (s *Server) listInstruments(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var i domain.Instrument
 		if err := rows.Scan(&i.ID, &i.InternalSymbol, &i.QuikSymbol, &i.Board, &i.Currency, &i.SecurityType, &i.Status); err != nil {
-			writeErr(w, http.StatusInternalServerError, err.Error())
+			s.writeInternal(w, err)
 			return
 		}
 		out = append(out, i)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"instruments": out})
+}
+
+func (s *Server) listBrokerOrderBook(w http.ResponseWriter, r *http.Request) {
+	board := strings.TrimSpace(r.URL.Query().Get("board"))
+	symbol := strings.TrimSpace(r.URL.Query().Get("symbol"))
+	if s.manager != nil {
+		if _, items, ok := s.manager.LiveQuotes(); ok {
+			items = filterQuotes(items, board, symbol)
+			books := make([]map[string]any, 0, len(items))
+			for _, q := range items {
+				books = append(books, orderBookDTO(q))
+			}
+			writeJSON(w, http.StatusOK, map[string]any{
+				"source": "live",
+				"live":   true,
+				"books":  books,
+			})
+			return
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"source": "live",
+		"live":   false,
+		"books":  []any{},
+		"note":   "нет живого стакана — оператор должен подписаться на market data",
+	})
+}
+
+func orderBookDTO(q domain.MarketQuote) map[string]any {
+	return map[string]any{
+		"symbol":      q.Symbol,
+		"security_id": q.SecurityID,
+		"board":       q.Board,
+		"currency":    q.Currency,
+		"name":        q.Name,
+		"last":        q.Last,
+		"last_size":   q.LastSize,
+		"last_time":   q.LastTime,
+		"bid":         q.Bid,
+		"bid_size":    q.BidSize,
+		"offer":       q.Offer,
+		"offer_size":  q.OfferSize,
+		"bids":        bookLevelsOrTop(q.Bids, q.Bid, q.BidSize),
+		"offers":      bookLevelsOrTop(q.Offers, q.Offer, q.OfferSize),
+		"updated_at":  q.UpdatedAt,
+	}
+}
+
+func bookLevelsOrTop(levels []domain.BookLevel, px, sz string) []domain.BookLevel {
+	if len(levels) > 0 {
+		return levels
+	}
+	if strings.TrimSpace(px) == "" {
+		return []domain.BookLevel{}
+	}
+	return []domain.BookLevel{{Price: px, Size: sz}}
 }
 
 func (s *Server) listAdminInstruments(w http.ResponseWriter, r *http.Request) {
@@ -339,7 +470,7 @@ func (s *Server) listAdminInstruments(w http.ResponseWriter, r *http.Request) {
 		WHERE status = 'ACTIVE'
 		ORDER BY board, quik_symbol, id`)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
+		s.writeInternal(w, err)
 		return
 	}
 	defer rows.Close()
@@ -347,7 +478,7 @@ func (s *Server) listAdminInstruments(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var i domain.Instrument
 		if err := rows.Scan(&i.ID, &i.InternalSymbol, &i.QuikSymbol, &i.Board, &i.Currency, &i.SecurityType, &i.Status); err != nil {
-			writeErr(w, http.StatusInternalServerError, err.Error())
+			s.writeInternal(w, err)
 			return
 		}
 		out = append(out, i)
@@ -358,7 +489,7 @@ func (s *Server) listAdminInstruments(w http.ResponseWriter, r *http.Request) {
 func (s *Server) listAdminFirms(w http.ResponseWriter, r *http.Request) {
 	list, err := s.refdata.ListFirms(r.Context())
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
+		s.writeInternal(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -372,12 +503,12 @@ func (s *Server) listAdminFirms(w http.ResponseWriter, r *http.Request) {
 func (s *Server) syncInstrumentsFIX(w http.ResponseWriter, r *http.Request) {
 	adapterID, items, err := s.manager.FetchSecurities(r.Context())
 	if err != nil {
-		writeErr(w, http.StatusBadGateway, err.Error())
+		s.writeUpstream(w, err)
 		return
 	}
 	res, err := s.refdata.SyncFromFIX(r.Context(), items)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
+		s.writeInternal(w, err)
 		return
 	}
 	res.AdapterID = adapterID
@@ -388,7 +519,7 @@ func (s *Server) listTrades(w http.ResponseWriter, r *http.Request) {
 	b, _ := BrokerFromContext(r.Context())
 	list, err := s.orderStore.ListTrades(r.Context(), &b.ID, 100)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
+		s.writeInternal(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"trades": mapTrades(list)})
@@ -396,29 +527,29 @@ func (s *Server) listTrades(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) listBrokerPositions(w http.ResponseWriter, r *http.Request) {
 	b, _ := BrokerFromContext(r.Context())
-	// Token → broker; broker.code is the same firm id as in the positions snapshot (e.g. 2040).
-	firm := strings.TrimSpace(b.Code)
-	if firm == "" {
+	tok, _ := TokenFromContext(r.Context())
+	// QUIK «Фирма» in the snapshot is broker.code (e.g. 2040). Token quik_firm
+	// (FIX 5018) may be the same or a longer firm id — match either.
+	firms := positions.NormalizeFirmIDs(b.Code, tok.QuikFirm)
+	if len(firms) == 0 {
 		writeJSON(w, http.StatusOK, map[string]any{
 			"source": "fix", "firm_id": "", "instruments": []any{}, "cash": []any{},
 			"note": "у брокера не задан код фирмы",
 		})
 		return
 	}
-	sn, items, err := s.positions.ListFromLatest(r.Context(), firm, "")
+	sn, items, err := s.positions.ListMergedByFirms(r.Context(), firms, "")
 	if err != nil {
-		if positions.IsNoSnapshot(err) {
-			writeJSON(w, http.StatusOK, map[string]any{
-				"source": "fix", "firm_id": firm, "instruments": []any{}, "cash": []any{},
-				"note": "нет снимка позиций — выполните POST /api/v1/admin/positions/sync",
-			})
-			return
-		}
-		writeErr(w, http.StatusInternalServerError, err.Error())
+		s.writeInternal(w, err)
 		return
 	}
 	resp := mapPositionsResponse(sn, items)
-	resp["firm_id"] = firm
+	resp["firm_id"] = firms[0]
+	if len(items) == 0 && sn.ID == 0 {
+		resp["note"] = "нет снимка позиций — выполните POST /api/v1/admin/positions/sync или отправьте PUT /api/v1/positions (FIX 35=AL в QUIK)"
+	} else if len(items) == 0 && sn.ReportCount > 0 {
+		resp["note"] = "снимок позиций получен, но нет строк по фирме " + strings.Join(firms, "/")
+	}
 	writeJSON(w, http.StatusOK, resp)
 }
 
@@ -439,15 +570,23 @@ func mapPositionsResponse(sn positions.Snapshot, items []domain.FIXPosition) map
 	if cash == nil {
 		cash = []domain.FIXPosition{}
 	}
-	return map[string]any{
-		"source":      "fix",
-		"snapshot":    sn,
+	resp := map[string]any{
+		"source":      positionsResponseSource(sn, items),
 		"instruments": instruments,
 		"cash":        cash,
 	}
+	if sn.ID != 0 {
+		resp["snapshot"] = sn
+	}
+	return resp
 }
 
 func (s *Server) adminLogin(w http.ResponseWriter, r *http.Request) {
+	ip, _ := s.clientIP(r)
+	if s.authFailLimiter.Blocked(ip) {
+		writeErr(w, http.StatusTooManyRequests, "too many failed authentication attempts")
+		return
+	}
 	var req struct {
 		Email    string `json:"email"`
 		Password string `json:"password"`
@@ -458,7 +597,7 @@ func (s *Server) adminLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	u, err := s.users.Authenticate(r.Context(), req.Email, req.Password)
 	if err != nil {
-		ip, _ := s.clientIP(r)
+		s.authFailLimiter.Record(ip)
 		s.emitObs(observability.Event{
 			Type: observability.TypeAuth, Subtype: observability.AuthFailed, ClientIP: ip,
 			Endpoint: r.URL.Path, HTTPMethod: r.Method, RequestID: observability.RequestIDFrom(r.Context()),
@@ -470,14 +609,13 @@ func (s *Server) adminLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	token, err := admin.IssueToken(s.cfg.JWTSecret, u)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
+		s.writeInternal(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"token": token,
 		"user":  map[string]any{"id": u.ID, "email": u.Email, "role": u.RoleCode, "full_name": u.FullName},
 	})
-	ip, _ := s.clientIP(r)
 	s.emitObs(observability.Event{
 		Type: observability.TypeAuth, Subtype: observability.AuthSuccess, ClientIP: ip,
 		Endpoint: r.URL.Path, HTTPMethod: r.Method, RequestID: observability.RequestIDFrom(r.Context()),
@@ -487,51 +625,87 @@ func (s *Server) adminLogin(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
-	stats, _ := s.orderStore.StatsToday(r.Context())
-	ads, _ := s.manager.ListRuntime(r.Context())
-	brokersList, _ := s.brokers.ListBrokers(r.Context())
-	var accounts int64
-	_ = s.pool.QueryRow(r.Context(), `SELECT COUNT(*) FROM broker_accounts WHERE status='ACTIVE'`).Scan(&accounts)
-	dbOK := s.pool.Ping(r.Context()) == nil
-	obs := map[string]any{}
-	var topBrokers any = []any{}
-	var topErrors any = []any{}
-	connected := s.connectedBrokers(r.Context())
-	if s.obs != nil {
-		if ov, err := s.obs.Store().Overview(r.Context()); err == nil {
-			obs = map[string]any{
-				"requests_today": ov.RequestsToday, "orders_today": ov.OrdersToday,
-				"successful": ov.Successful, "failed": ov.Failed, "success_rate": ov.SuccessRate,
-				"avg_latency_ms": ov.AvgLatencyMs, "p95_latency_ms": ov.P95LatencyMs, "p99_latency_ms": ov.P99LatencyMs,
-				"errors_today": ov.ErrorsToday, "critical_today": ov.CriticalToday,
-				"auth_failures_today": ov.AuthFailuresToday, "active_brokers": ov.ActiveBrokers,
-				"connected_now": len(connected),
-			}
+	data, err := s.dashboardCache.get(r.Context(), 5*time.Second, func(ctx context.Context) (any, error) {
+		s.refreshDashboardSnapshot()
+		var raw []byte
+		if err := s.pool.QueryRow(ctx, `SELECT gateway_dashboard_snapshot()`).Scan(&raw); err != nil {
+			return nil, err
 		}
-		day := time.Now().Add(-24 * time.Hour)
-		if tb, err := s.obs.Store().TopBrokers(r.Context(), day, 10); err == nil {
-			topBrokers = tb
+		snapshot, err := decodeDashboardSnapshot(raw)
+		if err != nil {
+			return nil, err
 		}
-		if te, err := s.obs.Store().TopErrors(r.Context(), day, 10); err == nil {
-			topErrors = te
+		ads, err := s.manager.ListRuntime(ctx)
+		if err != nil {
+			return nil, err
 		}
-	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"system": map[string]any{
-			"api": "ONLINE", "database": boolStatus(dbOK), "queue": boolStatus(dbOK),
-		},
-		"adapters":           ads,
-		"stats":              stats,
-		"brokers":            len(brokersList),
-		"active_accounts":    accounts,
-		"adapters_available": s.manager.AvailableCount(),
-		"observability":      obs,
-		"connected_brokers":  connected,
-		"top_brokers":        topBrokers,
-		"top_errors":         topErrors,
+		snapshot["adapters"] = ads
+		snapshot["adapters_available"] = s.manager.AvailableCount()
+		snapshot["system"] = map[string]any{"api": "ONLINE", "database": "ONLINE", "queue": "ONLINE"}
+		return snapshot, nil
 	})
+	if err != nil {
+		if errors.Is(err, errDashboardPending) {
+			writeErr(w, http.StatusServiceUnavailable, "Статистика рассчитывается. Повторите запрос через несколько секунд.")
+			return
+		}
+		s.writeInternal(w, err)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, data)
 }
 
+var errDashboardPending = errors.New("dashboard snapshot pending")
+
+func decodeDashboardSnapshot(raw []byte) (map[string]any, error) {
+	if len(raw) == 0 {
+		return nil, errDashboardPending
+	}
+	var snapshot map[string]any
+	if err := json.Unmarshal(raw, &snapshot); err != nil {
+		return nil, err
+	}
+	if snapshot == nil {
+		return nil, errDashboardPending
+	}
+	return snapshot, nil
+}
+
+// Keep persisted statistics warm even when nobody has the dashboard open.
+func (s *Server) RunDashboardRefresh(ctx context.Context) {
+	ticker := time.NewTicker(15 * time.Second)
+	defer ticker.Stop()
+	for {
+		if ctx.Err() != nil {
+			return
+		}
+		s.refreshDashboardSnapshotContext(ctx)
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
+func (s *Server) refreshDashboardSnapshot() {
+	s.refreshDashboardSnapshotContext(context.Background())
+}
+
+func (s *Server) refreshDashboardSnapshotContext(parent context.Context) {
+	if !s.dashboardRefreshMu.TryLock() {
+		return
+	}
+	go func() {
+		defer s.dashboardRefreshMu.Unlock()
+		ctx, cancel := context.WithTimeout(parent, 60*time.Second)
+		defer cancel()
+		if _, err := s.pool.Exec(ctx, `SELECT gateway_refresh_dashboard_snapshot()`); err != nil && s.log != nil {
+			s.log.Warn("dashboard snapshot refresh failed", "error", err)
+		}
+	}()
+}
 func (s *Server) connectedBrokers(ctx context.Context) []observability.ConnectedBroker {
 	if s.obs == nil {
 		return []observability.ConnectedBroker{}
@@ -570,7 +744,7 @@ func (s *Server) createBroker(w http.ResponseWriter, r *http.Request) {
 func (s *Server) listBrokers(w http.ResponseWriter, r *http.Request) {
 	list, err := s.brokers.ListBrokers(r.Context())
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
+		s.writeInternal(w, err)
 		return
 	}
 	live := map[int64]observability.ConnectedBroker{}
@@ -675,12 +849,28 @@ func (s *Server) listTokens(w http.ResponseWriter, r *http.Request) {
 	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	list, err := s.brokers.ListTokens(r.Context(), id)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
+		s.writeInternal(w, err)
 		return
 	}
 	safe := make([]map[string]any, 0, len(list))
 	for _, t := range list {
 		safe = append(safe, safeToken(t))
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"tokens": safe})
+}
+
+func (s *Server) listAllTokens(w http.ResponseWriter, r *http.Request) {
+	list, err := s.brokers.ListAllTokens(r.Context())
+	if err != nil {
+		s.writeInternal(w, err)
+		return
+	}
+	safe := make([]map[string]any, 0, len(list))
+	for _, row := range list {
+		item := safeToken(row.Token)
+		item["broker_code"] = row.BrokerCode
+		item["broker_name"] = row.BrokerName
+		safe = append(safe, item)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"tokens": safe})
 }
@@ -806,7 +996,7 @@ func (s *Server) brokerStats(w http.ResponseWriter, r *http.Request) {
 	}
 	st, err := s.orderStore.StatsForBroker(r.Context(), id, days)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
+		s.writeInternal(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"stats": st})
@@ -816,7 +1006,7 @@ func (s *Server) listIPWhitelist(w http.ResponseWriter, r *http.Request) {
 	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	list, err := s.brokers.ListIPWhitelist(r.Context(), id)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
+		s.writeInternal(w, err)
 		return
 	}
 	b, _ := s.brokers.GetBroker(r.Context(), id)
@@ -857,7 +1047,10 @@ func (s *Server) removeIPWhitelist(w http.ResponseWriter, r *http.Request) {
 func (s *Server) createAccount(w http.ResponseWriter, r *http.Request) {
 	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	var req struct {
-		Code, Name, QuikFirm, TradingAccount string
+		Code           string `json:"code"`
+		Name           string `json:"name"`
+		QuikFirm       string `json:"quik_firm"`
+		TradingAccount string `json:"trading_account"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid json")
@@ -865,18 +1058,69 @@ func (s *Server) createAccount(w http.ResponseWriter, r *http.Request) {
 	}
 	a, err := s.brokers.CreateAccount(r.Context(), id, req.Code, req.Name, req.QuikFirm, req.TradingAccount)
 	if err != nil {
-		writeErr(w, http.StatusBadRequest, err.Error())
+		writeAccountErr(w, err)
 		return
 	}
+	s.writeAdminAudit(r, "ACCOUNT_CREATED", "broker_account", fmtInt(a.ID), &id, nil, map[string]any{
+		"code": a.Code, "trading_account": a.TradingAccount, "status": a.Status,
+	})
 	writeJSON(w, http.StatusCreated, map[string]any{"account": a})
+}
+
+func (s *Server) patchAccount(w http.ResponseWriter, r *http.Request) {
+	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	accountID, err := strconv.ParseInt(r.PathValue("account_id"), 10, 64)
+	if err != nil || accountID <= 0 {
+		writeErr(w, http.StatusBadRequest, "invalid account_id")
+		return
+	}
+	var req struct {
+		Code           *string `json:"code"`
+		Name           *string `json:"name"`
+		QuikFirm       *string `json:"quik_firm"`
+		TradingAccount *string `json:"trading_account"`
+		Status         *string `json:"status"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid json")
+		return
+	}
+	a, err := s.brokers.UpdateAccount(r.Context(), id, accountID, brokers.AccountUpdate{
+		Code: req.Code, Name: req.Name, QuikFirm: req.QuikFirm,
+		TradingAccount: req.TradingAccount, Status: req.Status,
+	})
+	if err != nil {
+		writeAccountErr(w, err)
+		return
+	}
+	s.writeAdminAudit(r, "ACCOUNT_UPDATED", "broker_account", fmtInt(a.ID), &id, nil, map[string]any{
+		"code": a.Code, "trading_account": a.TradingAccount, "status": a.Status,
+	})
+	writeJSON(w, http.StatusOK, map[string]any{"account": a})
+}
+
+func writeAccountErr(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, brokers.ErrNotFound):
+		writeErr(w, http.StatusNotFound, "not found")
+	case errors.Is(err, brokers.ErrAccountExists):
+		writeErr(w, http.StatusConflict, err.Error())
+	case errors.Is(err, brokers.ErrAccountFields), errors.Is(err, brokers.ErrAccountStatus):
+		writeErr(w, http.StatusBadRequest, err.Error())
+	default:
+		writeErr(w, http.StatusBadRequest, err.Error())
+	}
 }
 
 func (s *Server) listAccounts(w http.ResponseWriter, r *http.Request) {
 	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	list, err := s.brokers.ListAccounts(r.Context(), id)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
+		s.writeInternal(w, err)
 		return
+	}
+	if list == nil {
+		list = []domain.BrokerAccount{}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"accounts": list})
 }
@@ -884,7 +1128,7 @@ func (s *Server) listAccounts(w http.ResponseWriter, r *http.Request) {
 func (s *Server) listAdminOrders(w http.ResponseWriter, r *http.Request) {
 	list, err := s.orderStore.List(r.Context(), nil, 200)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
+		s.writeInternal(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"orders": mapOrders(list)})
@@ -903,7 +1147,7 @@ func (s *Server) listEmitentOrders(w http.ResponseWriter, r *http.Request) {
 		case errors.Is(err, quikexport.ErrNotFound):
 			writeErr(w, http.StatusNotFound, err.Error())
 		default:
-			writeErr(w, http.StatusInternalServerError, err.Error())
+			s.writeInternal(w, err)
 		}
 		return
 	}
@@ -913,7 +1157,7 @@ func (s *Server) listEmitentOrders(w http.ResponseWriter, r *http.Request) {
 func (s *Server) listAdminTrades(w http.ResponseWriter, r *http.Request) {
 	list, err := s.orderStore.ListTrades(r.Context(), nil, 500)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
+		s.writeInternal(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"trades": mapTrades(list)})
@@ -931,19 +1175,17 @@ func (s *Server) listAdminPositions(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	sn, items, err := s.positions.ListFromLatest(r.Context(), firm, "")
+	firms := positions.NormalizeFirmIDs(firm)
+	sn, items, err := s.positions.ListMergedByFirms(r.Context(), firms, "")
 	if err != nil {
-		if positions.IsNoSnapshot(err) {
-			writeJSON(w, http.StatusOK, map[string]any{
-				"source": "fix", "instruments": []any{}, "cash": []any{},
-				"note": "нет снимка позиций — нажмите «Запросить по FIX»",
-			})
-			return
-		}
-		writeErr(w, http.StatusInternalServerError, err.Error())
+		s.writeInternal(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, mapPositionsResponse(sn, items))
+	resp := mapPositionsResponse(sn, items)
+	if len(items) == 0 && sn.ID == 0 {
+		resp["note"] = "нет снимка позиций — нажмите «Запросить по FIX» или установите позицию в QUIK (35=AL)"
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 func (s *Server) syncPositionsFIX(w http.ResponseWriter, r *http.Request) {
@@ -969,10 +1211,10 @@ func (s *Server) syncPositionsFIX(w http.ResponseWriter, r *http.Request) {
 
 	adapterID, reqID, count, sn, err := s.positions.SyncFromFIX(r.Context(), s.manager, q)
 	if err != nil {
-		writeErr(w, http.StatusBadGateway, err.Error())
+		s.writeUpstream(w, err)
 		return
 	}
-	_, listed, _ := s.positions.ListFromLatest(r.Context(), req.Firm, "")
+	_, listed, _ := s.positions.ListMergedByFirms(r.Context(), positions.NormalizeFirmIDs(req.Firm), "")
 	cash, instr, fut := 0, 0, 0
 	for _, p := range listed {
 		switch p.Kind {
@@ -1047,7 +1289,7 @@ func (s *Server) listAdminMarketData(w http.ResponseWriter, r *http.Request) {
 			})
 			return
 		}
-		writeErr(w, http.StatusInternalServerError, err.Error())
+		s.writeInternal(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, mapMarketDataResponse(sn, items))
@@ -1059,26 +1301,19 @@ func (s *Server) syncMarketDataFIX(w http.ResponseWriter, r *http.Request) {
 		Board  string `json:"board"`
 	}
 	_ = json.NewDecoder(r.Body).Decode(&req)
-	q := domain.MarketDataQuery{Symbol: strings.TrimSpace(req.Symbol), Board: strings.TrimSpace(req.Board)}
-	if q.Symbol == "" {
-		if list, err := s.refdata.ListActiveInstruments(r.Context()); err == nil {
-			q.Instruments = list
-		}
-	}
-
-	adapterID, reqID, items, err := s.manager.SubscribeMarketData(r.Context(), q)
-	if err != nil {
-		writeErr(w, http.StatusBadGateway, err.Error())
+	adapterID, items, ok := s.manager.LiveQuotes()
+	if !ok {
+		writeErr(w, http.StatusServiceUnavailable, "FIX market data subscription is warming up; retry shortly")
 		return
 	}
-	s.hub.Broadcast("marketdata.tick", map[string]any{"quotes": items})
+	items = filterQuotes(items, strings.TrimSpace(req.Board), strings.TrimSpace(req.Symbol))
+	// UI refreshes read the persistent backend subscription; they must not replace it.
 	writeJSON(w, http.StatusOK, map[string]any{
-		"ok": true, "adapter_id": adapterID, "md_req_id": reqID, "live": true,
+		"ok": true, "adapter_id": adapterID, "live": true,
 		"received": len(items), "summary": marketdata.FormatReceived(len(items)),
 		"result": map[string]any{"source": "live", "live": true, "quotes": items},
 	})
 }
-
 func (s *Server) getAdminOrder(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(r.PathValue("id"))
 	if err != nil {
@@ -1102,7 +1337,7 @@ func (s *Server) getAdminOrder(w http.ResponseWriter, r *http.Request) {
 func (s *Server) listAdapters(w http.ResponseWriter, r *http.Request) {
 	list, err := s.manager.ListRuntime(r.Context())
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
+		s.writeInternal(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"adapters": list})
@@ -1183,7 +1418,7 @@ func (s *Server) restartAdapter(w http.ResponseWriter, r *http.Request) {
 func (s *Server) listAudit(w http.ResponseWriter, r *http.Request) {
 	list, err := s.audit.List(r.Context(), 200)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
+		s.writeInternal(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"audit": list})
@@ -1192,36 +1427,10 @@ func (s *Server) listAudit(w http.ResponseWriter, r *http.Request) {
 func (s *Server) listUsers(w http.ResponseWriter, r *http.Request) {
 	list, err := s.users.List(r.Context())
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
+		s.writeInternal(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"users": list})
-}
-
-func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
-	token := bearer(r)
-	if token == "" {
-		token = r.URL.Query().Get("token")
-	}
-	if token == "" {
-		writeErr(w, http.StatusUnauthorized, "missing token")
-		return
-	}
-	if _, err := auth.ParseAdminJWT(s.cfg.JWTSecret, token); err != nil {
-		writeErr(w, http.StatusUnauthorized, "invalid token")
-		return
-	}
-	conn, err := s.upgrader.Upgrade(w, r, nil)
-	if err != nil {
-		return
-	}
-	s.hub.Register(conn)
-	defer s.hub.Unregister(conn)
-	for {
-		if _, _, err := conn.ReadMessage(); err != nil {
-			return
-		}
-	}
 }
 
 func orderFieldHints() map[string]string {
@@ -1341,7 +1550,7 @@ func (s *Server) OnExecution(report adapters.ExecutionReport) {
 		return
 	}
 	if ad, ok := s.manager.Get(report.AdapterID); ok {
-		if order.Status == domain.OrderFilled || order.Status == domain.OrderCancelled || order.Status == domain.OrderRejected {
+		if order.ExecutionBecameTerminal {
 			ad.IncActive(-1)
 		}
 	}
@@ -1404,19 +1613,24 @@ func parseDec(s string) decimal.Decimal {
 	return d
 }
 
-func (s *Server) handleOpenAPI(w http.ResponseWriter, r *http.Request) {
-	http.ServeFile(w, r, "docs/openapi.yaml")
-}
-
-func (s *Server) handleBrokerOpenAPI(w http.ResponseWriter, r *http.Request) {
-	http.ServeFile(w, r, "docs/broker-openapi.yaml")
-}
-
 func (s *Server) handleDocsAsset(w http.ResponseWriter, r *http.Request) {
-	http.ServeFile(w, r, r.URL.Path[1:]) // strip leading /
+	if !s.docsEnabled() {
+		writeErr(w, http.StatusNotFound, "not found")
+		return
+	}
+	switch r.URL.Path {
+	case "/docs/kse-logo.png", "/docs/kse-favicon.png":
+		http.ServeFile(w, r, strings.TrimPrefix(r.URL.Path, "/"))
+	default:
+		writeErr(w, http.StatusNotFound, "not found")
+	}
 }
 
 func (s *Server) handleSwaggerUI(w http.ResponseWriter, r *http.Request) {
+	if !s.docsEnabled() {
+		writeErr(w, http.StatusNotFound, "not found")
+		return
+	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_, _ = w.Write([]byte(`<!doctype html>
 <html><head><meta charset="utf-8"/><title>FIX Gateway API</title>
@@ -1428,6 +1642,10 @@ func (s *Server) handleSwaggerUI(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleBrokerSwaggerUI(w http.ResponseWriter, r *http.Request) {
+	if !s.docsEnabled() {
+		writeErr(w, http.StatusNotFound, "not found")
+		return
+	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_, _ = w.Write([]byte(`<!doctype html>
 <html><head>

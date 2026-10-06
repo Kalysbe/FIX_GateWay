@@ -33,8 +33,9 @@ type sessionApp struct {
 	secDefMu   sync.Mutex
 	secDefWait *secDefWaiter
 
-	posMu   sync.Mutex
-	posWait *posWaiter
+	posMu     sync.Mutex
+	posWait   *posWaiter
+	maintWait *maintWaiter
 
 	mdMu     sync.Mutex
 	mdWait   *mdWaiter
@@ -78,6 +79,11 @@ func (a *sessionApp) OnLogon(sessionID quickfix.SessionID) {
 
 func (a *sessionApp) OnLogout(sessionID quickfix.SessionID) {
 	a.loggedOn.Store(false)
+	// Quotes from the old session must not suppress background resubscription.
+	a.mdMu.Lock()
+	a.mdBook = map[string]domain.MarketQuote{}
+	a.mdSubIDs = map[string]struct{}{}
+	a.mdMu.Unlock()
 	a.log.Info("fix session logout", "adapter_id", a.adapterID, "session", sessionID.String())
 	a.emitFIX("FIX_SESSION_DISCONNECTED", sessionID.String(), "5", "IN", "", "logout", 0)
 }
@@ -108,7 +114,24 @@ func (a *sessionApp) ToApp(msg *quickfix.Message, sessionID quickfix.SessionID) 
 }
 
 func (a *sessionApp) FromAdmin(msg *quickfix.Message, sessionID quickfix.SessionID) quickfix.MessageRejectError {
-	return nil
+	msgType, err := msg.MsgType()
+	if err != nil {
+		return nil
+	}
+	switch msgType {
+	case string(enum.MsgType_HEARTBEAT), string(enum.MsgType_TEST_REQUEST),
+		string(enum.MsgType_RESEND_REQUEST), string(enum.MsgType_SEQUENCE_RESET),
+		string(enum.MsgType_LOGON), string(enum.MsgType_LOGOUT):
+		return nil
+	case string(enum.MsgType_REJECT):
+		a.log.Warn("fix session reject", "adapter_id", a.adapterID, "wire", sanitizeFIX(msg))
+		a.handleFIXReject(msg)
+		a.emitAppFIX("FIX_REJECT", msg, sessionID)
+		return nil
+	default:
+		a.log.Debug("fix admin message", "adapter_id", a.adapterID, "msg_type", msgType, "wire", sanitizeFIX(msg))
+		return nil
+	}
 }
 
 func (a *sessionApp) FromApp(msg *quickfix.Message, sessionID quickfix.SessionID) quickfix.MessageRejectError {
@@ -125,6 +148,10 @@ func (a *sessionApp) FromApp(msg *quickfix.Message, sessionID quickfix.SessionID
 		a.handleOrderCancelReject(msg)
 		a.emitAppFIX("FIX_REJECT", msg, sessionID)
 	case string(enum.MsgType_REJECT):
+		a.handleFIXReject(msg)
+		a.emitAppFIX("FIX_REJECT", msg, sessionID)
+	case string(enum.MsgType_BUSINESS_MESSAGE_REJECT):
+		a.handleFIXReject(msg)
 		a.emitAppFIX("FIX_REJECT", msg, sessionID)
 	case string(enum.MsgType_SECURITY_DEFINITION):
 		a.handleSecurityDefinition(msg)
@@ -132,6 +159,8 @@ func (a *sessionApp) FromApp(msg *quickfix.Message, sessionID quickfix.SessionID
 		a.handlePositionReport(msg)
 	case string(enum.MsgType_REQUEST_FOR_POSITIONS_ACK):
 		a.handleRequestForPositionsAck(msg)
+	case string(enum.MsgType_POSITION_MAINTENANCE_REPORT):
+		a.handlePositionMaintenanceReport(msg)
 	case string(enum.MsgType_MARKET_DATA_SNAPSHOT_FULL_REFRESH):
 		a.handleMarketDataSnapshot(msg)
 	case string(enum.MsgType_MARKET_DATA_INCREMENTAL_REFRESH):
@@ -139,7 +168,10 @@ func (a *sessionApp) FromApp(msg *quickfix.Message, sessionID quickfix.SessionID
 	case string(enum.MsgType_MARKET_DATA_REQUEST_REJECT):
 		a.handleMarketDataReject(msg)
 	default:
-		a.log.Info("unhandled fix app message", "adapter_id", a.adapterID, "msg_type", msgType)
+		a.log.Debug("unhandled fix app message", "adapter_id", a.adapterID, "msg_type", msgType, "wire", sanitizeFIX(msg))
+		if msgType == "AM" {
+			a.handlePositionMaintenanceReport(msg)
+		}
 	}
 	return nil
 }

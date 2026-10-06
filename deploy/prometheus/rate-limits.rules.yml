@@ -1,0 +1,38 @@
+groups:
+  - name: gateway-rate-limits
+    rules:
+      - alert: BrokerRateLimit80
+        expr: rate(grpc_rate_limit_requests_total{scope="broker"}[1m]) / grpc_rate_limit_configured_rps{scope="broker"} > 0.8 and on(scope,broker_id,method) grpc_rate_limit_enabled == 1
+        for: 2m
+        labels: { severity: warning }
+        annotations: { summary: "Broker traffic exceeds 80% of its admission budget" }
+      - alert: BrokerRateLimit90
+        expr: rate(grpc_rate_limit_requests_total{scope="broker"}[1m]) / grpc_rate_limit_configured_rps{scope="broker"} > 0.9 and on(scope,broker_id,method) grpc_rate_limit_enabled == 1
+        for: 2m
+        labels: { severity: critical }
+        annotations: { summary: "Broker traffic exceeds 90% of its admission budget" }
+      - alert: BrokerResourceExhausted
+        expr: rate(grpc_rate_limit_rejected_total{scope="broker"}[5m]) > 1
+        for: 2m
+        labels: { severity: warning }
+        annotations: { summary: "Broker repeatedly receives ResourceExhausted / HTTP 429" }
+      - alert: GlobalRateLimit80
+        expr: rate(grpc_rate_limit_requests_total{scope="global"}[1m]) / grpc_rate_limit_configured_rps{scope="global"} > 0.8 and on(scope,broker_id,method) grpc_rate_limit_enabled == 1
+        for: 2m
+        labels: { severity: warning }
+        annotations: { summary: "Global traffic exceeds 80% of its admission budget" }
+      - alert: GlobalRateLimit90
+        expr: rate(grpc_rate_limit_requests_total{scope="global"}[1m]) / grpc_rate_limit_configured_rps{scope="global"} > 0.9 and on(scope,broker_id,method) grpc_rate_limit_enabled == 1
+        for: 2m
+        labels: { severity: critical }
+        annotations: { summary: "Global traffic exceeds 90% of its admission budget" }
+      - alert: AdmissionConcurrencySaturated
+        expr: rate(grpc_rate_limit_concurrency_rejected_total[1m]) > 0
+        for: 2m
+        labels: { severity: warning }
+        annotations: { summary: "Admission concurrency capacity is repeatedly exhausted" }
+      - alert: AdmissionLatencyHigh
+        expr: histogram_quantile(0.99, rate(grpc_rate_limit_latency_seconds_bucket[5m])) > 0.001
+        for: 2m
+        labels: { severity: warning }
+        annotations: { summary: "Admission p99 overhead exceeds 1 ms" }

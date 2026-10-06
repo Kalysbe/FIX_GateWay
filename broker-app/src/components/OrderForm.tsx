@@ -1,9 +1,10 @@
 import { useState, type FormEvent } from "react";
 import { useDesk } from "../hooks/useDesk";
 import type { OrderType, Side, TimeInForce } from "../types";
+import OrderBook from "./OrderBook";
 
 export default function OrderForm() {
-  const { activeBroker, placeOrder, updateBroker } = useDesk();
+  const { activeBroker, placeOrder, updateBroker, state } = useDesk();
   const [symbol, setSymbol] = useState("KG0105166315");
   const [board, setBoard] = useState("LISTEDSTOCKK");
   const [side, setSide] = useState<Side>("BUY");
@@ -54,6 +55,8 @@ export default function OrderForm() {
 
   return (
     <div className="card">
+      <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_240px]">
+        <div>
       <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
         <div>
           <div className="font-display text-lg font-semibold">Новая заявка → Gateway</div>
@@ -152,6 +155,20 @@ export default function OrderForm() {
         </div>
       </form>
       {msg && <div className="mt-3 font-mono text-xs text-slate-400">{msg}</div>}
+        </div>
+        <OrderBook
+          gatewayUrl={state.settings.gatewayUrl}
+          token={activeBroker.apiToken}
+          symbol={symbol}
+          board={board}
+          enabled={activeBroker.connected}
+          onPick={(nextSide, nextPrice) => {
+            setSide(nextSide);
+            setPrice(nextPrice);
+            setOrderType("LIMIT");
+          }}
+        />
+      </div>
     </div>
   );
 }

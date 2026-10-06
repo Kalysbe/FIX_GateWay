@@ -32,3 +32,31 @@ func TestExternallyAccepted(t *testing.T) {
 		t.Fatal("expected accepted when quik id set")
 	}
 }
+
+func TestShouldAttemptFIXSendFence(t *testing.T) {
+	now := domain.Order{Status: domain.OrderRouting}
+	if !ShouldAttemptFIXSend(now) {
+		t.Fatal("unfenced ROUTING must send")
+	}
+	ts := now.CreatedAt
+	fenced := domain.Order{Status: domain.OrderRouting, FixSendAttemptedAt: &ts}
+	if ShouldAttemptFIXSend(fenced) {
+		t.Fatal("fenced order must not send again")
+	}
+	if CanClearRouteForFailover(fenced) {
+		t.Fatal("fenced order must not failover")
+	}
+	sent := domain.Order{Status: domain.OrderSent}
+	if ShouldAttemptFIXSend(sent) || CanClearRouteForFailover(sent) {
+		t.Fatal("SENT must not send or failover")
+	}
+}
+
+func TestRoutingAcceptsVenueER(t *testing.T) {
+	if !CanTransition(domain.OrderRouting, domain.OrderAcknowledged) {
+		t.Fatal("ROUTING -> ACKNOWLEDGED (ER before MarkSent)")
+	}
+	if !CanTransition(domain.OrderRouting, domain.OrderPartiallyFilled) {
+		t.Fatal("ROUTING -> PARTIALLY_FILLED")
+	}
+}
