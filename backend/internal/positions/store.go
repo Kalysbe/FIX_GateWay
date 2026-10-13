@@ -9,6 +9,7 @@ import (
 
 	"github.com/fix-gateway/backend/internal/domain"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/shopspring/decimal"
 )
@@ -51,6 +52,14 @@ func (s *Store) CompleteSnapshot(ctx context.Context, id int64, status, errMsg s
 }
 
 func (s *Store) InsertPositions(ctx context.Context, snapshotID int64, items []domain.FIXPosition) error {
+	return insertPositions(ctx, s.pool, snapshotID, items)
+}
+
+type positionExecutor interface {
+	Exec(context.Context, string, ...any) (pgconn.CommandTag, error)
+}
+
+func insertPositions(ctx context.Context, db positionExecutor, snapshotID int64, items []domain.FIXPosition) error {
 	for _, p := range items {
 		keysJSON, _ := json.Marshal(p.Keys)
 		itemsJSON, _ := json.Marshal(p.Items)
@@ -60,7 +69,7 @@ func (s *Store) InsertPositions(ctx context.Context, snapshotID int64, items []d
 		if p.Items == nil {
 			itemsJSON = []byte("{}")
 		}
-		_, err := s.pool.Exec(ctx, `
+		_, err := db.Exec(ctx, `
 			INSERT INTO fix_positions (
 				snapshot_id, adapter_id, pos_maint_rpt_id, pos_req_id, clearing_date, kind,
 				firm_id, client_code, account_code, symbol, security_id, board, currency,

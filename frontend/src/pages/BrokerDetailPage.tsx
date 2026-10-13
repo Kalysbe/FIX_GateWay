@@ -1,3 +1,6 @@
+import { RowActions } from "../components/RowActions";
+import { DataTable } from "../components/DataTable";
+import { dateValue } from "../lib/table";
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -129,7 +132,6 @@ export default function BrokerDetailPage() {
   const [revealTitle, setRevealTitle] = useState("ТОКЕН СОЗДАН");
   const [revealNote, setRevealNote] = useState("");
   const [confirmRevoke, setConfirmRevoke] = useState<APIToken | null>(null);
-  const [menuToken, setMenuToken] = useState<string | null>(null);
   const [editFirm, setEditFirm] = useState<APIToken | null>(null);
   const [editFirmValue, setEditFirmValue] = useState("");
   const [newIP, setNewIP] = useState("");
@@ -270,7 +272,6 @@ export default function BrokerDetailPage() {
     setRevealedToken(res.token);
     setRevealTitle("ТОКЕН РОТИРОВАН");
     setRevealNote("Старый токен продолжает работать. После переключения брокера необходимо отозвать старый токен.");
-    setMenuToken(null);
     qc.invalidateQueries({ queryKey: ["tokens", id] });
     qc.invalidateQueries({ queryKey: ["security", id] });
   }
@@ -278,7 +279,6 @@ export default function BrokerDetailPage() {
   async function revoke(tokenId: string) {
     await api(`/api/v1/admin/tokens/${tokenId}/revoke`, { method: "POST" });
     setConfirmRevoke(null);
-    setMenuToken(null);
     qc.invalidateQueries({ queryKey: ["tokens", id] });
     qc.invalidateQueries({ queryKey: ["security", id] });
   }
@@ -405,19 +405,12 @@ export default function BrokerDetailPage() {
                 </button>
               </div>
               <div className="overflow-x-auto">
-                <table className="table">
-                  <thead>
-                    <tr>
-                      <th>Название</th>
-                      <th>Статус</th>
-                      <th>Права</th>
-                      <th>Истекает</th>
-                      <th>Последнее использование</th>
-                      <th className="w-10"></th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {tokenList.map((t) => (
+                <DataTable<APIToken> title="Токены брокера" rows={tokenList} columns={[{ id: "c0", header: "Название", value: (t) => t.name },
+{ id: "c1", header: "Статус", value: (t) => t.status },
+{ id: "c2", header: "Права", value: (t) => (t.permissions || []).join(" ") },
+{ id: "c3", header: "Истекает", value: (t) => dateValue(t.expires_at) },
+{ id: "c4", header: "Последнее использование", value: (t) => dateValue(t.last_used_at) },
+{ id: "actions", header: "Действия", value: () => "", sortable: false }]} rowKey={row => row.id} renderRow={(t) => (
                       <tr key={t.id} className="align-middle">
                         <td>
                           <div className="font-medium">{t.name}</div>
@@ -447,60 +440,15 @@ export default function BrokerDetailPage() {
                         </td>
                         <td className="relative">
                           {t.status === "ACTIVE" && (
-                            <>
-                              <button
-                                type="button"
-                                className="icon-btn"
-                                onClick={() => setMenuToken(menuToken === t.id ? null : t.id)}
-                              >
-                                <Icons.more size={16} />
-                              </button>
-                              {menuToken === t.id && (
-                                <div className="absolute right-2 z-10 mt-1 w-40 rounded-lg border border-line bg-panel py-1 shadow-lg">
-                                  <button
-                                    type="button"
-                                    className="block w-full px-3 py-1.5 text-left text-sm hover:bg-slate-50"
-                                    onClick={() => {
-                                      setEditFirm(t);
-                                      setEditFirmValue(t.quik_firm || "");
-                                      setMenuToken(null);
-                                    }}
-                                  >
-                                    Фирма (5018)
-                                  </button>
-                                  <button
-                                    type="button"
-                                    className="block w-full px-3 py-1.5 text-left text-sm hover:bg-slate-50"
-                                    onClick={() => rotate(t.id)}
-                                  >
-                                    Ротация
-                                  </button>
-                                  <button
-                                    type="button"
-                                    className="block w-full px-3 py-1.5 text-left text-sm text-danger hover:bg-slate-50"
-                                    onClick={() => {
-                                      setConfirmRevoke(t);
-                                      setMenuToken(null);
-                                    }}
-                                  >
-                                    Отозвать
-                                  </button>
-                                </div>
-                              )}
-                            </>
+                            <RowActions label={"Действия токена " + t.name} actions={[
+                              { label: "Изменить фирму", run: () => { setEditFirm(t); setEditFirmValue(t.quik_firm || ""); } },
+                              { label: "Ротировать токен", run: () => rotate(t.id) },
+                              { label: "Отозвать токен", danger: true, run: () => setConfirmRevoke(t) },
+                            ]} />
                           )}
                         </td>
                       </tr>
-                    ))}
-                    {tokenList.length === 0 && (
-                      <tr>
-                        <td colSpan={6} className="py-8 text-center text-slate-400">
-                          Токенов пока нет
-                        </td>
-                      </tr>
-                    )}
-                  </tbody>
-                </table>
+                    )} emptyTitle="Записей пока нет" />
               </div>
               <div className="m-4 flex gap-2 rounded-lg border border-sky-100 bg-sky-50 px-3 py-2.5 text-sm text-sky-900">
                 <Icons.info size={18} className="mt-0.5 shrink-0 text-sky-600" />
@@ -529,18 +477,11 @@ export default function BrokerDetailPage() {
               </div>
               {accountListError && <p className="px-4 pt-3 text-sm text-danger">{accountListError}</p>}
               <div className="overflow-x-auto">
-                <table className="table">
-                  <thead>
-                    <tr>
-                      <th>Торговый счёт</th>
-                      <th>Код</th>
-                      <th>Название</th>
-                      <th>Статус</th>
-                      <th className="w-40"></th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {accountList.map((a) => {
+                <DataTable<BrokerAccount> title="Торговые счета" rows={accountList} columns={[{ id: "c0", header: "Торговый счёт", value: (a) => a.trading_account },
+{ id: "c1", header: "Код", value: (a) => a.code },
+{ id: "c2", header: "Название", value: (a) => a.name },
+{ id: "c3", header: "Статус", value: (a) => a.status },
+{ id: "actions", header: "Действия", value: () => "", sortable: false }]} rowKey={row => row.id} renderRow={(a) => {
                       const active = (a.status || "").toUpperCase() === "ACTIVE";
                       return (
                         <tr key={a.id} className="align-middle">
@@ -574,16 +515,7 @@ export default function BrokerDetailPage() {
                           </td>
                         </tr>
                       );
-                    })}
-                    {accountList.length === 0 && (
-                      <tr>
-                        <td colSpan={5} className="py-8 text-center text-slate-400">
-                          Счетов пока нет — добавьте торговый код, например 1-3101-2040
-                        </td>
-                      </tr>
-                    )}
-                  </tbody>
-                </table>
+                    }} emptyTitle="Записей пока нет" />
               </div>
               <div className="m-4 flex gap-2 rounded-lg border border-sky-100 bg-sky-50 px-3 py-2.5 text-sm text-sky-900">
                 <Icons.info size={18} className="mt-0.5 shrink-0 text-sky-600" />
@@ -609,29 +541,13 @@ export default function BrokerDetailPage() {
                     Управление IP
                   </button>
                 </div>
-                <table className="table">
-                  <thead>
-                    <tr>
-                      <th>IP</th>
-                      <th>Описание</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {ipEntries.slice(0, tab === "ip" ? 50 : 5).map((e) => (
+                <DataTable<IPWhitelistEntry> title="IP Whitelist" rows={ipEntries} columns={[{ id: "c0", header: "IP", value: (e) => e.ip_cidr },
+{ id: "c1", header: "Описание", value: (e) => e.note }]} rowKey={row => row.id} renderRow={(e) => (
                       <tr key={e.id}>
                         <td className="font-mono text-sm">{e.ip_cidr}</td>
                         <td className="text-slate-500">{e.note || "—"}</td>
                       </tr>
-                    ))}
-                    {ipEntries.length === 0 && (
-                      <tr>
-                        <td colSpan={2} className="py-6 text-center text-slate-400">
-                          Список пуст
-                        </td>
-                      </tr>
-                    )}
-                  </tbody>
-                </table>
+                    )} emptyTitle="Записей пока нет" />
               </section>
 
               {(tab === "tokens" || tab === "overview") && (
@@ -720,18 +636,11 @@ export default function BrokerDetailPage() {
                   Открыть в разделе Логи →
                 </Link>
               </div>
-              <table className="table">
-                <thead>
-                  <tr>
-                    <th>Время</th>
-                    <th>Sev</th>
-                    <th>Тип</th>
-                    <th>Событие</th>
-                    <th>IP</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {(brokerLogs.data?.logs || []).map((row) => (
+              <DataTable<ObsLog> title="События брокера" rows={(brokerLogs.data?.logs || [])} columns={[{ id: "c0", header: "Время", value: (row) => dateValue(row.timestamp) },
+{ id: "c1", header: "Sev", value: (row) => row.severity },
+{ id: "c2", header: "Тип", value: (row) => row.type },
+{ id: "c3", header: "Событие", value: (row) => row.subtype },
+{ id: "c4", header: "IP", value: (row) => row.client_ip }]} rowKey={row => row.id ?? ""} renderRow={(row) => (
                     <tr key={row.id}>
                       <td className="font-mono text-xs">{formatDateTime(row.timestamp)}</td>
                       <td>{row.severity}</td>
@@ -739,16 +648,7 @@ export default function BrokerDetailPage() {
                       <td className="font-mono text-xs">{row.subtype}</td>
                       <td className="font-mono text-xs">{row.client_ip || "—"}</td>
                     </tr>
-                  ))}
-                  {(brokerLogs.data?.logs || []).length === 0 && (
-                    <tr>
-                      <td colSpan={5} className="py-8 text-center text-slate-400">
-                        Нет событий этой фирмы
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
+                  )} emptyTitle="Записей пока нет" />
             </section>
           )}
 
@@ -824,16 +724,9 @@ export default function BrokerDetailPage() {
               Добавить
             </button>
           </form>
-          <table className="table">
-            <thead>
-              <tr>
-                <th>IP / CIDR</th>
-                <th>Описание</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody>
-              {ipEntries.map((e) => (
+          <DataTable<IPWhitelistEntry> title="Адреса доступа" rows={ipEntries} columns={[{ id: "c0", header: "IP / CIDR", value: (e) => e.ip_cidr },
+{ id: "c1", header: "Описание", value: (e) => e.note },
+{ id: "actions", header: "Действия", value: () => "", sortable: false }]} rowKey={row => row.id} renderRow={(e) => (
                 <tr key={e.id}>
                   <td className="font-mono">{e.ip_cidr}</td>
                   <td>{e.note || "—"}</td>
@@ -843,9 +736,7 @@ export default function BrokerDetailPage() {
                     </button>
                   </td>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              )} emptyTitle="Записей пока нет" />
         </Modal>
       )}
 

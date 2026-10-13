@@ -20,7 +20,7 @@ async function call(path,token='',method='GET',body,status=200){
  const value=await response.json();assert.equal(response.status,status,`${method} ${path}: ${JSON.stringify(value)}`);return value;
 }
 async function until(fn){const deadline=Date.now()+45000;while(Date.now()<deadline){try{const value=await fn();if(value)return value;}catch{}await delay(200);}throw Error('Verification timed out');}
-assert.equal(sql('SELECT version FROM schema_migrations'),'25');
+assert.equal(sql('SELECT version FROM schema_migrations'),'27');
 const {token:admin}=await call('/api/v1/admin/login','','POST',{email:'admin@localhost',password:'admin123'});
 const {broker}=await call('/api/v1/admin/brokers',admin,'POST',{code:`VERIFY-${randomUUID()}`,name:'Release verification'},201);
 await call(`/api/v1/admin/brokers/${broker.id}/accounts`,admin,'POST',{code:'VERIFY',name:'Test',quik_firm:'SIM',trading_account:'VERIFY'},201);

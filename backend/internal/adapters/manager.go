@@ -15,17 +15,25 @@ import (
 type StatusListener func(adapterID string, status domain.AdapterStatus)
 
 type Manager struct {
-	store        *Store
-	log          *slog.Logger
-	balancer     routing.Balancer
-	onExec       ExecutionHandler
-	onStatus     StatusListener
-	onMD         domain.MarketDataHandler
-	storeDir     string
-	interval     time.Duration
-	hostOverride string
-	onFIX        func(kind, adapterID, sessionID, msgType, direction, clOrdID, reason string, seq int)
-	onObs        func(eventType, subtype, adapterID, message string)
+	store            *Store
+	log              *slog.Logger
+	balancer         routing.Balancer
+	onExec           ExecutionHandler
+	onStatus         StatusListener
+	onMD             domain.MarketDataHandler
+	onPositions      func(string, string, []domain.FIXPosition) error
+	positionAdapter  string
+	positionMu       sync.Mutex
+	positionOwnerMu  sync.RWMutex
+	positionSnapshot *domain.PositionSubscription
+	mdOwnerMu        sync.RWMutex
+	mdOwner          string
+	mdMaintainMu     sync.Mutex
+	storeDir         string
+	interval         time.Duration
+	hostOverride     string
+	onFIX            func(kind, adapterID, sessionID, msgType, direction, clOrdID, reason string, seq int)
+	onObs            func(eventType, subtype, adapterID, message string)
 
 	mu          sync.RWMutex
 	lifecycleMu sync.Mutex
@@ -47,6 +55,10 @@ func (m *Manager) SetHostOverride(host string) { m.hostOverride = host }
 func (m *Manager) SetStatusListener(fn StatusListener) { m.onStatus = fn }
 
 func (m *Manager) SetMarketDataListener(fn domain.MarketDataHandler) { m.onMD = fn }
+
+func (m *Manager) SetPositionListener(fn func(string, string, []domain.FIXPosition) error) {
+	m.onPositions = fn
+}
 
 func (m *Manager) SetFIXHandler(fn func(kind, adapterID, sessionID, msgType, direction, clOrdID, reason string, seq int)) {
 	m.onFIX = fn
@@ -97,7 +109,7 @@ func (m *Manager) startOne(ctx context.Context, meta domain.Adapter) error {
 	var ad Adapter
 	switch meta.Type {
 	case "arqa", "simulator":
-		ad = arqa.New(meta, m.log, m.onExec, m.onMD, m.storeDir)
+		ad = arqa.New(meta, m.log, m.onExec, func(quotes []domain.MarketQuote) { m.publishMarketData(meta.ID, quotes) }, m.storeDir)
 	default:
 		return fmt.Errorf("unknown adapter type %s", meta.Type)
 	}
@@ -106,6 +118,9 @@ func (m *Manager) startOne(ctx context.Context, meta domain.Adapter) error {
 		impl.SetFIXHandler(func(kind, sessionID, msgType, direction, clOrdID, reason string, seq int) {
 			m.onFIX(kind, id, sessionID, msgType, direction, clOrdID, reason, seq)
 		})
+	}
+	if impl, ok := ad.(*arqa.Adapter); ok {
+		impl.SetPositionListener(m.publishPositions)
 	}
 	if err := ad.Start(ctx); err != nil {
 		return err

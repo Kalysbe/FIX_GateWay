@@ -7,8 +7,8 @@ export type AdapterLike = {
   Type?: string;
   host?: string;
   Host?: string;
-  port?: number;
-  Port?: number;
+  port?: number | string;
+  Port?: number | string;
   status?: string;
   Status?: string;
   weight?: number;

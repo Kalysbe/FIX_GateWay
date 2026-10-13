@@ -1,7 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { api } from "../api";
-import { statusLabel } from "../labels";
+import { StatusBadge } from "../components/StatusBadge";
+import { DataTable, type TableColumn } from "../components/DataTable";
+import { ErrorBanner } from "../components/feedback";
 import { PageHeader } from "../components/PageHeader";
 
 type Instrument = {
@@ -25,7 +27,6 @@ type Firm = {
 export default function ReferencePage() {
   const qc = useQueryClient();
   const [tab, setTab] = useState<"instruments" | "firms">("instruments");
-  const [q, setQ] = useState("");
 
   const instruments = useQuery({
     queryKey: ["admin-instruments"],
@@ -51,37 +52,28 @@ export default function ReferencePage() {
     },
   });
 
-  const filteredInstruments = useMemo(() => {
-    const list = instruments.data?.instruments || [];
-    const needle = q.trim().toLowerCase();
-    if (!needle) return list;
-    return list.filter(
-      (i) =>
-        i.quik_symbol.toLowerCase().includes(needle) ||
-        i.board.toLowerCase().includes(needle) ||
-        i.internal_symbol.toLowerCase().includes(needle) ||
-        i.currency.toLowerCase().includes(needle),
-    );
-  }, [instruments.data, q]);
-
-  const filteredFirms = useMemo(() => {
-    const list = firms.data?.firms || [];
-    const needle = q.trim().toLowerCase();
-    if (!needle) return list;
-    return list.filter(
-      (f) =>
-        f.firm_id.toLowerCase().includes(needle) ||
-        f.firm_name.toLowerCase().includes(needle) ||
-        f.exchange.toLowerCase().includes(needle) ||
-        f.status.toLowerCase().includes(needle),
-    );
-  }, [firms.data, q]);
+  const instrumentColumns: TableColumn<Instrument>[] = [
+    { id: "id", header: "ID", value: i => i.id, numeric: true },
+    { id: "symbol", header: "Инструмент", value: i => i.quik_symbol, className: "font-mono font-medium" },
+    { id: "board", header: "Борд / класс", value: i => i.board, className: "font-mono" },
+    { id: "currency", header: "Валюта", value: i => i.currency },
+    { id: "type", header: "Тип", value: i => i.security_type },
+    { id: "status", header: "Статус", value: i => i.status, cell: i => <StatusBadge status={i.status} /> },
+    { id: "internal", header: "Внутренний код", value: i => i.internal_symbol, className: "font-mono text-[10px]" },
+  ];
+  const firmColumns: TableColumn<Firm>[] = [
+    { id: "id", header: "Код фирмы", value: f => f.firm_id, className: "font-mono" },
+    { id: "name", header: "Название", value: f => f.firm_name },
+    { id: "exchange", header: "Биржа", value: f => f.exchange },
+    { id: "status", header: "Статус", value: f => f.status, cell: f => <StatusBadge status={f.status} /> },
+    { id: "flag", header: "Флаг", value: f => f.status_flag, numeric: true },
+  ];
 
   return (
     <div className="space-y-6">
       <PageHeader
         title="Справочник"
-        subtitle="Инструменты синхронизируются по FIX Security Definition (`35=c` → `35=d`)"
+        subtitle="Инструменты, торговые классы и фирмы · синхронизация с QUIK"
         actions={
           <button className="btn" disabled={sync.isPending} onClick={() => sync.mutate()}>
             {sync.isPending ? "Запрос по FIX…" : "Синхронизировать по FIX"}
@@ -113,96 +105,16 @@ export default function ReferencePage() {
         <button className={tab === "firms" ? "btn" : "btn-muted"} onClick={() => setTab("firms")}>
           Фирмы ({firms.data?.count ?? "…"})
         </button>
-        <input
-          className="input ml-auto max-w-xs"
-          placeholder="Поиск…"
-          value={q}
-          onChange={(e) => setQ(e.target.value)}
-        />
       </div>
 
-      {tab === "instruments" && (
-        <div className="card overflow-x-auto">
-          {instruments.isLoading && <div className="text-sm text-slate-500">Загрузка…</div>}
-          {instruments.error && (
-            <div className="text-danger text-sm">{(instruments.error as Error).message}</div>
-          )}
-          {!instruments.isLoading && !instruments.error && (
-            <table className="table">
-              <thead>
-                <tr>
-                  <th>ID</th>
-                  <th>Символ</th>
-                  <th>Борд / Класс</th>
-                  <th>Валюта</th>
-                  <th>Тип</th>
-                  <th>Статус</th>
-                  <th>Внутренний</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filteredInstruments.map((i) => (
-                  <tr key={i.id}>
-                    <td>{i.id}</td>
-                    <td className="font-mono">{i.quik_symbol}</td>
-                    <td className="font-mono">{i.board}</td>
-                    <td>{i.currency}</td>
-                    <td>{i.security_type}</td>
-                    <td className={`status-${i.status}`}>{statusLabel(i.status)}</td>
-                    <td className="font-mono text-xs text-slate-500">{i.internal_symbol}</td>
-                  </tr>
-                ))}
-                {filteredInstruments.length === 0 && (
-                  <tr>
-                    <td colSpan={7} className="text-slate-500">
-                      Нет записей — нажмите «Синхронизировать по FIX»
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          )}
-        </div>
-      )}
-
-      {tab === "firms" && (
-        <div className="card overflow-x-auto">
-          {firms.data?.note && <div className="mb-3 text-xs text-slate-500">{firms.data.note}</div>}
-          {firms.isLoading && <div className="text-sm text-slate-500">Загрузка…</div>}
-          {firms.error && <div className="text-danger text-sm">{(firms.error as Error).message}</div>}
-          {!firms.isLoading && !firms.error && (
-            <table className="table">
-              <thead>
-                <tr>
-                  <th>ID фирмы</th>
-                  <th>Название</th>
-                  <th>Биржа</th>
-                  <th>Статус</th>
-                  <th>Флаг</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filteredFirms.map((f) => (
-                  <tr key={f.firm_id}>
-                    <td className="font-mono">{f.firm_id}</td>
-                    <td>{f.firm_name}</td>
-                    <td className="font-mono">{f.exchange}</td>
-                    <td>{statusLabel(f.status)}</td>
-                    <td>{f.status_flag ?? "—"}</td>
-                  </tr>
-                ))}
-                {filteredFirms.length === 0 && (
-                  <tr>
-                    <td colSpan={5} className="text-slate-500">
-                      Нет записей (фирмы не приходят через FIX Security Definition)
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          )}
-        </div>
-      )}
+      {tab === "instruments" ? <>
+        {instruments.error && <ErrorBanner error={instruments.error} onRetry={() => instruments.refetch()} />}
+        <DataTable title="Инструменты" rows={instruments.data?.instruments ?? []} columns={instrumentColumns} rowKey={i => i.id} loading={instruments.isLoading} exportName="instruments" emptyHint="Синхронизируйте справочник по FIX" summary={rows => [{ label: "Инструментов", value: rows.length }, { label: "Классов", value: new Set(rows.map(i => i.board)).size }, { label: "Активны", value: rows.filter(i => i.status === "ACTIVE").length, tone: "success" }]} />
+      </> : <>
+        {firms.data?.note && <p className="text-xs text-muted">{firms.data.note}</p>}
+        {firms.error && <ErrorBanner error={firms.error} onRetry={() => firms.refetch()} />}
+        <DataTable title="Фирмы" rows={firms.data?.firms ?? []} columns={firmColumns} rowKey={f => f.firm_id} loading={firms.isLoading} exportName="firms" emptyHint="Фирмы не передаются в Security Definition" />
+      </>}
     </div>
   );
 }

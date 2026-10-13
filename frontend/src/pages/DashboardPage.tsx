@@ -34,7 +34,19 @@ export default function DashboardPage() {
       {d.stale && <p role="status" className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">Показана последняя сохранённая статистика. Данные устарели; шлюз повторяет обновление в фоне.</p>}
       <PageHeader title="Дашборд" subtitle="Здоровье шлюза и поток ордеров в реальном времени" />
       {d.generated_at && <p className="text-xs text-muted">Данные на {formatDateTime(d.generated_at)} · статистика обновляется в фоне раз в минуту</p>}
-      <GatewayMonitoring dashboard={d} />
+      <div className="overview-hero"><div><span className="login-eyebrow">Операционный обзор</span><h2 className="mt-1">Торговый поток и состояние шлюза</h2><p>Заявки, подключения и ключевые показатели в одном пространстве</p></div><div className="overview-links"><Link className="btn" to="/orders">Книга заявок →</Link><Link className="btn-muted" to="/monitoring">Мониторинг</Link></div></div>
+      <div className="grid gap-3 md:grid-cols-4">
+        <Stat label="Ордеров сегодня" value={d.stats.total} />
+        <Stat label="Исполнено" value={d.stats.filled} />
+        <Stat label="Отклонено" value={d.stats.rejected} />
+        <Stat label="Активных" value={d.stats.active} />
+      </div>
+      {d.observability && <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <Stat label="Запросов сегодня" value={d.observability.requests_today} />
+        <Stat label="Доля успеха" value={formatPct(d.observability.success_rate)} raw />
+        <Stat label="Задержка · P95" value={formatMs(d.observability.p95_latency_ms)} raw />
+        <Stat label="Брокеров онлайн" value={d.observability.connected_now ?? d.connected_brokers?.length ?? 0} />
+      </div>}
       <div className="grid gap-3 md:grid-cols-3">
         {Object.entries(d.system).map(([k, v]) => (
           <div key={k} className="card flex items-center justify-between gap-3">
@@ -56,29 +68,7 @@ export default function DashboardPage() {
           </div>
         ))}
       </div>
-      <div className="grid gap-3 md:grid-cols-4">
-        <Stat label="Ордеров сегодня" value={d.stats.total} />
-        <Stat label="Исполнено" value={d.stats.filled} />
-        <Stat label="Отклонено" value={d.stats.rejected} />
-        <Stat label="Активных" value={d.stats.active} />
-      </div>
-      {d.observability && (
-        <div className="grid gap-3 md:grid-cols-4 xl:grid-cols-8">
-          <Stat label="Запросов сегодня" value={d.observability.requests_today} />
-          <Stat label="Успешных" value={d.observability.successful} />
-          <Stat label="Ошибок запросов" value={d.observability.failed} />
-          <Stat label="Доля успеха" value={formatPct(d.observability.success_rate)} raw />
-          <Stat label="Средняя задержка" value={formatMs(d.observability.avg_latency_ms)} raw />
-          <Stat label="P95" value={formatMs(d.observability.p95_latency_ms)} raw />
-          <Stat label="P99" value={formatMs(d.observability.p99_latency_ms)} raw />
-          <Stat label="Ошибки входа" value={d.observability.auth_failures_today} />
-        </div>
-      )}
-      <div className="grid gap-3 md:grid-cols-3">
-        <Stat label="Ошибки сегодня" value={d.observability?.errors_today ?? 0} />
-        <Stat label="Критические" value={d.observability?.critical_today ?? 0} />
-        <Stat label="Подключены сейчас" value={d.observability?.connected_now ?? d.connected_brokers?.length ?? 0} />
-      </div>
+      {d.observability && <div className="dashboard-detail-stats"><span>Ошибки запросов <strong>{formatNumber(d.observability.failed)}</strong></span><span>Критические <strong className="text-danger">{formatNumber(d.observability.critical_today)}</strong></span><span>Средняя задержка <strong>{formatMs(d.observability.avg_latency_ms)}</strong></span><span>P99 <strong>{formatMs(d.observability.p99_latency_ms)}</strong></span><span>Ошибки входа <strong>{formatNumber(d.observability.auth_failures_today)}</strong></span></div>}
       <div className="grid gap-3 md:grid-cols-2">
         <div className="card">
           <h2 className="mb-3 text-[15px] font-semibold tracking-tight">FIX-адаптеры</h2>
@@ -211,15 +201,16 @@ export default function DashboardPage() {
           </table>
         </div>
       </div>
+      <details className="dashboard-runtime"><summary><span>Телеметрия и путь заявки</span><span>Нагрузка сервера · графики · FIX-сессии</span></summary><div className="mt-4"><GatewayMonitoring dashboard={d} /></div></details>
     </div>
   );
 }
 
 function Stat({ label, value, raw }: { label: string; value: number | string; raw?: boolean }) {
   return (
-    <div className="card">
-      <div className="text-[13px] text-muted">{label}</div>
-      <div className="mt-1.5 font-mono text-[1.55rem] font-medium tracking-tight">
+    <div className={"card metric-card " + (/Отклонено|Ошиб/.test(label) ? "metric-card-danger" : /Исполнено|успеха/.test(label) ? "metric-card-success" : "")} >
+      <div className="text-[11px] text-muted">{label}</div>
+      <div className="mt-1.5 font-mono text-[1.7rem] font-medium tracking-tight">
         {raw ? value : formatNumber(Number(value) || 0)}
       </div>
     </div>

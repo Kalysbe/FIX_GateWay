@@ -1,6 +1,10 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "tailwindcss";
+@config "../tailwind.config.js";
+
+@layer base {
+  *, ::before, ::after { border-color: var(--color-gray-200, currentColor); }
+  button, [role="button"] { cursor: pointer; }
+}
 
 body {
   margin: 0;

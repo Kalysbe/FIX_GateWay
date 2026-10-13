@@ -4,6 +4,10 @@ High-throughput Go gateway that routes broker orders to QUIK through replaceable
 
 ## Quick start (Docker)
 
+The commands below start the development environment. For real trading, use the
+separate [production runbook](docs/production-operations.md) and review the
+[audit fixes and remaining release gates](docs/production-hardening-2026-10-12.md).
+
 ```bash
 # from repo root
 docker compose up --build
@@ -33,6 +37,7 @@ environment with a separate database and both interfaces, use
 - [Торговые ограничения](docs/trading-limits.md)
 - [Проверка торгового релиза](docs/release-verification.md)
 - [Deployment](docs/deployment.md)
+- [gRPC-подписки брокеров и мониторинг подключений](docs/grpc-subscriptions.md)
 - [ARQA requirements checklist](docs/arqa-requirements-checklist.md)
 - [План ARQA UAT](docs/arqa-uat-plan.md)
 - [ARQA FIX contract](docs/arqa-fix-contract.md)

@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
@@ -299,7 +300,11 @@ func (s *Server) exportLogs(w http.ResponseWriter, r *http.Request) {
 		format = "csv"
 	}
 	f := s.parseLogFilter(r)
-	count, _ := s.obs.Store().Count(r.Context(), f)
+	count, err := s.obs.Store().Count(r.Context(), f)
+	if err != nil {
+		s.writeInternal(w, err)
+		return
+	}
 	max := s.obs.Settings().ExportMaxSync
 	if max <= 0 {
 		max = 5000
@@ -311,6 +316,11 @@ func (s *Server) exportLogs(w http.ResponseWriter, r *http.Request) {
 		}
 		job, err := s.obs.StartExport(r.Context(), adminID, format, f)
 		if err != nil {
+			if errors.Is(err, observability.ErrExportBusy) {
+				w.Header().Set("Retry-After", "60")
+				writeErr(w, http.StatusTooManyRequests, "export capacity exhausted")
+				return
+			}
 			s.writeInternal(w, err)
 			return
 		}
@@ -324,7 +334,9 @@ func (s *Server) exportLogs(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/csv")
 	}
 	w.WriteHeader(http.StatusOK)
-	_, _ = s.obs.WriteSyncExport(r.Context(), format, f, w)
+	if _, err := s.obs.WriteSyncExport(r.Context(), format, f, w); err != nil {
+		s.log.Error("export response interrupted", "error", err)
+	}
 }
 
 func (s *Server) getExportJob(w http.ResponseWriter, r *http.Request) {

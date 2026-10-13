@@ -28,6 +28,7 @@ type Settings struct {
 	LatencyWarnMS  int
 	LatencyErrorMS int
 	ExportMaxSync  int
+	ExportDir      string
 }
 
 func DefaultSettings() Settings {
@@ -48,11 +49,15 @@ type Pipeline struct {
 	settings Settings
 	ch       chan Event
 
-	mu       sync.Mutex
-	rateKey  map[string]time.Time
-	notifyMu sync.Mutex
-	pending  map[string]Notification
-	fallback chan struct{}
+	mu             sync.Mutex
+	rateKey        map[string]time.Time
+	notifyMu       sync.Mutex
+	pending        map[string]Notification
+	fallback       chan struct{}
+	exportMu       sync.Mutex
+	exportSlots    chan struct{}
+	exportReserved int64
+	exportCtx      context.Context
 }
 
 func NewPipeline(store *Store, log *slog.Logger, hub *realtime.Hub, settings Settings) *Pipeline {
@@ -64,10 +69,11 @@ func NewPipeline(store *Store, log *slog.Logger, hub *realtime.Hub, settings Set
 	}
 	return &Pipeline{
 		store: store, log: log, hub: hub, settings: settings,
-		ch:       make(chan Event, settings.ChannelSize),
-		rateKey:  map[string]time.Time{},
-		pending:  map[string]Notification{},
-		fallback: make(chan struct{}, 1),
+		ch:          make(chan Event, settings.ChannelSize),
+		rateKey:     map[string]time.Time{},
+		pending:     map[string]Notification{},
+		fallback:    make(chan struct{}, 1),
+		exportSlots: make(chan struct{}, 2),
 	}
 }
 

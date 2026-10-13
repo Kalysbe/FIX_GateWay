@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -20,6 +22,7 @@ import (
 	"github.com/fix-gateway/backend/internal/brokers"
 	"github.com/fix-gateway/backend/internal/config"
 	"github.com/fix-gateway/backend/internal/domain"
+	"github.com/fix-gateway/backend/internal/executioninbox"
 	"github.com/fix-gateway/backend/internal/marketdata"
 	"github.com/fix-gateway/backend/internal/metrics"
 	"github.com/fix-gateway/backend/internal/observability"
@@ -61,9 +64,10 @@ type Server struct {
 	obs                *observability.Pipeline
 	realtimeClient     pb.RealtimeServiceClient
 	ratePolicies       *ratelimit.Store
+	executionInbox     *executioninbox.Inbox
 
 	trusted             []*net.IPNet
-	hmacNonces          *auth.NonceCache
+	hmacNonces          auth.NonceStore
 	maxBody             int64
 	authFailLimiter     *ratelimit.SlidingWindow
 	authSuccessThrottle sync.Map
@@ -100,6 +104,50 @@ func (s *Server) SetQuikExport(store *quikexport.Store) {
 	s.quikExport = store
 }
 
+func (s *Server) SetExecutionInbox(in *executioninbox.Inbox) { s.executionInbox = in }
+
+func (s *Server) SetNonceStore(store auth.NonceStore) { s.hmacNonces = store }
+
+// OperationsHandler is served exclusively on the private operations listener.
+// Production container probes and Prometheus do not traverse the public API's
+// HTTPS/proxy chain. Deployment must not publish this listener to clients.
+func (s *Server) OperationsHandler() http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /health", s.handleHealth)
+	mux.HandleFunc("GET /ready", s.handleReady)
+	metricsHandler := promhttp.Handler()
+	mux.HandleFunc("GET /metrics", func(w http.ResponseWriter, r *http.Request) {
+		databaseAvailable := float64(0)
+		if s.pool != nil {
+			probe, cancel := context.WithTimeout(r.Context(), time.Second)
+			if s.pool.Ping(probe) == nil {
+				databaseAvailable = 1
+			}
+			cancel()
+		}
+		metrics.DatabaseAvailable.Set(databaseAvailable)
+		availableSessions := 0
+		if s.manager != nil {
+			availableSessions = s.manager.AvailableCount()
+		}
+		metrics.FIXAvailable.Set(float64(availableSessions))
+		if s.cfg.BackupStatusFile != "" {
+			age := float64(1e12)
+			if b, err := os.ReadFile(s.cfg.BackupStatusFile); err == nil {
+				if stamp, err := strconv.ParseInt(strings.TrimSpace(string(b)), 10, 64); err == nil {
+					age = time.Since(time.Unix(stamp, 0)).Seconds()
+					if age < 0 {
+						age = 1e12
+					}
+				}
+			}
+			metrics.BackupAge.Set(age)
+		}
+		metricsHandler.ServeHTTP(w, r)
+	})
+	return mux
+}
+
 func (s *Server) Handler() http.Handler {
 	mux := newDocMux()
 
@@ -115,7 +163,9 @@ func (s *Server) Handler() http.Handler {
 	})
 	mux.HandleFunc("GET /broker-swagger", s.handleBrokerSwaggerUI)
 	mux.HandleFunc("GET /docs/kse-logo.png", s.handleDocsAsset)
+	mux.HandleFunc("GET /docs/logo_KSE.png", s.handleDocsAsset)
 	mux.HandleFunc("GET /docs/kse-favicon.png", s.handleDocsAsset)
+	mux.HandleFunc("GET /docs/swagger/{asset}", s.handleDocsAsset)
 
 	mux.Handle("POST /api/v1/orders", s.brokerAuth(s.requirePermission(auth.PermOrdersCreate)(http.HandlerFunc(s.createOrder))))
 	mux.Handle("GET /api/v1/orders", s.brokerAuth(s.requirePermission(auth.PermOrdersRead)(http.HandlerFunc(s.listBrokerOrders))))
@@ -125,6 +175,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/v1/firm", s.brokerAuth(s.requirePermission(auth.PermOrdersRead)(http.HandlerFunc(s.getBrokerFirm))))
 	mux.Handle("GET /api/v1/instruments", s.brokerAuth(s.requirePermission(auth.PermOrdersRead)(http.HandlerFunc(s.listInstruments))))
 	mux.Handle("GET /api/v1/orderbook", s.brokerAuth(s.requirePermission(auth.PermOrdersRead)(http.HandlerFunc(s.listBrokerOrderBook))))
+	mux.Handle("GET /api/v1/market-data", s.brokerAuth(s.requirePermission(auth.PermOrdersRead)(http.HandlerFunc(s.listBrokerMarketData))))
 	mux.Handle("GET /api/v1/trades", s.brokerAuth(s.requirePermission(auth.PermTradesRead)(http.HandlerFunc(s.listTrades))))
 	mux.Handle("GET /api/v1/positions", s.brokerAuth(s.requirePermission(auth.PermPositionsRead)(http.HandlerFunc(s.listBrokerPositions))))
 	mux.Handle("PUT /api/v1/positions", s.brokerAuth(s.requirePermission(auth.PermPositionsWrite)(http.HandlerFunc(s.setBrokerPositions))))
@@ -136,6 +187,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/v1/admin/login", s.adminLogin)
 	mux.Handle("GET /api/v1/admin/dashboard", s.adminRO(s.dashboard))
 	mux.Handle("GET /api/v1/admin/monitoring", s.adminRO(s.monitoring))
+	mux.Handle("GET /api/v1/admin/grpc/connections", s.adminAudit(s.grpcConnections))
 	mux.Handle("GET /api/v1/admin/monitoring/history", s.adminRO(s.monitoringHistory))
 	mux.Handle("POST /api/v1/admin/brokers", s.adminWrite(s.createBroker))
 	mux.Handle("GET /api/v1/admin/brokers", s.adminRO(s.listBrokers))
@@ -237,6 +289,14 @@ func (s *Server) handleReady(w http.ResponseWriter, r *http.Request) {
 	pending, _ := s.outbox.PendingCount(r.Context())
 	available := s.manager.AvailableCount()
 	ready := dbOK && available > 0
+	inboxHealthy := true
+	inboxPending := 0
+	if s.executionInbox != nil {
+		state := s.executionInbox.Status()
+		inboxHealthy = state.Healthy()
+		inboxPending = state.Pending
+		ready = ready && inboxHealthy
+	}
 	status := "ready"
 	code := http.StatusOK
 	if !ready {
@@ -246,10 +306,15 @@ func (s *Server) handleReady(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, code, map[string]any{
 		"status": status, "database": dbOK, "queue": dbOK,
 		"outbox_pending": pending, "adapters_available": available,
+		"execution_inbox_pending": inboxPending, "execution_inbox_healthy": inboxHealthy,
 	})
 }
 
 func (s *Server) createOrder(w http.ResponseWriter, r *http.Request) {
+	if s.executionInbox != nil && !s.executionInbox.Status().Healthy() {
+		writeErr(w, http.StatusServiceUnavailable, "execution recovery in progress; new trading is paused")
+		return
+	}
 	b, _ := BrokerFromContext(r.Context())
 	tok, _ := TokenFromContext(r.Context())
 	var req orders.CreateOrderRequest
@@ -286,7 +351,7 @@ func (s *Server) createOrder(w http.ResponseWriter, r *http.Request) {
 	}
 	observability.AnnotateOrder(r, order.ID, order.ClientOrderID, req.AccountID, order.Symbol, string(order.Side), qty, price)
 	metrics.OrdersReceived.Inc()
-	s.hub.Broadcast("order.updated", orderDTO(order))
+	s.hub.BroadcastForBroker("order.updated", orderDTO(order), order.BrokerID)
 	code := http.StatusCreated
 	if idempotent {
 		code = http.StatusOK
@@ -352,7 +417,7 @@ func (s *Server) cancelBrokerOrder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	observability.AnnotateOrder(r, order.ID, order.ClientOrderID, order.TradingAccount, order.Symbol, string(order.Side), order.Quantity.String(), "")
-	s.hub.Broadcast("order.updated", orderDTO(order))
+	s.hub.BroadcastForBroker("order.updated", orderDTO(order), order.BrokerID)
 	writeJSON(w, http.StatusOK, map[string]any{"order": orderDTO(order)})
 }
 
@@ -429,7 +494,7 @@ func (s *Server) listBrokerOrderBook(w http.ResponseWriter, r *http.Request) {
 		"source": "live",
 		"live":   false,
 		"books":  []any{},
-		"note":   "нет живого стакана — оператор должен подписаться на market data",
+		"note":   "нет живого стакана — шлюз автоматически восстанавливает подписку на рыночные данные",
 	})
 }
 
@@ -546,7 +611,7 @@ func (s *Server) listBrokerPositions(w http.ResponseWriter, r *http.Request) {
 	resp := mapPositionsResponse(sn, items)
 	resp["firm_id"] = firms[0]
 	if len(items) == 0 && sn.ID == 0 {
-		resp["note"] = "нет снимка позиций — выполните POST /api/v1/admin/positions/sync или отправьте PUT /api/v1/positions (FIX 35=AL в QUIK)"
+		resp["note"] = "Шлюз автоматически получает позиции из QUIK и восстанавливает поток после разрыва связи. Ожидается полный снимок."
 	} else if len(items) == 0 && sn.ReportCount > 0 {
 		resp["note"] = "снимок позиций получен, но нет строк по фирме " + strings.Join(firms, "/")
 	}
@@ -597,6 +662,10 @@ func (s *Server) adminLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	u, err := s.users.Authenticate(r.Context(), req.Email, req.Password)
 	if err != nil {
+		if errors.Is(err, admin.ErrAuthenticationUnavailable) {
+			writeErr(w, http.StatusServiceUnavailable, "authentication temporarily unavailable")
+			return
+		}
 		s.authFailLimiter.Record(ip)
 		s.emitObs(observability.Event{
 			Type: observability.TypeAuth, Subtype: observability.AuthFailed, ClientIP: ip,
@@ -707,12 +776,30 @@ func (s *Server) refreshDashboardSnapshotContext(parent context.Context) {
 	}()
 }
 func (s *Server) connectedBrokers(ctx context.Context) []observability.ConnectedBroker {
-	if s.obs == nil {
-		return []observability.ConnectedBroker{}
+	list := []observability.ConnectedBroker{}
+	if s.obs != nil {
+		if recent, err := s.obs.Store().ConnectedBrokers(ctx, observability.ConnectedWindow); err == nil {
+			list = append(list, recent...)
+		}
 	}
-	list, err := s.obs.Store().ConnectedBrokers(ctx, observability.ConnectedWindow)
-	if err != nil || list == nil {
-		return []observability.ConnectedBroker{}
+	if s.hub != nil {
+		index := map[int64]int{}
+		for i, c := range list {
+			index[c.BrokerID] = i
+		}
+		for _, c := range s.hub.Connections().Connections {
+			if c.BrokerID <= 0 || c.Transport != "gRPC" {
+				continue
+			}
+			i, exists := index[c.BrokerID]
+			if !exists {
+				i = len(list)
+				index[c.BrokerID] = i
+				list = append(list, observability.ConnectedBroker{BrokerID: c.BrokerID, BrokerCode: c.BrokerCode, BrokerName: c.BrokerName})
+			}
+			list[i].LastActivity = time.Now().UTC()
+			list[i].LastIP = c.Peer
+		}
 	}
 	return list
 }
@@ -1181,11 +1268,18 @@ func (s *Server) listAdminPositions(w http.ResponseWriter, r *http.Request) {
 		s.writeInternal(w, err)
 		return
 	}
-	resp := mapPositionsResponse(sn, items)
-	if len(items) == 0 && sn.ID == 0 {
-		resp["note"] = "нет снимка позиций — нажмите «Запросить по FIX» или установите позицию в QUIK (35=AL)"
-	}
+	resp := mapAdminPositionsResponse(sn, items, s.manager.PositionSubscription())
 	writeJSON(w, http.StatusOK, resp)
+}
+
+func mapAdminPositionsResponse(sn positions.Snapshot, items []domain.FIXPosition, subscription domain.PositionSubscription) map[string]any {
+	resp := mapPositionsResponse(sn, items)
+	resp["subscription"] = subscription
+	resp["live"] = subscription.Status == "ACTIVE" && sn.ID != 0 && sn.AdapterID == subscription.AdapterID && sn.PosReqID == subscription.RequestID
+	if len(items) == 0 && sn.ID == 0 {
+		resp["note"] = "Шлюз автоматически получает позиции из QUIK и восстанавливает поток после разрыва связи. Ожидается полный снимок."
+	}
+	return resp
 }
 
 func (s *Server) syncPositionsFIX(w http.ResponseWriter, r *http.Request) {
@@ -1265,14 +1359,16 @@ func filterQuotes(items []domain.MarketQuote, board, symbol string) []domain.Mar
 func (s *Server) listAdminMarketData(w http.ResponseWriter, r *http.Request) {
 	board := r.URL.Query().Get("board")
 	symbol := r.URL.Query().Get("symbol")
+	subscription := s.manager.MarketDataSubscription()
 	if adapterID, items, ok := s.manager.LiveQuotes(); ok {
 		items = filterQuotes(items, board, symbol)
 		writeJSON(w, http.StatusOK, map[string]any{
-			"source": "live",
-			"live":   true,
+			"source":       "live",
+			"live":         subscription.Status == "ACTIVE" || subscription.Status == "PARTIAL",
+			"subscription": subscription,
 			"snapshot": marketdata.Snapshot{
 				AdapterID:   adapterID,
-				Status:      "OK",
+				Status:      subscription.Status,
 				ReportCount: len(items),
 				RequestedAt: time.Now().UTC(),
 			},
@@ -1285,14 +1381,17 @@ func (s *Server) listAdminMarketData(w http.ResponseWriter, r *http.Request) {
 		if marketdata.IsNoSnapshot(err) {
 			writeJSON(w, http.StatusOK, map[string]any{
 				"source": "fix", "quotes": []any{}, "live": false,
-				"note": "нет котировок — нажмите «Запросить по FIX»",
+				"subscription": subscription,
+				"note":         "Шлюз автоматически поддерживает подписку на инструменты и восстанавливает её при разрыве связи.",
 			})
 			return
 		}
 		s.writeInternal(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, mapMarketDataResponse(sn, items))
+	result := mapMarketDataResponse(sn, items)
+	result["subscription"], result["live"] = subscription, false
+	writeJSON(w, http.StatusOK, result)
 }
 
 func (s *Server) syncMarketDataFIX(w http.ResponseWriter, r *http.Request) {
@@ -1307,11 +1406,19 @@ func (s *Server) syncMarketDataFIX(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	items = filterQuotes(items, strings.TrimSpace(req.Board), strings.TrimSpace(req.Symbol))
+	subscription := s.manager.MarketDataSubscription()
+	live := subscription.Status == "ACTIVE" || subscription.Status == "PARTIAL"
+	received := 0
+	for _, row := range items {
+		if row.HasData() {
+			received++
+		}
+	}
 	// UI refreshes read the persistent backend subscription; they must not replace it.
 	writeJSON(w, http.StatusOK, map[string]any{
-		"ok": true, "adapter_id": adapterID, "live": true,
-		"received": len(items), "summary": marketdata.FormatReceived(len(items)),
-		"result": map[string]any{"source": "live", "live": true, "quotes": items},
+		"ok": true, "adapter_id": adapterID, "live": live, "subscription": subscription,
+		"received": received, "summary": marketdata.FormatReceived(received),
+		"result": map[string]any{"source": "live", "live": live, "quotes": items, "subscription": subscription},
 	})
 }
 func (s *Server) getAdminOrder(w http.ResponseWriter, r *http.Request) {
@@ -1512,19 +1619,43 @@ func mapEvents(list []domain.OrderEvent) []map[string]any {
 	return out
 }
 
-// OnExecution is wired from main to apply ERs and broadcast.
-func (s *Server) OnExecution(report adapters.ExecutionReport) {
-	ctx := context.Background()
-	lastQty := parseDec(report.LastQty)
-	lastPx := parseDec(report.LastPx)
-	cumQty := parseDec(report.CumQty)
-	leaves := parseDec(report.LeavesQty)
+// OnExecution is invoked by the durable inbox worker, never by the FIX callback.
+func (s *Server) OnExecution(ctx context.Context, report adapters.ExecutionReport) error {
+	if report.ProtocolReject {
+		return fmt.Errorf("FIX protocol reject requires venue reconciliation (message %s sequence %s); report retained", report.RefMessageType, report.RefSeqNum)
+	}
+	if report.ExecType == "G" || report.ExecType == "H" || report.ExecType == "5" {
+		return fmt.Errorf("execution correction, cancellation, or replacement requires venue reconciliation; report retained")
+	}
+	if report.ExecTransType != "" && report.ExecTransType != "0" {
+		return fmt.Errorf("unsupported execution transaction type %s (reference %s); report retained for reconciliation", report.ExecTransType, report.ExecRefID)
+	}
+	values := make([]decimal.Decimal, 4)
+	for i, value := range []string{report.LastQty, report.LastPx, report.CumQty, report.LeavesQty} {
+		if value == "" {
+			continue
+		}
+		parsed, err := decimal.NewFromString(value)
+		if err != nil || parsed.IsNegative() {
+			return fmt.Errorf("invalid FIX execution decimal field %d", i)
+		}
+		values[i] = parsed
+	}
+	lastQty, lastPx, cumQty, leaves := values[0], values[1], values[2], values[3]
+	date, err := reportExecutionDate(report)
+	if err != nil {
+		return err
+	}
+	ctx = orders.WithExecutionDate(ctx, date)
 	if report.CancelReject {
 		order, err := s.orderStore.ApplyCancelReject(ctx, report.ClOrdID, report.OrigClOrdID, report.OrderID, report.AdapterID,
 			strings.TrimSpace(report.Text+" "+report.CxlRejReason), report.RawFIX)
 		if err != nil {
 			s.log.Error("apply cancel reject failed", "error", err, "cl_ord_id", report.ClOrdID, "orig_cl_ord_id", report.OrigClOrdID)
-			return
+			return err
+		}
+		if order.ID == uuid.Nil {
+			return nil
 		}
 		reason := strings.TrimSpace(report.Text)
 		if reason == "" {
@@ -1539,26 +1670,52 @@ func (s *Server) OnExecution(report adapters.ExecutionReport) {
 			Instrument: order.Symbol, Side: string(order.Side), Quantity: order.Quantity.String(),
 			Message: reason, ErrorCode: "CANCEL_REJECTED", ErrorMessage: reason,
 		})
-		s.hub.Broadcast("order.updated", orderDTO(order))
-		return
+		s.hub.BroadcastForBroker("order.updated", orderDTO(order), order.BrokerID)
+		return nil
 	}
 	order, exec, err := s.orderStore.ApplyExecutionReport(ctx, report.ClOrdID, report.OrigClOrdID, report.ExecID, report.ExecType, report.OrdStatus,
 		report.OrderID, lastQty, lastPx, cumQty, leaves, report.AdapterID, report.Text, report.OrdRejReason, report.RawFIX)
 	if err != nil {
 		s.log.Error("apply execution report failed", "error", err, "cl_ord_id", report.ClOrdID,
 			"text", report.Text, "ord_rej_reason", report.OrdRejReason)
-		return
+		return err
 	}
-	if ad, ok := s.manager.Get(report.AdapterID); ok {
-		if order.ExecutionBecameTerminal {
-			ad.IncActive(-1)
+	if order.ID == uuid.Nil {
+		return nil
+	}
+	if s.manager != nil {
+		if ad, ok := s.manager.Get(report.AdapterID); ok {
+			if order.ExecutionBecameTerminal {
+				ad.IncActive(-1)
+			}
 		}
 	}
-	s.hub.Broadcast("order.updated", orderDTO(order))
+	s.hub.BroadcastForBroker("order.updated", orderDTO(order), order.BrokerID)
 	if exec != nil {
-		s.hub.Broadcast("trade.created", exec)
+		s.hub.BroadcastForBroker("trade.created", exec, order.BrokerID)
 	}
 	s.emitOrderLifecycle(order, report)
+	return nil
+}
+
+func reportExecutionDate(report adapters.ExecutionReport) (string, error) {
+	if report.TradeDate != "" {
+		if _, err := time.Parse("20060102", report.TradeDate); err != nil {
+			return "", fmt.Errorf("invalid FIX TradeDate")
+		}
+		return report.TradeDate, nil
+	}
+	value := report.TransactTime
+	if value == "" {
+		value = report.OriginalTime
+	}
+	if value == "" {
+		return "", nil
+	}
+	if _, err := time.Parse("20060102-15:04:05.999999999", value); err != nil {
+		return "", fmt.Errorf("invalid FIX execution timestamp")
+	}
+	return value[:8], nil
 }
 
 func (s *Server) emitOrderLifecycle(order domain.Order, report adapters.ExecutionReport) {
@@ -1619,7 +1776,7 @@ func (s *Server) handleDocsAsset(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	switch r.URL.Path {
-	case "/docs/kse-logo.png", "/docs/kse-favicon.png":
+	case "/docs/kse-logo.png", "/docs/logo_KSE.png", "/docs/kse-favicon.png", "/docs/swagger/swagger-ui.css", "/docs/swagger/swagger-ui-bundle.js", "/docs/swagger/init.js":
 		http.ServeFile(w, r, strings.TrimPrefix(r.URL.Path, "/"))
 	default:
 		writeErr(w, http.StatusNotFound, "not found")
@@ -1634,10 +1791,10 @@ func (s *Server) handleSwaggerUI(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_, _ = w.Write([]byte(`<!doctype html>
 <html><head><meta charset="utf-8"/><title>FIX Gateway API</title>
-<link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist@5/swagger-ui.css"/></head>
+<link rel="stylesheet" href="/docs/swagger/swagger-ui.css"/></head>
 <body><div id="swagger-ui"></div>
-<script src="https://unpkg.com/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
-<script>SwaggerUIBundle({url:'/api/openapi.yaml', dom_id:'#swagger-ui'});</script>
+<script src="/docs/swagger/swagger-ui-bundle.js"></script>
+<script src="/docs/swagger/init.js"></script>
 </body></html>`))
 }
 
@@ -1652,11 +1809,11 @@ func (s *Server) handleBrokerSwaggerUI(w http.ResponseWriter, r *http.Request) {
 <meta charset="utf-8"/>
 <title>KSE Broker API</title>
 <link rel="icon" type="image/png" href="/docs/kse-favicon.png"/>
-<link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist@5/swagger-ui.css"/>
+<link rel="stylesheet" href="/docs/swagger/swagger-ui.css"/>
 <style>
-  body { margin: 0; background: #fafbfc; }
+  body { margin: 0; background: #fff; }
   .kse-header {
-    background: #1a1a2e;
+    background: #fff;
     padding: 16px 32px;
     display: flex;
     align-items: center;
@@ -1696,14 +1853,14 @@ func (s *Server) handleBrokerSwaggerUI(w http.ResponseWriter, r *http.Request) {
 </head>
 <body>
 <div class="kse-header">
-  <img src="/docs/kse-logo.png" alt="KSE"/>
+  <img src="/docs/logo_KSE.png" alt="KSE"/>
   <div>
     <h1>Кыргыз Фондулук Биржасы — Broker API</h1>
     <p>Кыргызская Фондовая Биржа · Kyrgyz Stock Exchange</p>
   </div>
 </div>
 <div id="swagger-ui"></div>
-<script src="https://unpkg.com/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
-<script>SwaggerUIBundle({url:'/api/broker-openapi.yaml', dom_id:'#swagger-ui', deepLinking:true, defaultModelsExpandDepth:1});</script>
+<script src="/docs/swagger/swagger-ui-bundle.js"></script>
+<script src="/docs/swagger/init.js"></script>
 </body></html>`))
 }

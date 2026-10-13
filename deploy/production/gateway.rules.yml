@@ -1,0 +1,42 @@
+groups:
+  - name: gateway-production
+    rules:
+      - alert: GatewayUnavailable
+        expr: up{job="fix-gateway"} == 0
+        for: 30s
+        labels: {severity: critical}
+        annotations: {summary: "Gateway operations endpoint is unavailable"}
+      - alert: ExecutionInboxBlocked
+
+        expr: gateway_execution_inbox_unhealthy > 0 or gateway_execution_inbox_oldest_seconds > 30
+        for: 15s
+        labels: {severity: critical}
+        annotations: {summary: "FIX execution inbox blocked; new trading is paused"}
+      - alert: DatabaseUnavailable
+        expr: gateway_database_available == 0
+        for: 30s
+        labels: {severity: critical}
+        annotations: {summary: "Gateway cannot reach PostgreSQL"}
+      - alert: AllFIXSessionsUnavailable
+        expr: gateway_fix_available_sessions == 0
+        for: 1m
+        labels: {severity: critical}
+        annotations: {summary: "No runtime FIX session available for trading; check venue schedule"}
+      - alert: OutboxStalled
+        expr: orders_queue_size > 0 and increase(orders_processed_total[5m]) == 0
+        for: 5m
+        labels: {severity: critical}
+        annotations: {summary: "Pending trading outbox has made no sending progress"}
+      - alert: ExecutionPersistenceFailure
+        expr: increase(gateway_execution_inbox_persistence_failures_total[5m]) > 0
+        labels: {severity: critical}
+        annotations: {summary: "Gateway could not durably accept a FIX execution and stopped"}
+      - alert: AlertDeliveryFailure
+        expr: increase(alertmanager_notifications_failed_total[5m]) > 0
+        labels: {severity: critical}
+        annotations: {summary: "Alertmanager notification delivery failed"}
+      - alert: DatabaseBackupStale
+        expr: gateway_backup_age_seconds > 7200
+        for: 1m
+        labels: {severity: critical}
+        annotations: {summary: "No successful encrypted database backup within two hours"}

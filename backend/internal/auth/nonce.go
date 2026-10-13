@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"sync"
@@ -8,9 +9,21 @@ import (
 )
 
 var (
-	ErrNonceInvalid = errors.New("invalid nonce")
-	ErrNonceReplay  = errors.New("nonce reused")
+	ErrNonceInvalid     = errors.New("invalid nonce")
+	ErrNonceReplay      = errors.New("nonce reused")
+	ErrNonceUnavailable = errors.New("nonce replay protection unavailable")
 )
+
+type NonceStore interface {
+	UseScopedContext(context.Context, string, string) error
+}
+
+func (c *NonceCache) UseScopedContext(ctx context.Context, scope, nonce string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return c.UseScoped(scope, nonce)
+}
 
 const (
 	nonceMinLen = 8
@@ -51,6 +64,9 @@ func (c *NonceCache) UseScoped(scope, nonce string) error {
 	}
 	if exp, ok := c.seen[nonce]; ok && now.Before(exp) {
 		return ErrNonceReplay
+	}
+	if len(c.seen) >= 100000 {
+		return ErrNonceUnavailable
 	}
 	c.seen[nonce] = now.Add(c.ttl)
 	return nil

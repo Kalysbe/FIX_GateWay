@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 	"time"
 
@@ -16,9 +15,11 @@ import (
 	"github.com/fix-gateway/backend/internal/admin"
 	"github.com/fix-gateway/backend/internal/api"
 	"github.com/fix-gateway/backend/internal/audit"
+	"github.com/fix-gateway/backend/internal/auth"
 	"github.com/fix-gateway/backend/internal/brokers"
 	"github.com/fix-gateway/backend/internal/config"
 	"github.com/fix-gateway/backend/internal/domain"
+	"github.com/fix-gateway/backend/internal/executioninbox"
 	"github.com/fix-gateway/backend/internal/grpcstream"
 	"github.com/fix-gateway/backend/internal/marketdata"
 	"github.com/fix-gateway/backend/internal/metrics"
@@ -77,6 +78,12 @@ func main() {
 		log.Error("ensure admin failed", "error", err)
 		os.Exit(1)
 	}
+	if cfg.IsProduction() {
+		if err := users.RefuseDefaultPassword(ctx, cfg.AdminEmail); err != nil {
+			log.Error("unsafe administrator credential", "error", err)
+			os.Exit(1)
+		}
+	}
 
 	brokerStore := brokers.NewStore(pool, cfg.APITokenPepper)
 	orderStore := orders.NewStore(pool)
@@ -93,6 +100,7 @@ func main() {
 	obsSettings.SlowMS = cfg.ObsSlowMS
 	obsSettings.ChannelSize = cfg.ObsChannelSize
 	obsSettings.FixRawLogs = cfg.ObsFixRawLogs
+	obsSettings.ExportDir = cfg.ExportDir
 	obsSettings.AlertWindow = cfg.ObsAlertWindow
 	obsSettings.ErrorWarnPct = cfg.ObsErrorWarnPct
 	obsSettings.ErrorErrorPct = cfg.ObsErrorErrorPct
@@ -106,33 +114,55 @@ func main() {
 		SystemDays: cfg.ObsSystemRetentionDays,
 	}
 	obs := observability.NewPipeline(obsStore, log, hub, obsSettings)
-	go obs.Run(ctx)
 	obs.Emit(observability.Event{Type: observability.TypeSystem, Subtype: "DATABASE_CONNECTED", Message: "postgres connected"})
 	obs.Emit(observability.Event{Type: observability.TypeSystem, Subtype: "QUEUE_CONNECTED", Message: "outbox queue ready"})
 
 	orderSvc.SetObserver(obs)
+	inbox, err := executioninbox.Open(cfg.ExecutionInboxDir, cfg.ExecutionInboxMaxBytes, cfg.ExecutionInboxMaxEntries, log)
+	if err != nil {
+		log.Error("persistent execution inbox unavailable; refusing FIX logon", "error", err)
+		os.Exit(1)
+	}
+	defer inbox.Close()
+	if err := obs.InitExports(ctx); err != nil {
+		log.Error("export storage initialization failed", "error", err)
+		os.Exit(1)
+	}
+	go obs.Run(ctx)
 
 	var server *api.Server
 	manager := adapters.NewManager(
 		adapterStore, log, routing.New(cfg.LBStrategy),
 		func(report adapters.ExecutionReport) {
-			if server != nil {
-				server.OnExecution(report)
+			if err := inbox.Append(report); err != nil {
+				metrics.ExecutionInboxPersistenceFailures.Inc()
+				log.Error("cannot durably accept FIX report; terminating before target sequence advances", "error", err, "adapter_id", report.AdapterID)
+				// A normal FIX MessageReject advances the target sequence too. A
+				// fail-stop here preserves that sequence for upstream replay; the
+				// process must never return success for an unjournalled report.
+				os.Exit(1)
 			}
 		},
 		cfg.FIXSessionDir,
 		cfg.HealthInterval,
 	)
 	manager.SetHostOverride(cfg.AdapterHostOverride)
+	positionStore := positions.NewStore(pool)
+	positionWriter := &automaticPositionSnapshots{store: positionStore, hub: hub}
+	manager.SetPositionListener(func(adapterID, reqID string, items []domain.FIXPosition) error {
+		persist, cancel := context.WithTimeout(ctx, 10*time.Second)
+		defer cancel()
+		return positionWriter.saveStream(persist, adapterID, reqID, items)
+	})
 	hub.MarketDataSnapshot = func() any {
 		_, quotes, ok := manager.LiveQuotes()
 		if !ok {
-			return nil
+			quotes = []domain.MarketQuote{}
 		}
 		for i := range quotes {
 			quotes[i].RawFIX = ""
 		}
-		return map[string]any{"quotes": quotes}
+		return map[string]any{"quotes": quotes, "subscription": manager.MarketDataSubscription(), "replace": true}
 	}
 	manager.SetMarketDataListener(func(quotes []domain.MarketQuote) {
 		slim := make([]domain.MarketQuote, len(quotes))
@@ -188,6 +218,25 @@ func main() {
 	})
 
 	server = api.NewServer(cfg, log, pool, brokerStore, orderSvc, orderStore, adapterStore, manager, outboxStore, auditStore, users, hub, obs)
+	server.SetExecutionInbox(inbox)
+	nonces := auth.NewPersistentNonceStore(pool, 10*time.Minute)
+	server.SetNonceStore(nonces)
+	go nonces.RunCleanup(ctx)
+	go inbox.Run(ctx, func(work context.Context, entry executioninbox.Entry) error {
+		return server.OnExecution(orders.WithExecutionReceipt(work, entry.ID), entry.Report)
+	}, func(state executioninbox.Status, err error) {
+		metrics.ExecutionInboxPending.Set(float64(state.Pending))
+		metrics.ExecutionInboxBytes.Set(float64(state.Bytes))
+		metrics.ExecutionInboxOldest.Set(state.OldestAge.Seconds())
+		if state.Healthy() {
+			metrics.ExecutionInboxUnhealthy.Set(0)
+		} else {
+			metrics.ExecutionInboxUnhealthy.Set(1)
+		}
+		if err != nil {
+			metrics.ExecutionInboxApplyFailures.Inc()
+		}
+	})
 	go server.RunDashboardRefresh(ctx)
 	server.SetQuikExport(quikExportStore)
 	admission := ratelimit.NewAdmissionWithCapacity(int64(cfg.RateLimitMaxStates))
@@ -216,7 +265,7 @@ func main() {
 		os.Exit(1)
 	}
 	grpcServer := grpc.NewServer(grpc.Creds(grpcCreds), grpc.MaxRecvMsgSize(16<<10), grpc.MaxSendMsgSize(8<<20), grpc.MaxConcurrentStreams(128), grpc.KeepaliveParams(keepalive.ServerParameters{MaxConnectionIdle: 2 * time.Minute, Time: time.Minute, Timeout: 10 * time.Second}))
-	pb.RegisterRealtimeServiceServer(grpcServer, &grpcstream.Service{Hub: hub, Users: users, JWTSecret: cfg.JWTSecret, Admission: admission, Log: log})
+	pb.RegisterRealtimeServiceServer(grpcServer, &grpcstream.Service{Hub: hub, Users: users, Brokers: brokerStore, HMACRequired: cfg.HMACRequired, Nonces: nonces, JWTSecret: cfg.JWTSecret, Admission: admission, Log: log, PositionsSnapshot: positions.NewStore(pool).RealtimeSnapshot})
 	go func() {
 		log.Info("gRPC realtime listening", "addr", cfg.GRPCAddr, "mtls", cfg.GRPCRequireClientCert)
 		if err := grpcServer.Serve(grpcListener); err != nil {
@@ -238,11 +287,15 @@ func main() {
 	}
 
 	go syncInstrumentsAfterLogon(ctx, log, manager, refStore)
-	go syncPositionsLoop(ctx, log, manager, positions.NewStore(pool), hub, cfg.PositionSyncInterval)
+	if cfg.PositionStreamEnabled {
+		go positionSubscriptionLoop(ctx, log, manager, hub, 5*time.Second)
+	}
+	go positionSnapshotLoop(ctx, log, manager, positionWriter, cfg.PositionSyncInterval)
 	go syncMarketDataLoop(ctx, log, manager, marketdata.NewStore(pool), refStore, hub, cfg.MarketDataSyncInterval, cfg.MarketDataBoards)
 
 	worker := outbox.NewWorker(outboxStore, orderStore, manager, log, cfg.WorkerID, cfg.OutboxPollInterval, cfg.OutboxBatchSize)
 	worker.SetObserver(obs)
+	worker.SetDispatchGuard(func() bool { return inbox.Status().Healthy() })
 	orderSvc.SetQueueNotifier(worker.Notify)
 	go worker.Run(ctx)
 
@@ -261,11 +314,20 @@ func main() {
 			cancel()
 		}
 	}()
+	opsServer := &http.Server{Addr: cfg.OperationsAddr, Handler: server.OperationsHandler(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 15 * time.Second, IdleTimeout: 30 * time.Second, MaxHeaderBytes: 1 << 14}
+	go func() {
+		log.Info("private operations listener", "addr", cfg.OperationsAddr)
+		if err := opsServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Error("operations listener failed", "error", err)
+			cancel()
+		}
+	}()
 
 	<-ctx.Done()
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer shutdownCancel()
 	_ = httpServer.Shutdown(shutdownCtx)
+	_ = opsServer.Shutdown(shutdownCtx)
 	grpcServer.Stop()
 	manager.StopAll(shutdownCtx)
 	log.Info("gateway stopped")
@@ -305,147 +367,4 @@ func syncInstrumentsAfterLogon(ctx context.Context, log *slog.Logger, manager *a
 		"removed", n.InstrumentsRemoved,
 		"inactive", n.InstrumentsInactive,
 	)
-}
-
-func syncPositionsLoop(ctx context.Context, log *slog.Logger, manager *adapters.Manager, store *positions.Store, hub *realtime.Hub, interval time.Duration) {
-	if interval <= 0 {
-		log.Info("background FIX position sync disabled")
-		return
-	}
-	deadline := time.Now().Add(45 * time.Second)
-	for time.Now().Before(deadline) {
-		if manager.AvailableCount() > 0 {
-			break
-		}
-		select {
-		case <-ctx.Done():
-			return
-		case <-time.After(500 * time.Millisecond):
-		}
-	}
-
-	run := func() {
-		syncCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
-		defer cancel()
-		adapterID, reqID, count, _, err := store.SyncFromFIX(syncCtx, manager, domain.PositionQuery{})
-		if err != nil {
-			log.Warn("background FIX position sync failed", "error", err)
-			return
-		}
-		log.Debug("positions synced via FIX", "adapter_id", adapterID, "pos_req_id", reqID, "received", count)
-		hub.Broadcast("positions.updated", map[string]any{
-			"adapter_id": adapterID, "pos_req_id": reqID, "received": count,
-		})
-	}
-
-	run()
-	t := time.NewTicker(interval)
-	defer t.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-t.C:
-			run()
-		}
-	}
-}
-
-func syncMarketDataLoop(ctx context.Context, log *slog.Logger, manager *adapters.Manager, store *marketdata.Store, refStore *refdata.Store, hub *realtime.Hub, interval time.Duration, boards []string) {
-	if interval <= 0 {
-		interval = 15 * time.Second
-	}
-	deadline := time.Now().Add(45 * time.Second)
-	for time.Now().Before(deadline) {
-		if manager.AvailableCount() > 0 {
-			break
-		}
-		select {
-		case <-ctx.Done():
-			return
-		case <-time.After(500 * time.Millisecond):
-		}
-	}
-
-	if manager.AvailableCount() == 0 {
-		log.Warn("FIX market data subscribe: no online adapters yet")
-	}
-
-	// Wait until Security Definition has upserted configured classes (LIST_GBA).
-	waitUntil := time.Now().Add(25 * time.Second)
-	for time.Now().Before(waitUntil) {
-		list, err := refStore.ListActiveInstruments(ctx)
-		if err == nil {
-			have := map[string]bool{}
-			for _, it := range list {
-				have[strings.ToUpper(strings.TrimSpace(it.Board))] = true
-			}
-			ready := true
-			for _, b := range boards {
-				if !have[strings.ToUpper(b)] {
-					ready = false
-					break
-				}
-			}
-			if ready {
-				break
-			}
-		}
-		select {
-		case <-ctx.Done():
-			return
-		case <-time.After(500 * time.Millisecond):
-		}
-	}
-
-	subscribe := func() bool {
-		syncCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-		defer cancel()
-		// ARQA rejects empty 35=V. Dictionary covers LISTEDSTOCKK; remaining
-		// configured classes (LIST_GBA) go as 22=8|48=*|100=board.
-		q := domain.MarketDataQuery{Boards: boards}
-		if list, listErr := refStore.ListActiveInstruments(ctx); listErr == nil && len(list) > 0 {
-			q.Instruments = list
-		}
-		adapterID, reqID, items, err := manager.SubscribeMarketData(syncCtx, q)
-		if err != nil {
-			log.Warn("FIX market data subscribe failed", "error", err)
-			return false
-		}
-		log.Debug("market data subscribed via FIX", "adapter_id", adapterID, "md_req_id", reqID, "quotes", len(items))
-		if len(items) > 0 {
-			hub.Broadcast("marketdata.tick", map[string]any{"quotes": items})
-			snapID, err := store.BeginSnapshot(syncCtx, adapterID, reqID)
-			if err == nil {
-				_ = store.InsertQuotes(syncCtx, snapID, items)
-				_ = store.CompleteSnapshot(syncCtx, snapID, "OK", "", len(items))
-			}
-		}
-		return true
-	}
-
-	for {
-		if subscribe() {
-			break
-		}
-		select {
-		case <-ctx.Done():
-			return
-		case <-time.After(interval):
-		}
-	}
-
-	t := time.NewTicker(interval)
-	defer t.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-t.C:
-			if _, items, ok := manager.LiveQuotes(); ok && len(items) > 0 {
-				continue
-			}
-			_ = subscribe()
-		}
-	}
 }

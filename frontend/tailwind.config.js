@@ -13,7 +13,7 @@ export default {
         panel: "#ffffff",
         surface: "#f4f7f8",
         line: "#e2e8f0",
-        muted: "#64748b",
+        muted: "#5f6f84",
         sidebar: "#ffffff",
         accent: "#57b6c0",
         warn: "#c47a00",

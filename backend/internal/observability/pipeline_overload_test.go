@@ -38,7 +38,7 @@ func TestDiagnosticFloodDoesNotBlockProducer(t *testing.T) {
 	settings.ChannelSize = 1
 	p := NewPipeline(nil, nil, nil, settings)
 	for i := 0; i < 10000; i++ {
-		p.Emit(Event{Type: TypeAPI})
+		p.Emit(Event{Type: TypeAPI, HTTPMethod: "POST"})
 	}
 	if len(p.ch) != 1 {
 		t.Fatalf("queued = %d", len(p.ch))

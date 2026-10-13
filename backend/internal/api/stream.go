@@ -24,7 +24,7 @@ func (s *Server) streamAdminEvents(w http.ResponseWriter, r *http.Request) {
 	}
 	base, cancel := context.WithCancel(r.Context())
 	defer cancel()
-	ctx := metadata.AppendToOutgoingContext(base, "authorization", "Bearer "+bearer(r))
+	ctx := metadata.AppendToOutgoingContext(base, "authorization", "Bearer "+bearer(r), "x-browser-bridge", "true")
 	stream, err := s.realtimeClient.Stream(ctx)
 	if err != nil {
 		writeErr(w, 503, "gRPC realtime unavailable")

@@ -133,7 +133,7 @@ func (a *sessionApp) handleMarketDataSnapshot(msg *quickfix.Message) {
 		a.log.Debug("market data snapshot", "adapter_id", a.adapterID, "req_id", reqID,
 			"quotes", len(quotes), "symbol", quotes[0].Symbol, "board", quotes[0].Board)
 	}
-	a.applyLive(quotes)
+	a.applyLive(a.confirmMarketData(reqID, quotes))
 	a.mdMu.Lock()
 	w := a.mdWait
 	a.mdMu.Unlock()
@@ -144,7 +144,7 @@ func (a *sessionApp) handleMarketDataSnapshot(msg *quickfix.Message) {
 
 func (a *sessionApp) handleMarketDataIncremental(msg *quickfix.Message) {
 	reqID, quotes := parseMarketDataIncremental(msg, a.adapterID)
-	a.applyLive(quotes)
+	a.applyLive(a.confirmMarketData(reqID, quotes))
 	a.mdMu.Lock()
 	w := a.mdWait
 	a.mdMu.Unlock()
@@ -164,13 +164,6 @@ func (a *sessionApp) handleMarketDataReject(msg *quickfix.Message) {
 	reqID := get(tag.MDReqID)
 	reason := get(tag.MDReqRejReason)
 	text := get(tag.Text)
-	a.mdMu.Lock()
-	w := a.mdWait
-	a.mdMu.Unlock()
-	if w == nil || (reqID != "" && w.reqID != reqID) {
-		a.log.Warn("market data reject (no waiter)", "adapter_id", a.adapterID, "req_id", reqID, "reason", reason, "text", text)
-		return
-	}
 	msgText := text
 	if msgText == "" {
 		msgText = "Market Data Request Reject"
@@ -178,8 +171,15 @@ func (a *sessionApp) handleMarketDataReject(msg *quickfix.Message) {
 	if reason != "" {
 		msgText = fmt.Sprintf("%s (reason=%s)", msgText, reason)
 	}
-	a.log.Warn("market data reject", "adapter_id", a.adapterID, "req_id", reqID, "text", msgText)
-	w.reject(msgText)
+	tracked := a.rejectMarketDataSubscription(reqID, msgText)
+	a.mdMu.Lock()
+	w := a.mdWait
+	a.mdMu.Unlock()
+	a.log.Warn("market data reject", "adapter_id", a.adapterID, "req_id", reqID, "text", msgText, "subscription", tracked)
+	if w != nil && (reqID == "" || w.reqID == reqID) {
+		w.reject(msgText)
+	}
+
 }
 
 var mdReqSeq atomic.Uint64
@@ -944,6 +944,8 @@ func (a *sessionApp) takeSubIDs() []string {
 		out = append(out, id)
 	}
 	a.mdSubIDs = map[string]struct{}{}
+	a.mdSubscriptions = map[string]*mdSubscription{}
+	a.mdBook = map[string]domain.MarketQuote{}
 	return out
 }
 
@@ -968,69 +970,7 @@ func buildMDUnsubscribe(reqID string) *quickfix.Message {
 
 // SubscribeMarketData sends 35=V with 263=1 (SNAPSHOT+UPDATES) and keeps the book live.
 func (a *Adapter) SubscribeMarketData(ctx context.Context, q domain.MarketDataQuery) (string, []domain.MarketQuote, error) {
-	a.mdRequestMu.Lock()
-	defer a.mdRequestMu.Unlock()
-	if !a.app.isLoggedOn() {
-		return "", nil, fmt.Errorf("adapter %s not logged on", a.meta.ID)
-	}
-	q.SubscriptionType = "1"
-	a.subMu.Lock()
-	a.lastMDQuery = q
-	a.subMu.Unlock()
-
-	_ = a.UnsubscribeMarketData(ctx)
-
-	batches := marketDataSubscribeBatches(q)
-	var lastID string
-	sent := 0
-	for _, batch := range batches {
-		if !mdQueryHasSecurityID(batch) {
-			a.log.Warn("skip market data subscribe without SecurityID 48",
-				"adapter_id", a.meta.ID, "board", batch.Board)
-			continue
-		}
-		reqID := newMDReqID()
-		lastID = reqID
-		a.app.trackSub(reqID)
-		msg := buildMarketDataRequest(reqID, batch)
-		if _, err := a.app.send(msg); err != nil {
-			return reqID, nil, err
-		}
-		sent++
-		a.log.Debug("market data subscribe sent",
-			"adapter_id", a.meta.ID, "req_id", reqID,
-			"instruments", len(batch.Instruments), "symbol", firstNonEmpty(batch.Symbol, mdInstrumentID(firstInst(batch))),
-			"board", firstNonEmpty(batch.Board, mdInstrumentBoard(firstInst(batch))))
-	}
-	if sent == 0 {
-		return "", nil, fmt.Errorf("market data subscribe: no instruments with SecurityID (48)")
-	}
-
-	wait := 5 * time.Second
-	if extra := sent - 1; extra > 0 {
-		wait += 3 * time.Second * time.Duration(extra)
-		if wait > 15*time.Second {
-			wait = 15 * time.Second
-		}
-	}
-	deadline := time.Now().Add(wait)
-	for time.Now().Before(deadline) {
-		items := a.app.liveQuotes()
-		if len(items) > 0 && sent <= 1 {
-			return lastID, items, nil
-		}
-		select {
-		case <-ctx.Done():
-			return lastID, a.app.liveQuotes(), ctx.Err()
-		case <-time.After(100 * time.Millisecond):
-		}
-	}
-	for _, batch := range batches {
-		if mdQueryHasSecurityID(batch) {
-			a.seedSubscribedInstruments(batch)
-		}
-	}
-	return lastID, a.app.liveQuotes(), nil
+	return a.ensureMarketDataSubscriptions(ctx, q)
 }
 
 func firstInst(q domain.MarketDataQuery) domain.SecurityRef {
@@ -1096,9 +1036,14 @@ func marketDataSubscribeBatches(q domain.MarketDataQuery) []domain.MarketDataQue
 }
 
 func (a *Adapter) UnsubscribeMarketData(_ context.Context) error {
+	a.mdRequestMu.Lock()
+	defer a.mdRequestMu.Unlock()
+	a.subMu.Lock()
+	a.lastMDQuery = domain.MarketDataQuery{}
+	a.subMu.Unlock()
 	ids := a.app.takeSubIDs()
 	for _, id := range ids {
-		if _, err := a.app.send(buildMDUnsubscribe(id)); err != nil {
+		if err := a.sendMarketData(buildMDUnsubscribe(id)); err != nil {
 			a.log.Warn("market data unsubscribe failed", "adapter_id", a.meta.ID, "req_id", id, "error", err)
 		}
 	}

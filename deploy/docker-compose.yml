@@ -9,7 +9,7 @@ services:
     volumes:
       - grpc-certs:/certs
   postgres:
-    image: postgres:16-alpine
+    image: postgres:16.15-alpine3.24@sha256:721873c34ceb9f8d8fc265984940dc982404c105f19ad51be9fdc5970a6080ea
     restart: unless-stopped
     environment:
       POSTGRES_USER: gateway
@@ -74,10 +74,15 @@ services:
       MIGRATIONS_PATH: /app/migrations
       FIX_SESSION_DIR: /app/fix-sessions
       WORKER_ID: gateway-1
+
+      POSITION_STREAM_ENABLED: ${POSITION_STREAM_ENABLED:-true}
+      POSITION_SYNC_INTERVAL: ${POSITION_SYNC_INTERVAL:-30s}
       APP_ENV: ${APP_ENV:-development}
       TRUSTED_PROXIES: ${TRUSTED_PROXIES:-}
       REQUIRE_HTTPS: ${REQUIRE_HTTPS:-false}
-      # Seeded adapters use host "fixsimulator" — works on the compose network.
+      HMAC_REQUIRED: ${HMAC_REQUIRED:-false}
+      OPERATIONS_ADDR: ":9080"
+      # Test QUIK is 192.168.0.89; simulator adapters remain disabled in the UAT DB.
       ADAPTER_HOST_OVERRIDE: ${ADAPTER_HOST_OVERRIDE:-}
       MARKET_DATA_BOARDS: ${MARKET_DATA_BOARDS:-LISTEDSTOCKK,LIST_GBA}
       QUIK_API_BASE_URL: ${QUIK_API_BASE_URL:-http://192.168.0.89:5000}
@@ -88,7 +93,7 @@ services:
       - grpc-certs:/certs:ro
       - fix-sessions:/app/fix-sessions
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/health || exit 1"]
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:9080/health || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 10
@@ -105,10 +110,10 @@ services:
       gateway:
         condition: service_healthy
     ports:
-      - "127.0.0.1:5173:80"
+      - "127.0.0.1:5173:8080"
 
   prometheus:
-    image: prom/prometheus:v2.54.1
+    image: prom/prometheus:v3.13.4@sha256:87861b8cf91579109319ebc300f3f1060e6da9c05d6ae8ad15a20c879e84e32e
     restart: unless-stopped
     volumes:
       - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro

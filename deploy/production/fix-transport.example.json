@@ -1,0 +1,13 @@
+{
+  "adapter-1": {
+    "dictionary": "/run/fix/ARQA-FIX44.xml",
+    "certificate": "/run/fix/client.crt",
+    "private_key": "/run/fix/client.key",
+    "ca": "/run/fix/venue-ca.crt",
+    "server_name": "replace-with-venue-certificate-dns-name",
+    "uat_evidence": "/run/fix/venue-uat-acceptance.md",
+    "start_time": "00:00:00",
+    "end_time": "00:00:00",
+    "time_zone": "UTC"
+  }
+}

@@ -33,6 +33,8 @@ type Adapter struct {
 	subMu       sync.Mutex
 	mdRequestMu sync.Mutex
 	lastMDQuery domain.MarketDataQuery
+	mdSend      func(*quickfix.Message) error
+	posSend     func(*quickfix.Message) error
 }
 
 func New(meta domain.Adapter, log *slog.Logger, onExec domain.ExecutionHandler, onMD domain.MarketDataHandler, storeDir string) *Adapter {
@@ -124,6 +126,7 @@ func (a *Adapter) Start(ctx context.Context) error {
 
 func (a *Adapter) Stop(ctx context.Context) error {
 	a.status.Store(domain.AdapterStopping)
+	_ = a.UnsubscribePositions(ctx)
 	_ = a.UnsubscribeMarketData(ctx)
 	if a.initiator != nil {
 		a.initiator.Stop()
@@ -211,8 +214,30 @@ func (a *Adapter) ReplaceOrder(ctx context.Context, order domain.Order) error {
 }
 
 func (a *Adapter) buildSettings() (*quickfix.Settings, error) {
+	if a.meta.ID == "" || a.meta.ID == "." || a.meta.ID == ".." || strings.ContainsAny(a.meta.ID, "/\\\r\n\x00") {
+		return nil, fmt.Errorf("invalid adapter ID")
+	}
+	for _, value := range []string{a.meta.BeginString, a.meta.SenderCompID, a.meta.TargetCompID, a.meta.Host, a.storeDir} {
+		if strings.ContainsAny(value, "\r\n\x00") {
+			return nil, fmt.Errorf("invalid FIX setting")
+		}
+	}
+	transport, err := transportSettings(a.meta.ID, a.meta.ResetOnLogon)
+	if err != nil {
+		return nil, err
+	}
+	username, err := credential(a.meta.UsernameEnv)
+	if err != nil {
+		return nil, err
+	}
+	password, err := credential(a.meta.PasswordEnv)
+	if err != nil {
+		return nil, err
+	}
+	a.app.username = username
+	a.app.password = password
 	dir := filepath.Join(a.storeDir, a.meta.ID)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, err
 	}
 	reset := "N"
@@ -249,12 +274,7 @@ SocketConnectPort=%d
 `, filepath.ToSlash(dir), filepath.ToSlash(filepath.Join(dir, "log")), reset, hb,
 		a.meta.BeginString, a.meta.SenderCompID, a.meta.TargetCompID, a.meta.ID, a.meta.Host, a.meta.Port)
 
-	if u := envOrEmpty(a.meta.UsernameEnv); u != "" {
-		cfg += "Username=" + u + "\n"
-	}
-	if p := envOrEmpty(a.meta.PasswordEnv); p != "" {
-		cfg += "Password=" + p + "\n"
-	}
+	cfg += transport
 	return quickfix.ParseSettings(strings.NewReader(cfg))
 }
 

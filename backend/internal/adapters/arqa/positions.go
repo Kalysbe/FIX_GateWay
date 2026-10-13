@@ -27,11 +27,14 @@ type posWaiter struct {
 	mu       sync.Mutex
 	items    []domain.FIXPosition
 	expected int
+	reports  int
+	phased   bool
 	done     chan struct{}
 	closed   bool
 	ping     chan struct{}
 	result   string
 	status   string
+	reason   string
 }
 
 func newPosWaiter(reqID string) *posWaiter {
@@ -51,12 +54,17 @@ func (w *posWaiter) add(totalHint int, endSnapshot bool, batch []domain.FIXPosit
 	if totalHint > 0 && w.expected == 0 {
 		w.expected = totalHint
 	}
-	w.items = append(w.items, batch...)
+	w.reports++
+	for _, p := range batch {
+		if p.UpdateAction != "2" {
+			w.items = append(w.items, p)
+		}
+	}
 	select {
 	case w.ping <- struct{}{}:
 	default:
 	}
-	if endSnapshot || (w.expected > 0 && len(w.items) >= w.expected) {
+	if endSnapshot || (!w.phased && w.expected > 0 && w.reports >= w.expected) {
 		w.finishLocked()
 	}
 }
@@ -102,6 +110,15 @@ func (a *sessionApp) clearPosWait(reqID string) {
 func (a *sessionApp) handlePositionReport(msg *quickfix.Message) {
 	reqID, total, endSnap, items := parseARQAPositionReport(msg, a.adapterID)
 	a.posMu.Lock()
+	if a.posStream != nil && reqID == a.posStream.reqID {
+		if a.posStream.rejected {
+			a.posMu.Unlock()
+			return
+		}
+		a.handleStreamPositionReportLocked(msg, total, endSnap, items)
+		a.posMu.Unlock()
+		return
+	}
 	w := a.posWait
 	a.posMu.Unlock()
 	if w == nil || (reqID != "" && w.reqID != reqID) {
@@ -109,6 +126,11 @@ func (a *sessionApp) handlePositionReport(msg *quickfix.Message) {
 		return
 	}
 	a.log.Debug("position report", "adapter_id", a.adapterID, "req_id", reqID, "batch", len(items), "total", total, "end", endSnap)
+	if phase, _ := msg.Body.GetString(tagStreamPhaseIndic); phase != "" || getFieldFromRaw(msg.String(), "5110") != "" {
+		w.mu.Lock()
+		w.phased = true
+		w.mu.Unlock()
+	}
 	w.add(total, endSnap, items)
 }
 
@@ -128,6 +150,25 @@ func (a *sessionApp) handleRequestForPositionsAck(msg *quickfix.Message) {
 		total, _ = strconv.Atoi(n)
 	}
 	a.posMu.Lock()
+	if a.posStream != nil && reqID == a.posStream.reqID {
+		if (result != "" && result != "0") || status == "2" {
+			a.log.Info("position subscription acknowledgement", "adapter_id", a.adapterID, "req_id", reqID, "result", result, "status", status, "total", total)
+			a.log.Error("position subscription rejected", "adapter_id", a.adapterID, "req_id", reqID, "result", result, "status", status, "reason", get(tag.Text))
+			a.rejectPositionStreamLocked(fmt.Sprintf("подписка позиций отклонена QUIK: %s (result=%s status=%s)", get(tag.Text), result, status))
+		} else {
+			if a.posStream.rejected {
+				a.posMu.Unlock()
+				return
+			}
+			a.posStream.acknowledged = true
+			if status == "0" && get(tag.TotalNumPosReports) == "0" && a.posStream.reports == 0 {
+				a.posStream.ready = true
+				_ = a.publishPositionStreamLocked()
+			}
+		}
+		a.posMu.Unlock()
+		return
+	}
 	w := a.posWait
 	a.posMu.Unlock()
 	if w == nil || (reqID != "" && w.reqID != reqID) {
@@ -137,18 +178,22 @@ func (a *sessionApp) handleRequestForPositionsAck(msg *quickfix.Message) {
 	w.mu.Lock()
 	w.result = result
 	w.status = status
+	w.reason = get(tag.Text)
 	if total > 0 {
 		w.expected = total
+		if !w.phased && w.reports >= total {
+			w.finishLocked()
+		}
 	}
 	w.mu.Unlock()
 	a.log.Debug("positions ack", "adapter_id", a.adapterID, "req_id", reqID, "result", result, "status", status, "total", total)
 
 	// ARQA: result 1 = invalid; status 2 = rejected; status 0 + total 0 = completed empty
-	if result == "1" || status == "2" {
+	if (result != "" && result != "0") || status == "2" {
 		w.finish()
 		return
 	}
-	if status == "0" && total == 0 {
+	if status == "0" && get(tag.TotalNumPosReports) == "0" {
 		w.finish()
 	}
 }
@@ -220,7 +265,7 @@ func (a *Adapter) FetchPositions(ctx context.Context, q domain.PositionQuery) (s
 	defer a.app.clearPosWait(reqID)
 
 	msg := buildRequestForPositions(reqID, q)
-	if _, err := a.app.send(msg); err != nil {
+	if err := a.sendPositionSubscription(msg); err != nil {
 		return reqID, nil, err
 	}
 	a.log.Debug("request for positions sent",
@@ -235,12 +280,20 @@ func (a *Adapter) FetchPositions(ctx context.Context, q domain.PositionQuery) (s
 	for {
 		select {
 		case <-ctx.Done():
-			items := w.snapshot()
-			if len(items) == 0 {
-				return reqID, nil, ctx.Err()
-			}
-			return reqID, items, nil
+			return reqID, nil, ctx.Err()
 		case <-w.done:
+			w.mu.Lock()
+			res, st, reason, reports, expected := w.result, w.status, w.reason, w.reports, w.expected
+			w.mu.Unlock()
+			// FIX 728=2 is an authoritative "no matching positions" result for
+			// a snapshot. It must not confirm a rejected streaming subscription,
+			// or turn an inconsistent partial response into an empty success.
+			if res == "2" && (q.SubscriptionType == "" || q.SubscriptionType == "0") && reports == 0 && expected == 0 {
+				return reqID, []domain.FIXPosition{}, nil
+			}
+			if (res != "" && res != "0") || st == "2" {
+				return reqID, nil, fmt.Errorf("position request rejected: %s (result=%s status=%s)", reason, res, st)
+			}
 			return reqID, w.snapshot(), nil
 		case <-w.ping:
 			gotAny = true
@@ -252,26 +305,15 @@ func (a *Adapter) FetchPositions(ctx context.Context, q domain.PositionQuery) (s
 			}
 			idle.Reset(5 * time.Second)
 		case <-idle.C:
-			if gotAny {
+			w.mu.Lock()
+			unmarked := !w.phased && w.expected == 0
+			w.mu.Unlock()
+			if gotAny && unmarked {
 				w.finish()
 				return reqID, w.snapshot(), nil
 			}
 		case <-hardDeadline.C:
-			items := w.snapshot()
-			if len(items) == 0 {
-				w.mu.Lock()
-				res, st := w.result, w.status
-				w.mu.Unlock()
-				if res == "1" || st == "2" {
-					return reqID, nil, fmt.Errorf("position request rejected (result=%s status=%s)", res, st)
-				}
-				if st == "0" {
-					return reqID, nil, nil
-				}
-				return reqID, nil, fmt.Errorf("position request timeout on %s (req_id=%s result=%s status=%s)", a.meta.ID, reqID, res, st)
-			}
-			a.log.Warn("position request hard timeout", "adapter_id", a.meta.ID, "count", len(items))
-			return reqID, items, nil
+			return reqID, nil, fmt.Errorf("position snapshot incomplete or timed out on %s (req_id=%s)", a.meta.ID, reqID)
 		}
 	}
 }
@@ -332,9 +374,6 @@ func parseARQAPositionReport(msg *quickfix.Message, adapterID string) (reqID str
 		p.SettlPrice = decFromMap(block.items, "AVG_POS_PRICE", "EFFECT_POS_PRICE")
 		if p.Currency == "" {
 			p.Currency = firstNonEmpty(block.items["AVG_POS_PRICE_CCY"], block.keys["CUR"])
-		}
-		if block.updateAction == "2" { // Delete
-			continue
 		}
 		items = append(items, p)
 	}

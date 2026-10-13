@@ -10,6 +10,19 @@ info:
 servers:
   - url: http://localhost:8080
 paths:
+  /api/v1/admin/grpc/connections:
+    get:
+      summary: Active gRPC subscriptions
+      description: SUPER_ADMIN, ADMIN, OPERATOR or AUDITOR. Process-local snapshot of authenticated clients and their effective event topics. No credentials are returned. Changes arrive as subscriptions.updated in the admin stream.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: instance_id, revision and connections containing identity, peer, transport, connected_at, topics and data paths.
+        "403":
+          description: Role cannot view client identities
+        "503":
+          description: Realtime unavailable
   /api/v1/admin/trading-limits/history:
     get:
       summary: Trading limit changes with before and after values
@@ -210,6 +223,7 @@ paths:
               $ref: "#/components/schemas/CreateOrderRequest"
             example:
               account_id: "1-3101-006"
+              client_code: "006"
               client_order_id: "TEST0003"
               symbol: "KG0105166315"
               board: "LISTEDSTOCKK"
@@ -310,6 +324,42 @@ paths:
                       $ref: "#/components/schemas/Instrument"
         "401":
           description: Unauthorized
+  /api/v1/market-data:
+    get:
+      tags: [Broker]
+      summary: Full current market data snapshot
+      x-grpc-event: marketdata.tick
+      security:
+        - bearerAuth: []
+      description: |
+        Requires `orders:read`. REST source for gRPC `marketdata.tick`: the same
+        quote fields (book, OHLC, volume, turnover and trading status) and automatic
+        FIX subscription state. Raw FIX messages are omitted. Decimal values are strings.
+        Without filters returns all subscribed instruments. Optional symbol (ticker
+        or SecurityID) and board filters affect this response only. replace=true
+        denotes a full snapshot; live=true requires an available ACTIVE or PARTIAL feed.
+      parameters:
+        - in: query
+          name: symbol
+          schema: {type: string}
+        - in: query
+          name: board
+          schema: {type: string}
+      responses:
+        "200":
+          description: Current snapshot; quotes is empty when unavailable or no instrument matches
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MarketDataResponse"
+        "401":
+          description: Unauthorized
+        "403":
+          description: Missing orders:read or IP not allowed
+        "429":
+          description: Rate limited
+        "503":
+          description: Authentication temporarily unavailable or processing capacity exceeded
   /api/v1/orderbook:
     get:
       tags: [Broker]
@@ -430,10 +480,12 @@ paths:
               account_code: "1-3101-2040"
               cash:
                 - currency: KGS
+                  client_code: kalys
                   amount: "1500000"
                   tag: EQTV
               instruments:
                 - symbol: KG0105166315
+                  client_code: kalys
                   board: LISTEDSTOCKK
                   quantity: "100"
       responses:
@@ -1056,6 +1108,15 @@ paths:
   /api/v1/admin/positions:
     get:
       tags: [Admin]
+      description: |
+        Positions are obtained by a gateway-owned FIX subscription independently
+        of the browser and filters. The subscription object includes status,
+        adapter_id, pos_req_id, mode (stream or snapshot), positions, error,
+        next_retry_at and last_received_at. Until the stream is confirmed,
+        complete snapshots are requested automatically every 30 seconds.
+        The live flag is true only when the saved complete snapshot belongs to
+        the current ACTIVE automatic source. During recovery the previous
+        complete snapshot remains available with live=false.
       summary: Latest FIX position snapshot
       security:
         - bearerAuth: []
@@ -1185,7 +1246,8 @@ paths:
   /api/v1/admin/positions/sync:
     post:
       tags: [Admin]
-      summary: Request FIX positions now
+      summary: Request a one-off FIX positions snapshot (legacy)
+      description: The gateway maintains the position subscription automatically. This optional compatibility request does not control that subscription.
       security:
         - bearerAuth: []
       responses:
@@ -1194,7 +1256,13 @@ paths:
   /api/v1/admin/market-data:
     get:
       tags: [Admin]
-      summary: Latest market data snapshot
+      summary: Current market data and automatic subscription state
+      description: |
+        The gateway maintains FIX subscriptions continuously, independently of
+        browser sessions. The subscription object includes status, adapter_id,
+        expected, confirmed, error, next_retry_at and last_received_at. Dictionary
+        placeholders do not count as received data. The live flag is true for
+        ACTIVE or PARTIAL subscriptions only.
       security:
         - bearerAuth: []
       responses:
@@ -1203,7 +1271,8 @@ paths:
   /api/v1/admin/market-data/sync:
     post:
       tags: [Admin]
-      summary: Subscribe / refresh FIX market data
+      summary: Read the automatic FIX market data subscription (legacy)
+      description: This compatibility endpoint reads current quotes; it does not start or replace the server subscription.
       security:
         - bearerAuth: []
       responses:
@@ -1814,6 +1883,84 @@ components:
         status:
           type: string
           example: ACTIVE
+    BookLevel:
+      type: object
+      properties:
+        price:
+          type: string
+          example: "99.5"
+        size:
+          type: string
+          example: "10"
+    MarketQuote:
+      type: object
+      description: Строка текущих торгов; пустая строка цены или статуса означает, что значение ещё не получено
+      properties:
+        adapter_id: {type: string}
+        md_req_id: {type: string}
+        symbol: {type: string}
+        security_id: {type: string}
+        board: {type: string}
+        currency: {type: string}
+        name: {type: string}
+        trade_date: {type: string}
+        trading_status: {type: string, description: Торговый статус FIX 326}
+        trading_session_id: {type: string, description: FIX 336}
+        trading_session_sub: {type: string, description: FIX 625}
+        bid: {type: string}
+        bid_size: {type: string}
+        offer: {type: string}
+        offer_size: {type: string}
+        bids:
+          type: array
+          items:
+            $ref: "#/components/schemas/BookLevel"
+        offers:
+          type: array
+          items:
+            $ref: "#/components/schemas/BookLevel"
+        last: {type: string}
+        last_size: {type: string}
+        last_time: {type: string}
+        open: {type: string}
+        high: {type: string}
+        low: {type: string}
+        close: {type: string}
+        wapr: {type: string, description: Средневзвешенная цена}
+        settle: {type: string}
+        current_price: {type: string}
+        official_price: {type: string}
+        volume: {type: string}
+        value: {type: string, description: Оборот}
+        entries:
+          type: object
+          additionalProperties: {type: string}
+        updated_at: {type: string, format: date-time}
+    MarketDataSubscription:
+      type: object
+      required: [status, expected, confirmed]
+      properties:
+        adapter_id: {type: string}
+        status: {type: string, enum: [WAITING, STARTING, ACTIVE, PARTIAL, RETRYING, OFFLINE]}
+        expected: {type: integer, description: Количество подписанных инструментов всего шлюза}
+        confirmed: {type: integer, description: Количество подтверждённых инструментов всего шлюза}
+        error: {type: string}
+        next_retry_at: {type: string, format: date-time}
+        last_received_at: {type: string, format: date-time}
+    MarketDataResponse:
+      type: object
+      required: [source, live, quotes, subscription, replace]
+      properties:
+        source: {type: string, enum: [live]}
+        live: {type: boolean}
+        replace: {type: boolean, enum: [true]}
+        quotes:
+          type: array
+          items:
+            $ref: "#/components/schemas/MarketQuote"
+        subscription:
+          $ref: "#/components/schemas/MarketDataSubscription"
+        note: {type: string}
     Trade:
       type: object
       properties:

@@ -35,37 +35,36 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-surface px-4">
-      <form onSubmit={onSubmit} className="card w-full max-w-md space-y-4">
-        <div className="flex items-center gap-3">
-          <div className="flex h-10 w-10 items-center justify-center rounded-md bg-accent text-white">
-            <Icons.logo size={18} />
-          </div>
-          <div>
-            <h1 className="text-xl font-semibold tracking-tight">FIX Gateway</h1>
-            <p className="text-sm text-muted">Вход в операционную консоль</p>
-          </div>
-        </div>
+    <div className="login-page">
+      <aside className="login-story">
+        <div className="flex items-center gap-3"><div className="brand-mark flex h-10 w-10 items-center justify-center text-white"><Icons.logo size={21} /></div><div><strong className="text-base">FIX Gateway</strong><div className="text-[11px] text-muted">Операционная консоль</div></div></div>
+        <div><div className="login-eyebrow mb-5">Контроль. Скорость. Прозрачность.</div><h2>Весь торговый поток.<br /><span className="text-accent">В одном пространстве.</span></h2><p>Заявки, сделки и рыночные данные. Наблюдайте за подключениями и управляйте доступом из единой консоли.</p><div className="login-route"><span>Брокер</span><Icons.chevron size={16} /><span>FIX Gateway</span><Icons.chevron size={16} /><span>QUIK</span></div></div>
+        <div className="text-[11px] text-muted">FIX / QUIK · HTTP API · gRPC Stream</div>
+      </aside>
+      <div className="login-form-area"><form onSubmit={onSubmit} className="login-form space-y-5">
+        <div><div className="login-eyebrow">FIX Gateway</div><h1>Вход в консоль</h1><p className="text-sm text-muted">Используйте вашу учётную запись</p></div>
         <label className="block space-y-1.5 text-sm">
           <span className="text-muted">Email</span>
-          <input className="input" type="email" autoComplete="username" value={email} onChange={(e) => setEmail(e.target.value)} required />
+          <input className="input" name="email" type="email" autoComplete="username" value={email} onChange={(e) => setEmail(e.target.value)} required />
         </label>
         <label className="block space-y-1.5 text-sm">
           <span className="text-muted">Пароль</span>
           <input
             className="input"
             type="password"
+            name="password"
             autoComplete="current-password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             required
           />
         </label>
-        {error && <div className="text-sm text-danger">{error}</div>}
+        {error && <div role="alert" className="rounded-lg border border-rose-100 bg-rose-50 p-3 text-sm text-danger">{error}</div>}
         <button className="btn w-full py-2.5" disabled={loading}>
           {loading ? "Вход…" : "Войти"}
         </button>
-      </form>
+        <div className="flex items-center justify-center gap-1.5 pt-3 text-[11px] text-muted"><Icons.lock size={12} />Доступ для авторизованных пользователей</div>
+      </form></div>
     </div>
   );
 }

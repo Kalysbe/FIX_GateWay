@@ -5,7 +5,7 @@ const TONE: Record<string, string> = {
   CONNECTED: "badge-success",
   ONLINE: "badge-success",
   FILLED: "badge-success",
-  PARTIALLY_FILLED: "badge-success",
+  PARTIALLY_FILLED: "badge-info",
   ACKNOWLEDGED: "badge-info",
   REVOKED: "badge-danger",
   REJECTED: "badge-danger",
@@ -29,5 +29,5 @@ const TONE: Record<string, string> = {
 export function StatusBadge({ status }: { status?: string | null }) {
   if (!status) return <span className="badge-muted">—</span>;
   const key = status.toUpperCase();
-  return <span className={TONE[key] || "badge-muted"}>{statusLabel(status)}</span>;
+  return <span className={`status-badge ${TONE[key] || "badge-muted"}`} title={status}><i aria-hidden="true" />{statusLabel(status)}</span>;
 }

@@ -14,7 +14,16 @@ import (
 )
 
 var (
-	ObsQueueSize = promauto.NewGauge(prometheus.GaugeOpts{
+	DatabaseAvailable                 = promauto.NewGauge(prometheus.GaugeOpts{Name: "gateway_database_available", Help: "Whether the private metrics probe can reach PostgreSQL"})
+	FIXAvailable                      = promauto.NewGauge(prometheus.GaugeOpts{Name: "gateway_fix_available_sessions", Help: "Runtime FIX sessions available for routing"})
+	BackupAge                         = promauto.NewGauge(prometheus.GaugeOpts{Name: "gateway_backup_age_seconds", Help: "Age of latest successful encrypted database backup; configured production backups only"})
+	ExecutionInboxPending             = promauto.NewGauge(prometheus.GaugeOpts{Name: "gateway_execution_inbox_pending", Help: "Durable incoming FIX reports waiting for DB commit"})
+	ExecutionInboxBytes               = promauto.NewGauge(prometheus.GaugeOpts{Name: "gateway_execution_inbox_bytes", Help: "Pending incoming FIX journal size"})
+	ExecutionInboxOldest              = promauto.NewGauge(prometheus.GaugeOpts{Name: "gateway_execution_inbox_oldest_seconds", Help: "Age of oldest unapplied incoming FIX report"})
+	ExecutionInboxUnhealthy           = promauto.NewGauge(prometheus.GaugeOpts{Name: "gateway_execution_inbox_unhealthy", Help: "Incoming execution recovery pauses new trading"})
+	ExecutionInboxApplyFailures       = promauto.NewCounter(prometheus.CounterOpts{Name: "gateway_execution_inbox_apply_failures_total", Help: "Failed attempts to apply a retained incoming report"})
+	ExecutionInboxPersistenceFailures = promauto.NewCounter(prometheus.CounterOpts{Name: "gateway_execution_inbox_persistence_failures_total", Help: "Fatal failures to durably accept an incoming FIX report"})
+	ObsQueueSize                      = promauto.NewGauge(prometheus.GaugeOpts{
 		Name: "gateway_observability_queue_size",
 		Help: "Diagnostic events waiting for batch persistence",
 	})

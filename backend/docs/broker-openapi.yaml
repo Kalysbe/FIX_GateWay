@@ -8,6 +8,12 @@ info:
     Авторизация: `Authorization: Bearer sk_live_…`
     Токен выдаётся оператором. `broker_id` определяется по токену автоматически.
 
+    Брокерские события gRPC имеют REST-источники: `order.updated` → GET `/api/v1/orders`,
+    `trade.created` → GET `/api/v1/trades`, `positions.updated` → GET `/api/v1/positions`,
+    `marketdata.tick` → GET `/api/v1/market-data`. REST возвращает текущие снимки,
+    gRPC передаёт обновления через `fixgateway.realtime.v1.RealtimeService/Stream`.
+    REST не воспроизводит последовательность пропущенных событий.
+
     Руководство: [Broker API Guide](/docs/broker-api-guide.md)
   contact:
     name: KSE Gateway Support
@@ -27,6 +33,8 @@ tags:
     description: Список сделок (fills)
   - name: Позиции
     description: Снимок позиций из QUIK
+  - name: Рыночные данные
+    description: Текущие торги, статистика и торговый статус инструментов
 paths:
   /health:
     get:
@@ -95,6 +103,69 @@ paths:
                       $ref: "#/components/schemas/Instrument"
         "401":
           description: Unauthorized
+  /api/v1/market-data:
+    get:
+      tags: [Рыночные данные]
+      summary: Полный снимок текущих торгов
+      x-grpc-event: marketdata.tick
+      security:
+        - bearerAuth: []
+      description: |
+        Требует `orders:read`. REST-источник события gRPC `marketdata.tick`.
+        Возвращает все подписанные инструменты: цены, стакан, OHLC, средневзвешенную
+        цену, объём, оборот, торговый статус и состояние автоматической FIX-подписки.
+        Десятичные значения передаются строками. `raw_fix` не выдаётся.
+
+        Без фильтров возвращается весь рынок. Необязательные `symbol` (тикер или
+        SecurityID) и `board` ограничивают только ответ, не изменяя FIX-подписку.
+        `replace: true` означает полный снимок выбранной выборки.
+        `live` истинен только при доступном потоке в состоянии ACTIVE или PARTIAL.
+        Строка из справочника сама по себе не подтверждает получение данных.
+      parameters:
+        - in: query
+          name: symbol
+          schema: {type: string}
+          description: Тикер или SecurityID
+          example: GBA02280810
+        - in: query
+          name: board
+          schema: {type: string}
+          description: Код класса
+          example: LIST_GBA
+      responses:
+        "200":
+          description: Текущий снимок; quotes пуст, если поток ещё недоступен или фильтр не нашёл инструмент
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MarketDataResponse"
+              example:
+                source: live
+                live: true
+                replace: true
+                subscription: {adapter_id: quik-fix-1, status: ACTIVE, expected: 1, confirmed: 1}
+                quotes:
+                  - symbol: GBA02280810
+                    security_id: GBA02280810
+                    board: LIST_GBA
+                    currency: KGS
+                    last: "100.0"
+                    open: "99.5"
+                    high: "101.0"
+                    low: "99.0"
+                    volume: "1500"
+                    value: "150000.0"
+                    trading_status: "17"
+                    bids: [{price: "99.5", size: "10"}]
+                    offers: [{price: "100.5", size: "12"}]
+        "401":
+          description: Unauthorized
+        "403":
+          description: Нет права orders:read или IP не в whitelist
+        "429":
+          description: Rate limited
+        "503":
+          description: Временно недоступна авторизация или исчерпана ёмкость обработки
   /api/v1/orderbook:
     get:
       tags: [Справочники]
@@ -242,12 +313,17 @@ paths:
     get:
       tags: [Заявки]
       summary: Список заявок брокера
+      x-grpc-event: order.updated
       security:
         - bearerAuth: []
-      description: Требует `orders:read`. Последние 100 заявок.
+      description: Требует `orders:read`. Последние 100 заявок своего брокера. REST-источник события gRPC `order.updated`; отдельная заявка доступна через GET /api/v1/orders/{id}.
       responses:
         "200":
           description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrdersResponse"
         "401":
           description: Unauthorized
   /api/v1/orders/{id}:
@@ -258,6 +334,7 @@ paths:
         - bearerAuth: []
       description: |
         Требует `orders:read`. Возвращает заявку, журнал событий и сделки.
+        Поля `order` соответствуют данным события gRPC `order.updated`.
       parameters:
         - in: path
           name: id
@@ -269,6 +346,10 @@ paths:
       responses:
         "200":
           description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrderDetailResponse"
         "401":
           description: Unauthorized
         "404":
@@ -307,9 +388,10 @@ paths:
     get:
       tags: [Сделки]
       summary: Список сделок брокера
+      x-grpc-event: trade.created
       security:
         - bearerAuth: []
-      description: Требует `trades:read`. Последние 100 сделок.
+      description: Требует `trades:read`. Последние 100 сделок своего брокера. REST-источник события gRPC `trade.created`; поля сделки совпадают с данными события.
       responses:
         "200":
           description: OK
@@ -330,15 +412,18 @@ paths:
     get:
       tags: [Позиции]
       summary: Снимок позиций брокера
+      x-grpc-event: positions.updated
       security:
         - bearerAuth: []
       description: |
         Требует `positions:read`.
 
-        Токен определяет брокера. Код брокера — это код фирмы в снимке QUIK.
-        Отдаются только позиции этой фирмы: инструменты и деньги.
+        Токен определяет брокера. Выборка ограничена кодом брокера и `quik_firm`
+        его токена, как в событии gRPC `positions.updated`.
+        Массивы `cash` и `instruments` содержат те же поля позиций.
 
-        Это кэш последнего Request For Positions (`35=AN` → `35=AP`), не live-стрим.
+        REST читает текущие позиции из базы шлюза. Шлюз автоматически поддерживает
+        FIX-поток позиций (`35=AN`, `263=1`) и получает снимки для восстановления.
         PUT отправляет в QUIK `35=AL` и после `35=AM` обновляет снимок.
         Если снимка ещё нет, списки пустые, в `note` — пояснение.
       responses:
@@ -397,10 +482,12 @@ paths:
               account_code: "1-3101-2040"
               cash:
                 - currency: KGS
+                  client_code: kalys
                   amount: "1500000"
                   tag: EQTV
               instruments:
                 - symbol: KG0105166315
+                  client_code: kalys
                   board: LISTEDSTOCKK
                   quantity: "100"
       responses:
@@ -586,34 +673,75 @@ components:
       type: object
       properties:
         order:
-          type: object
-          properties:
-            id:
-              type: string
-              format: uuid
-            client_order_id:
-              type: string
-            status:
-              type: string
-              enum: [QUEUED, ROUTING, SENT, ACKNOWLEDGED, PARTIALLY_FILLED, FILLED, CANCEL_PENDING, CANCELLED, REJECTED, EXPIRED, FAILED]
-            symbol:
-              type: string
-            board:
-              type: string
-            side:
-              type: string
-            quantity:
-              type: string
-            price:
-              type: string
-            filled_quantity:
-              type: string
-            quik_firm:
-              type: string
-            request_id:
-              type: string
+          $ref: "#/components/schemas/Order"
         idempotent:
           type: boolean
+    Order:
+      type: object
+      properties:
+        id: {type: string, format: uuid}
+        broker_id: {type: integer, format: int64}
+        account_id: {type: string, description: Торговый код счёта}
+        client_order_id: {type: string}
+        instrument_id: {type: integer, format: int64}
+        symbol: {type: string}
+        board: {type: string}
+        currency: {type: string}
+        side: {type: string, enum: [BUY, SELL]}
+        order_type: {type: string, enum: [MARKET, LIMIT]}
+        time_in_force: {type: string}
+        quantity: {type: string}
+        price: {type: string, nullable: true}
+        filled_quantity: {type: string}
+        avg_price: {type: string}
+        status:
+          type: string
+          enum: [RECEIVED, VALIDATING, VALIDATED, QUEUED, ROUTING, SENT, ACKNOWLEDGED, PARTIALLY_FILLED, FILLED, CANCEL_PENDING, CANCELLED, REJECTED, EXPIRED, FAILED]
+        adapter_id: {type: string, nullable: true}
+        fix_cl_ord_id: {type: string, nullable: true}
+        quik_order_id: {type: string, nullable: true}
+        client_code: {type: string}
+        quik_firm: {type: string}
+        firm_name: {type: string}
+        reject_reason: {type: string, nullable: true}
+        created_at: {type: string, format: date-time}
+        updated_at: {type: string, format: date-time}
+        request_id: {type: string}
+        trace_id: {type: string}
+    OrdersResponse:
+      type: object
+      required: [orders]
+      properties:
+        orders:
+          type: array
+          items:
+            $ref: "#/components/schemas/Order"
+    OrderDetailResponse:
+      type: object
+      required: [order, events, trades]
+      properties:
+        order:
+          $ref: "#/components/schemas/Order"
+        events:
+          type: array
+          items:
+            $ref: "#/components/schemas/OrderEvent"
+        trades:
+          type: array
+          items:
+            $ref: "#/components/schemas/Trade"
+    OrderEvent:
+      type: object
+      properties:
+        id: {type: integer, format: int64}
+        order_id: {type: string, format: uuid}
+        event_type: {type: string}
+        from_status: {type: string, nullable: true}
+        to_status: {type: string, nullable: true}
+        adapter_id: {type: string, nullable: true}
+        message: {type: string}
+        raw_fix: {type: string}
+        created_at: {type: string, format: date-time}
     BrokerAccount:
       type: object
       properties:
@@ -663,6 +791,75 @@ components:
         size:
           type: string
           example: "10"
+    MarketQuote:
+      type: object
+      description: Строка текущих торгов; пустая строка цены или статуса означает, что значение ещё не получено
+      properties:
+        adapter_id: {type: string}
+        md_req_id: {type: string}
+        symbol: {type: string}
+        security_id: {type: string}
+        board: {type: string}
+        currency: {type: string}
+        name: {type: string}
+        trade_date: {type: string}
+        trading_status: {type: string, description: Торговый статус FIX 326}
+        trading_session_id: {type: string, description: FIX 336}
+        trading_session_sub: {type: string, description: FIX 625}
+        bid: {type: string}
+        bid_size: {type: string}
+        offer: {type: string}
+        offer_size: {type: string}
+        bids:
+          type: array
+          items:
+            $ref: "#/components/schemas/BookLevel"
+        offers:
+          type: array
+          items:
+            $ref: "#/components/schemas/BookLevel"
+        last: {type: string}
+        last_size: {type: string}
+        last_time: {type: string}
+        open: {type: string}
+        high: {type: string}
+        low: {type: string}
+        close: {type: string}
+        wapr: {type: string, description: Средневзвешенная цена}
+        settle: {type: string}
+        current_price: {type: string}
+        official_price: {type: string}
+        volume: {type: string}
+        value: {type: string, description: Оборот}
+        entries:
+          type: object
+          additionalProperties: {type: string}
+        updated_at: {type: string, format: date-time}
+    MarketDataSubscription:
+      type: object
+      required: [status, expected, confirmed]
+      properties:
+        adapter_id: {type: string}
+        status: {type: string, enum: [WAITING, STARTING, ACTIVE, PARTIAL, RETRYING, OFFLINE]}
+        expected: {type: integer, description: Количество подписанных инструментов всего шлюза}
+        confirmed: {type: integer, description: Количество подтверждённых инструментов всего шлюза}
+        error: {type: string}
+        next_retry_at: {type: string, format: date-time}
+        last_received_at: {type: string, format: date-time}
+    MarketDataResponse:
+      type: object
+      required: [source, live, quotes, subscription, replace]
+      properties:
+        source: {type: string, enum: [live]}
+        live: {type: boolean}
+        replace: {type: boolean, enum: [true]}
+        quotes:
+          type: array
+          items:
+            $ref: "#/components/schemas/MarketQuote"
+        subscription:
+          $ref: "#/components/schemas/MarketDataSubscription"
+        note: {type: string}
     OrderBook:
       type: object
       properties:
@@ -718,6 +915,11 @@ components:
     Trade:
       type: object
       properties:
+        broker_id: {type: integer, format: int64}
+        adapter_id: {type: string, nullable: true}
+        firm_name: {type: string}
+        fix_cl_ord_id: {type: string, nullable: true}
+        quik_order_id: {type: string, nullable: true}
         id:
           type: string
           format: uuid
@@ -752,6 +954,14 @@ components:
     Position:
       type: object
       properties:
+        adapter_id: {type: string}
+        pos_maint_rpt_id: {type: string}
+        pos_req_id: {type: string}
+        clearing_date: {type: string}
+        update_action: {type: string, description: "FIX 5024: 0 New / 1 Change / 2 Delete"}
+        pos_amt_type: {type: string}
+        pos_amt: {type: string}
+        raw_fix: {type: string, description: Не включается в gRPC-снимок}
         kind:
           type: string
           enum: [INSTRUMENT, CASH, FUTURES]
@@ -812,6 +1022,8 @@ components:
         status:
           type: string
           example: OK
+        error:
+          type: string
         report_count:
           type: integer
     PositionsResponse:

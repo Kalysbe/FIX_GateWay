@@ -54,7 +54,7 @@ export function TradingLimits() {
       <label>Максимум открытых заявок<input className="input w-full" type="number" min={1} max={1000000} value={open} onChange={e => setOpen(e.target.value)} placeholder="Без ограничения" /></label>
       <label className="flex items-center gap-2"><input type="checkbox" checked={draft.paused} onChange={e => setDraft({ ...draft, paused: e.target.checked })} />Приостановить приём новых заявок</label>
       <label>Причина изменения<input className="input w-full" required minLength={3} maxLength={1000} value={reason} onChange={e => setReason(e.target.value)} /></label>
-      <button className="btn-primary" disabled={saving}>{saving ? "Сохранение…" : "Сохранить"}</button>
+      <button className="btn" disabled={saving}>{saving ? "Сохранение…" : "Сохранить"}</button>
     </form>}
     {message && <p role="status">{message}</p>}
     <TradingLimitHistory />

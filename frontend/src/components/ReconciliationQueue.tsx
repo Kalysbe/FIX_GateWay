@@ -27,9 +27,10 @@ export function ReconciliationQueue({ orderId }: { orderId?: string }) {
     onSuccess: () => { void q.refetch(); },
   });
   const cases = q.data?.cases || [];
+  if (!q.isLoading && !q.error && cases.length === 0) return <div className="reconciliation-clear" role="status"><span aria-hidden="true">✓</span>Случаев для сверки нет</div>;
   return <section className="card space-y-3">
     <h2 className="font-medium">Сверка неопределённых отправок</h2>
-    <p className="text-sm text-slate-500">Шлюз автоматически закрывает случаи по сохранённому FIX-подтверждению. Для отмены требуется конечный статус заявки. Оператор также может закрыть подтверждённый случай с комментарием. История решения сохраняется.</p>
+    <p className="text-xs text-slate-500">Случаи закрываются по FIX-подтверждению. Для отмены требуется конечный статус заявки. Комментарий оператора и история решения сохраняются.</p>
     {q.error && <ErrorBanner error={q.error} onRetry={() => q.refetch()} />}
     {resolve.error && <ErrorBanner error={resolve.error} onRetry={() => resolve.reset()} />}
     {q.isLoading && <p className="text-sm">Загрузка…</p>}

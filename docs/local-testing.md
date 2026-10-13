@@ -6,9 +6,9 @@
 docker compose -f deploy/docker-compose.local.yml up --build -d --wait --wait-timeout 180
 ```
 
-Требуется современный Docker Compose с `dockerfile_inline` (2.17+). Сборка скачивает зависимости; gateway, PostgreSQL и FIX simulator используют внутреннюю Docker-сеть без исходящего доступа в LAN/Интернет. UI и фиксированный TCP bridge `access` подключены также к отдельной сети для публикации loopback-портов. Bridge передаёт HTTP, native gRPC и PostgreSQL без завершения TLS; mTLS проверяет сам gateway. Стенд имеет имя `fix-gateway-local`, собственные БД и сертификаты, отдельные порты. Штатный UAT Compose и его данные не используются. Не объединяйте эти Compose-файлы через несколько `-f` и не меняйте имя проекта.
+Требуется современный Docker Compose с `dockerfile_inline` (2.17+). Сборка скачивает зависимости; gateway, PostgreSQL и FIX simulator используют внутреннюю Docker-сеть без исходящего доступа в LAN/Интернет. UI и фиксированный TCP bridge `access` подключены также к отдельной сети для публикации loopback-портов. Bridge передаёт HTTP, native gRPC и PostgreSQL без завершения TLS; mTLS проверяет сам gateway. Стенд имеет имя `fix-gateway-local`, собственные БД и сертификаты. Админка использует привычный порт 5173, остальные опубликованные порты выделены локальному стенду. Освободите порт 5173 перед запуском: одновременно запустить админки локального и UAT стендов на нём нельзя. Штатный UAT Compose и его данные не используются. Не объединяйте эти Compose-файлы через несколько `-f` и не меняйте имя проекта.
 
-Админка: http://localhost:25173 — `admin@localhost` / `admin123`.
+Админка: http://localhost:5173 — `admin@localhost` / `admin123`.
 Брокерское приложение: http://localhost:25174.
 REST API / Swagger: http://localhost:28080/swagger.
 Native mTLS gRPC: localhost:28443.

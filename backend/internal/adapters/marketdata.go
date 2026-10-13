@@ -3,6 +3,7 @@ package adapters
 import (
 	"context"
 	"fmt"
+	"sort"
 	"sync"
 
 	"github.com/fix-gateway/backend/internal/domain"
@@ -17,6 +18,61 @@ type MarketDataSource interface {
 type LiveMarketData interface {
 	SubscribeMarketData(ctx context.Context, q domain.MarketDataQuery) (reqID string, items []domain.MarketQuote, err error)
 	LiveQuotes() []domain.MarketQuote
+}
+
+type marketDataStateSource interface {
+	MarketDataSubscription() domain.MarketDataSubscription
+}
+
+type marketDataUnsubscriber interface{ UnsubscribeMarketData(context.Context) error }
+
+func (m *Manager) adoptMarketDataOwner(ctx context.Context, id string) {
+	previous := m.marketDataOwner()
+	m.setMarketDataOwner(id)
+	if previous == "" || previous == id {
+		return
+	}
+	m.mu.RLock()
+	old := m.adapters[previous]
+	m.mu.RUnlock()
+	if src, ok := old.(marketDataUnsubscriber); ok {
+		_ = src.UnsubscribeMarketData(ctx)
+	}
+}
+
+func (m *Manager) marketDataOwner() string {
+	m.mdOwnerMu.RLock()
+	defer m.mdOwnerMu.RUnlock()
+	return m.mdOwner
+}
+
+func (m *Manager) setMarketDataOwner(id string) {
+	m.mdOwnerMu.Lock()
+	m.mdOwner = id
+	m.mdOwnerMu.Unlock()
+}
+
+func (m *Manager) publishMarketData(id string, quotes []domain.MarketQuote) {
+	if m.marketDataOwner() == id && m.onMD != nil {
+		m.onMD(quotes)
+	}
+}
+
+func (m *Manager) MarketDataSubscription() domain.MarketDataSubscription {
+	id := m.marketDataOwner()
+	m.mu.RLock()
+	ad := m.adapters[id]
+	m.mu.RUnlock()
+	if ad == nil {
+		return domain.MarketDataSubscription{Status: "WAITING"}
+	}
+	if ad.Status() != domain.AdapterOnline && ad.Status() != domain.AdapterDegraded {
+		return domain.MarketDataSubscription{AdapterID: id, Status: "OFFLINE"}
+	}
+	if src, ok := ad.(marketDataStateSource); ok {
+		return src.MarketDataSubscription()
+	}
+	return domain.MarketDataSubscription{AdapterID: id, Status: "STARTING"}
 }
 
 var mdFetchMu sync.Mutex
@@ -62,13 +118,14 @@ func (m *Manager) FetchMarketData(ctx context.Context, q domain.MarketDataQuery)
 }
 
 func (m *Manager) SubscribeMarketData(ctx context.Context, q domain.MarketDataQuery) (adapterID, reqID string, items []domain.MarketQuote, err error) {
-	mdFetchMu.Lock()
-	defer mdFetchMu.Unlock()
+	m.mdMaintainMu.Lock()
+	defer m.mdMaintainMu.Unlock()
 
 	m.mu.RLock()
 	var list []struct {
-		id  string
-		src LiveMarketData
+		id       string
+		src      LiveMarketData
+		priority int
 	}
 	for _, ad := range m.adapters {
 		if ad.Status() != domain.AdapterOnline && ad.Status() != domain.AdapterDegraded {
@@ -79,30 +136,62 @@ func (m *Manager) SubscribeMarketData(ctx context.Context, q domain.MarketDataQu
 			continue
 		}
 		list = append(list, struct {
-			id  string
-			src LiveMarketData
-		}{id: ad.ID(), src: src})
+			id       string
+			src      LiveMarketData
+			priority int
+		}{id: ad.ID(), src: src, priority: ad.Meta().Priority})
 	}
 	m.mu.RUnlock()
+	owner := m.marketDataOwner()
+	sort.SliceStable(list, func(i, j int) bool {
+		if list[i].id == owner || list[j].id == owner {
+			return list[i].id == owner
+		}
+		if list[i].priority != list[j].priority {
+			return list[i].priority < list[j].priority
+		}
+		return list[i].id < list[j].id
+	})
 
 	var firstErr error
+	var bestID, bestReqID string
+	var bestItems []domain.MarketQuote
+	bestCount := -1
 	for _, c := range list {
+		if bestID == "" && owner == "" {
+			m.adoptMarketDataOwner(ctx, c.id)
+		}
 		reqID, items, err = c.src.SubscribeMarketData(ctx, q)
+		confirmed := 0
+		for _, row := range items {
+			if row.HasData() {
+				confirmed++
+			}
+		}
+		if state, ok := c.src.(marketDataStateSource); ok {
+			confirmed = state.MarketDataSubscription().Confirmed
+		}
+		if confirmed > bestCount {
+			bestID, bestReqID, bestItems, bestCount = c.id, reqID, items, confirmed
+		}
 		if err != nil {
 			if firstErr == nil {
 				firstErr = err
 			}
-			m.log.Warn("market data subscribe failed", "adapter_id", c.id, "error", err)
 			continue
 		}
-		if len(items) == 0 {
-			m.log.Warn("market data subscribe returned no quotes", "adapter_id", c.id)
-			continue
+		// Pending subscriptions are maintained by the supervisor. A dictionary
+		// seed is not a confirmation, and cannot displace a working partial feed.
+		if confirmed >= bestCount {
+			m.adoptMarketDataOwner(ctx, c.id)
+			return c.id, reqID, items, nil
 		}
-		return c.id, reqID, items, nil
+	}
+	if bestID != "" {
+		m.adoptMarketDataOwner(ctx, bestID)
 	}
 	if firstErr != nil {
-		return "", "", nil, firstErr
+		return bestID, bestReqID, bestItems, firstErr
 	}
 	if len(list) > 0 {
 		return "", "", nil, fmt.Errorf("market data subscribe returned no quotes")
@@ -111,18 +200,17 @@ func (m *Manager) SubscribeMarketData(ctx context.Context, q domain.MarketDataQu
 }
 
 func (m *Manager) LiveQuotes() (adapterID string, items []domain.MarketQuote, ok bool) {
+	owner := m.marketDataOwner()
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	for _, ad := range m.adapters {
-		src, isLive := ad.(LiveMarketData)
-		if !isLive {
-			continue
-		}
-		items = src.LiveQuotes()
-		if len(items) == 0 {
-			continue
-		}
-		return ad.ID(), items, true
+	ad := m.adapters[owner]
+	if ad == nil || (ad.Status() != domain.AdapterOnline && ad.Status() != domain.AdapterDegraded) {
+		return "", nil, false
 	}
-	return "", nil, false
+	src, isLive := ad.(LiveMarketData)
+	if !isLive {
+		return "", nil, false
+	}
+	items = src.LiveQuotes()
+	return owner, items, len(items) > 0
 }

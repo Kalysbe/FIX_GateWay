@@ -15,12 +15,16 @@ func TestHTTPLogPolicy(t *testing.T) {
 		{"admin head", "HEAD", "/api/v1/admin/orders", 200, 0},
 		{"health", "GET", "/health", 200, 0},
 		{"preflight", "OPTIONS", "/api/v1/orders", 204, 0},
-		{"broker statistics", "GET", "/api/v1/orders", 200, 1},
+		{"broker statistics", "GET", "/api/v1/orders", 200, 0},
 		{"create order", "POST", "/api/v1/orders", 201, 1},
 		{"admin mutation", "PATCH", "/api/v1/admin/brokers/1", 200, 1},
-		{"failed polling", "GET", "/api/v1/admin/dashboard", 500, 2},
-		{"failed health", "GET", "/health", 503, 2},
-		{"denied read", "GET", "/api/v1/admin/orders", 403, 2},
+		{"delete", "DELETE", "/api/v1/admin/tokens/1", 200, 1},
+		{"put excluded", "PUT", "/api/v1/positions", 200, 0},
+		{"failed put excluded", "PUT", "/api/v1/positions", 500, 0},
+		{"failed create", "POST", "/api/v1/orders", 500, 2},
+		{"failed polling", "GET", "/api/v1/admin/dashboard", 500, 0},
+		{"failed health", "GET", "/health", 503, 0},
+		{"denied read", "GET", "/api/v1/admin/orders", 403, 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			p := NewPipeline(nil, nil, nil, Settings{ChannelSize: 8})
@@ -49,8 +53,8 @@ func TestEventLogPolicy(t *testing.T) {
 		{"routine FIX", Event{Type: TypeFIX, Subtype: "FIX_MESSAGE_SENT"}, false},
 		{"order FIX", Event{Type: TypeFIX, Subtype: "FIX_ORDER_SENT"}, true},
 		{"session", Event{Type: TypeFIX, Subtype: "FIX_SESSION_CONNECTED"}, true},
-		{"slow polling", Event{Type: TypeAPI, HTTPMethod: "GET", Endpoint: "/api/v1/admin/dashboard", PerfClass: PerfSlow}, true},
-		{"annotated failure", Event{Type: TypeAPI, HTTPMethod: "GET", Endpoint: "/api/v1/admin/dashboard", Result: ResultFailure}, true},
+		{"slow polling", Event{Type: TypeAPI, HTTPMethod: "GET", Endpoint: "/api/v1/admin/dashboard", PerfClass: PerfSlow}, false},
+		{"annotated failure", Event{Type: TypeAPI, HTTPMethod: "GET", Endpoint: "/api/v1/admin/dashboard", Result: ResultFailure}, false},
 		{"warning", Event{Type: TypeSystem, Severity: SeverityWarning}, true},
 		{"debug", Event{Type: TypeSystem, Severity: SeverityDebug}, false},
 	} {

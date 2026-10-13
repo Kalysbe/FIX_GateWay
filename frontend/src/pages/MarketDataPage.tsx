@@ -1,9 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api";
 import { liveRefetchInterval } from "../lib/poll";
 import { useAdminStream } from "../hooks/useAdminStream";
 import { PageHeader } from "../components/PageHeader";
+import { DataTable, type TableColumn } from "../components/DataTable";
+import { ErrorBanner } from "../components/feedback";
+import { numberValue } from "../lib/table";
+import { hasReceivedMarketData, instrumentStatus, marketDataSummary } from "../lib/marketData";
 
 type BookLevel = {
   price?: string;
@@ -22,6 +26,7 @@ type Quote = {
   trading_status?: string;
   trading_session_id?: string;
   trading_session_sub?: string;
+  raw_fix?: string;
   bid?: string;
   bid_size?: string;
   offer?: string;
@@ -60,7 +65,11 @@ type Resp = {
   live?: boolean;
   snapshot?: Snapshot;
   quotes: Quote[];
+  subscription?: Subscription;
 };
+
+type Subscription = { adapter_id?: string; status: string; expected: number; confirmed: number; error?: string; next_retry_at?: string; last_received_at?: string };
+const subscriptionLabels: Record<string, string> = { ACTIVE: "Подписка активна", STARTING: "Подключение потока", WAITING: "Ожидание инструментов", RETRYING: "Восстановление потока", PARTIAL: "Частичный поток", OFFLINE: "Ожидание FIX-связи" };
 
 function quoteKey(r: Quote): string {
   return `${r.board || ""}|${r.symbol || r.security_id || ""}`;
@@ -71,7 +80,7 @@ function mergeQuoteRow(prev: Quote | undefined, row: Quote): Quote {
   const out: Quote = { ...prev };
   (Object.keys(row) as Array<keyof Quote>).forEach((k) => {
     const v = row[k];
-    if (v === undefined || v === null || v === "") return;
+    if (v === undefined || v === null) return;
     (out as Record<string, unknown>)[k as string] = v;
   });
   return out;
@@ -87,55 +96,10 @@ function fmt(v: string | number | null | undefined, digits = 2): string {
   });
 }
 
-function tradingStatusLabel(code?: string, session?: string): string {
-  const s = (session || "").toUpperCase();
-  switch (code) {
-    case "2":
-      return "Приостановлены";
-    case "17":
-      return s && s !== "OPEN" ? s : "Идут";
-    case "18":
-      return "Закрыты";
-    case "100":
-      return "Закрытие";
-    case "101":
-      return "Открытие";
-    case "102":
-      return "Аукцион";
-    case "103":
-      return "Аукцион закрытия";
-    case "104":
-      return "Дискр. аукцион";
-    default:
-      return session || code || "—";
-  }
-}
-
-function statusTone(code?: string): string {
-  switch (code) {
-    case "17":
-      return "bg-emerald-50 text-emerald-700";
-    case "2":
-    case "18":
-      return "bg-slate-100 text-slate-600";
-    case "102":
-    case "103":
-    case "104":
-    case "100":
-    case "101":
-      return "bg-amber-50 text-amber-800";
-    default:
-      return "bg-slate-50 text-slate-500";
-  }
-}
-
 export default function MarketDataPage() {
   const qc = useQueryClient();
   const { connected, subscribe } = useAdminStream();
-  const [q, setQ] = useState("");
   const [boardFilter, setBoardFilter] = useState("");
-  const [symbolInput, setSymbolInput] = useState("");
-  const [boardInput, setBoardInput] = useState("");
 
   const [flash, setFlash] = useState<Record<string, number>>({});
   const [selectedKey, setSelectedKey] = useState("");
@@ -143,17 +107,19 @@ export default function MarketDataPage() {
   const dataQ = useQuery({
     queryKey: ["admin-market-data"],
     queryFn: ({ signal }) => api<Resp>("/api/v1/admin/market-data", { signal }),
-    refetchInterval: liveRefetchInterval(connected, 2000, 15000),
+    refetchInterval: liveRefetchInterval(connected, 2000, 5000),
   });
 
   useEffect(() => {
     return subscribe((msg) => {
       if (msg.type !== "marketdata.tick") return;
-      const incoming = (msg.data as { quotes?: Quote[] } | undefined)?.quotes;
-      if (!incoming?.length) return;
+      const payload = msg.data as { quotes?: Quote[]; subscription?: Subscription; replace?: boolean } | undefined;
+      const incoming = payload?.quotes || [];
+      if (!incoming.length && !payload?.subscription && !payload?.replace) return;
       qc.setQueryData<Resp>(["admin-market-data"], (old) => {
         const map = new Map<string, Quote>();
-        for (const row of old?.quotes || []) map.set(quoteKey(row), row);
+        const changedAdapter = payload?.subscription?.adapter_id && payload.subscription.adapter_id !== old?.subscription?.adapter_id;
+        if (!payload?.replace && !changedAdapter) for (const row of old?.quotes || []) map.set(quoteKey(row), row);
         const flashed: Record<string, number> = {};
         const now = Date.now();
         for (const row of incoming) {
@@ -179,7 +145,8 @@ export default function MarketDataPage() {
         }
         return {
           source: "live",
-          live: true,
+          live: payload?.subscription ? ["ACTIVE", "PARTIAL"].includes(payload.subscription.status) : old?.live,
+          subscription: payload?.subscription || old?.subscription,
           snapshot: old?.snapshot,
           quotes: Array.from(map.values()),
         };
@@ -193,22 +160,9 @@ export default function MarketDataPage() {
     return () => window.clearTimeout(id);
   }, [flash]);
 
-  const sync = useMutation({
-    mutationFn: () =>
-      api<{ summary?: string; received?: number; adapter_id?: string }>("/api/v1/admin/market-data/sync", {
-        method: "POST",
-        body: JSON.stringify({
-          symbol: symbolInput.trim() || undefined,
-          board: boardInput.trim() || undefined,
-        }),
-      }),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["admin-market-data"] });
-    },
-  });
-
   const quotes = dataQ.data?.quotes || [];
   const snapshot = dataQ.data?.snapshot;
+  const subscription = dataQ.data?.subscription;
 
   const boardOptions = useMemo(() => {
     const set = new Set<string>();
@@ -219,14 +173,9 @@ export default function MarketDataPage() {
   }, [quotes]);
 
   const filtered = useMemo(() => {
-    const needle = q.trim().toLowerCase();
     const rows = quotes.filter((r) => {
       if (boardFilter && r.board !== boardFilter) return false;
-      if (!needle) return true;
-      return [r.symbol, r.security_id, r.board, r.name, r.currency, r.last, r.bid, r.offer]
-        .join(" ")
-        .toLowerCase()
-        .includes(needle);
+      return true;
     });
     return rows.slice().sort((a, b) => {
       const board = (a.board || "").localeCompare(b.board || "", "ru");
@@ -237,40 +186,51 @@ export default function MarketDataPage() {
       if (sym) return sym;
       return (a.security_id || "").localeCompare(b.security_id || "", "ru");
     });
-  }, [quotes, q, boardFilter]);
+  }, [quotes, boardFilter]);
 
   const selected = useMemo(
     () => filtered.find((r) => quoteKey(r) === selectedKey) || filtered[0] || null,
     [filtered, selectedKey],
   );
+  const missingData = filtered.filter(r => !hasReceivedMarketData(r)).length;
+  const missingStatus = filtered.filter(r => !instrumentStatus(r.trading_status, r.trading_session_id).reported).length;
+
+  const columns: TableColumn<Quote>[] = [
+    { id: "symbol", header: "Инструмент", value: r => r.symbol || r.security_id, cell: r => <button type="button" className="text-left" onClick={() => setSelectedKey(quoteKey(r))} aria-label={"Открыть стакан " + (r.symbol || r.security_id)} aria-pressed={selected != null && quoteKey(selected) === quoteKey(r)}><strong className="font-mono text-accent">{r.symbol || r.security_id}</strong><div className="text-[10px] text-muted">{r.name}</div></button> },
+    { id: "board", header: "Класс", value: r => r.board, className: "font-mono text-[10px]" },
+    { id: "last", header: "Последняя", value: r => numberValue(r.last || r.current_price || r.official_price), cell: r => <strong>{fmt(r.last || r.current_price || r.official_price)}</strong>, numeric: true },
+    { id: "bid", header: "Спрос", value: r => numberValue(r.bid), cell: r => <span className="text-emerald-700">{fmt(r.bid)}<small className="ml-1 text-[9px] text-muted">{r.bid_size ? "× " + fmt(r.bid_size, 0) : ""}</small></span>, numeric: true },
+    { id: "offer", header: "Предложение", value: r => numberValue(r.offer), cell: r => <span className="text-rose-700">{fmt(r.offer)}<small className="ml-1 text-[9px] text-muted">{r.offer_size ? "× " + fmt(r.offer_size, 0) : ""}</small></span>, numeric: true },
+    { id: "depth", header: "Стакан", value: r => (r.bids?.length || (r.bid ? 1 : 0)) + "×" + (r.offers?.length || (r.offer ? 1 : 0)) },
+    ...([ ["open", "Открытие"], ["high", "Максимум"], ["low", "Минимум"], ["close", "Закрытие"], ["wapr", "Средневзв."], ["volume", "Объём"], ["value", "Оборот"] ] as const).map(([key, header]) => ({ id: key, header, value: (r: Quote) => numberValue(r[key]), cell: (r: Quote) => fmt(r[key], key === "volume" ? 0 : 2), numeric: true })),
+    { id: "status", header: "Статус", value: r => instrumentStatus(r.trading_status, r.trading_session_id).label, cell: r => {
+      const status = instrumentStatus(r.trading_status, r.trading_session_id);
+      return <span className={`status-badge ${status.tone}`} title={status.reported ? [r.trading_status && `FIX 326: ${r.trading_status}`, r.trading_session_id, r.trading_session_sub].filter(Boolean).join(" · ") : "FIX-адаптер пока не передал торговый статус инструмента"}><i aria-hidden="true" />{status.label}</span>;
+    } },
+  ];
 
   return (
     <div className="space-y-4">
       <PageHeader
         title="Текущие торги"
-        subtitle="ARQA FIX V→W/X · полный стакан (264=0) · котировки в реальном времени"
+        subtitle="Рынок в реальном времени · выберите инструмент, чтобы открыть стакан"
         actions={
           <div className="flex flex-wrap gap-2 text-xs">
-            <div className="rounded-lg border border-line bg-panel px-3 py-1.5 text-ink">
+            <div className={`status-badge ${subscription?.status === "ACTIVE" ? "badge-success" : "badge-warn"}`} title="Шлюз автоматически поддерживает подписку независимо от открытой страницы"><i aria-hidden="true" />{subscriptionLabels[subscription?.status || "STARTING"] || "Автоматическая подписка"}{subscription && ` · ${subscription.confirmed}/${subscription.expected}`}</div>
+            <div className="rounded-lg border border-line bg-panel px-3 py-1.5 text-ink" title="Соединение с потоком событий консоли. Получение рыночных данных учитывается отдельно.">
               <span className={`mr-2 inline-block h-2 w-2 rounded-full ${connected ? "bg-emerald-500" : "bg-slate-300"}`} />
-              <span className="text-slate-500">{connected ? "Онлайн" : "Нет сокета"}</span>
+              <span className="text-slate-500">{connected ? "Консоль подключена" : "Консоль: опрос"}</span>
             </div>
             <Pill label="Инструментов" value={filtered.length} />
-            {snapshot && <Pill label="Снимок" value={new Date(snapshot.requested_at).toLocaleString("ru-RU")} />}
+            {subscription?.last_received_at ? <Pill label="Данные" value={new Date(subscription.last_received_at).toLocaleTimeString("ru-RU")} /> : snapshot && <Pill label={dataQ.data?.source === "live" ? "Проверка" : "Снимок"} value={new Date(snapshot.requested_at).toLocaleString("ru-RU")} />}
           </div>
         }
       />
 
       <div className="card space-y-3">
         <div className="flex flex-wrap items-center gap-2">
-          <input
-            className="input min-w-[180px] flex-1"
-            placeholder="Поиск: код, класс, цена…"
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
-          />
           <select
-            className="input w-auto max-w-[180px]"
+            className="input w-auto max-w-[180px]" aria-label="Класс инструментов"
             value={boardFilter}
             onChange={(e) => setBoardFilter(e.target.value)}
           >
@@ -281,24 +241,7 @@ export default function MarketDataPage() {
               </option>
             ))}
           </select>
-          <input
-            className="input w-36"
-            placeholder="Код (48)"
-            value={symbolInput}
-            onChange={(e) => setSymbolInput(e.target.value)}
-          />
-          <input
-            className="input w-36"
-            placeholder="Класс (100)"
-            value={boardInput}
-            onChange={(e) => setBoardInput(e.target.value)}
-          />
-          <button className="btn-muted" onClick={() => void dataQ.refetch()}>
-            Обновить
-          </button>
-          <button className="btn" disabled={sync.isPending} onClick={() => sync.mutate()}>
-            {sync.isPending ? "Подписка…" : "Подписаться по FIX"}
-          </button>
+          <span className="text-xs text-muted">Подписка и восстановление выполняются автоматически</span>
         </div>
 
         {dataQ.data?.note && (
@@ -306,120 +249,22 @@ export default function MarketDataPage() {
             {dataQ.data.note}
           </div>
         )}
-        {sync.isError && <div className="text-sm text-danger">{(sync.error as Error).message}</div>}
-        {sync.isSuccess && (
-          <div className="text-sm text-emerald-700">
-            {sync.data?.summary || `Получено: ${sync.data?.received ?? 0}`}
-            {sync.data?.adapter_id ? ` · адаптер ${sync.data.adapter_id}` : ""}
+        {dataQ.error && <ErrorBanner error={dataQ.error} />}
+        {subscription?.error && <div role="status" className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900"><strong>Автоматическое восстановление потока.</strong> {subscription.error}{subscription.next_retry_at && ` · следующая проверка ${new Date(subscription.next_retry_at).toLocaleTimeString("ru-RU")}`}</div>}
+        {!dataQ.isLoading && !dataQ.error && missingStatus > 0 && (
+          <div role="status" className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+            {missingData > 0 ? <><strong>Рыночные данные не получены по {missingData} из {filtered.length} инструментов.</strong> Шлюз поддерживает подписку и повторяет подключение автоматически. </> : null}
+            Статус не передан по {missingStatus} инструментам. Пока он неизвестен, подтвердить режим торгов нельзя.
           </div>
         )}
-
-        {dataQ.isLoading && <div className="py-8 text-center text-slate-400">Загрузка…</div>}
-
-        {!dataQ.isLoading && (
-          <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_280px]">
-            <div className="overflow-x-auto rounded-lg border border-slate-200">
-              <table className="w-full min-w-[1280px] text-left text-sm">
-                <thead className="sticky top-0 z-10 bg-slate-50">
-                  <tr>
-                    {[
-                      "Код",
-                      "Класс",
-                      "Посл.",
-                      "Спрос",
-                      "Предл.",
-                      "Стакан",
-                      "Откр.",
-                      "Макс.",
-                      "Мин.",
-                      "Закр.",
-                      "Средневзв.",
-                      "Объём",
-                      "Оборот",
-                      "Статус",
-                    ].map((h) => (
-                      <th
-                        key={h}
-                        className="border-b border-line px-3 py-2.5 text-[12px] font-medium text-muted"
-                      >
-                        {h}
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {filtered.length === 0 && (
-                    <tr>
-                      <td colSpan={14} className="px-3 py-10 text-center text-slate-400">
-                        Нет котировок — запросите по FIX
-                      </td>
-                    </tr>
-                  )}
-                  {filtered.map((r) => {
-                    const last = r.last || r.current_price || r.official_price;
-                    const key = quoteKey(r);
-                    const hot = !!flash[key];
-                    const active = selected && quoteKey(selected) === key;
-                    const bidN = r.bids?.length || (r.bid ? 1 : 0);
-                    const offerN = r.offers?.length || (r.offer ? 1 : 0);
-                    return (
-                      <tr
-                        key={key}
-                        onClick={() => setSelectedKey(key)}
-                        className={`cursor-pointer border-b border-slate-100 transition-colors ${
-                          active ? "bg-sky-50" : hot ? "bg-amber-50" : "hover:bg-slate-50"
-                        }`}
-                      >
-                        <td className="px-3 py-2">
-                          <div className="font-mono text-xs">{r.symbol || r.security_id || "—"}</div>
-                          {r.name ? <div className="text-[11px] text-slate-400">{r.name}</div> : null}
-                        </td>
-                        <td className="px-3 py-2 font-mono text-xs text-slate-600">{r.board || "—"}</td>
-                        <td className="px-3 py-2">
-                          <div className="font-mono text-sm font-semibold tabular-nums">{fmt(last)}</div>
-                          {r.last_time ? (
-                            <div className="font-mono text-[11px] text-slate-400">{r.last_time}</div>
-                          ) : null}
-                        </td>
-                        <td className="px-3 py-2 font-mono tabular-nums text-emerald-700">
-                          {fmt(r.bid)}
-                          {r.bid_size ? <span className="ml-1 text-[11px] text-slate-400">{fmt(r.bid_size, 0)}</span> : null}
-                        </td>
-                        <td className="px-3 py-2 font-mono tabular-nums text-rose-700">
-                          {fmt(r.offer)}
-                          {r.offer_size ? (
-                            <span className="ml-1 text-[11px] text-slate-400">{fmt(r.offer_size, 0)}</span>
-                          ) : null}
-                        </td>
-                        <td className="px-3 py-2 font-mono text-[11px] tabular-nums text-slate-500">
-                          {bidN}×{offerN}
-                        </td>
-                        <td className="px-3 py-2 font-mono tabular-nums">{fmt(r.open)}</td>
-                        <td className="px-3 py-2 font-mono tabular-nums">{fmt(r.high)}</td>
-                        <td className="px-3 py-2 font-mono tabular-nums">{fmt(r.low)}</td>
-                        <td className="px-3 py-2 font-mono tabular-nums">{fmt(r.close)}</td>
-                        <td className="px-3 py-2 font-mono tabular-nums">{fmt(r.wapr)}</td>
-                        <td className="px-3 py-2 font-mono tabular-nums">{fmt(r.volume, 0)}</td>
-                        <td className="px-3 py-2 font-mono tabular-nums">{fmt(r.value, 0)}</td>
-                        <td className="px-3 py-2">
-                          <span className={`inline-flex rounded-md px-2 py-0.5 text-[11px] font-semibold ${statusTone(r.trading_status)}`}>
-                            {tradingStatusLabel(r.trading_status, r.trading_session_id)}
-                          </span>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-            <OrderBookPanel quote={selected} />
-          </div>
-        )}
+        <div className="grid items-start gap-3 2xl:grid-cols-[minmax(0,1fr)_240px]">
+          <DataTable title="Текущие торги" rows={filtered} columns={columns} rowKey={quoteKey} loading={dataQ.isLoading} resetKey={boardFilter} exportName="market-data" searchPlaceholder="Инструмент, класс, название…" getSearchText={r => [r.symbol, r.security_id, r.board, r.name, r.currency, r.last, r.bid, r.offer, instrumentStatus(r.trading_status, r.trading_session_id).label].join(" ")} rowClassName={r => selected && quoteKey(selected) === quoteKey(r) ? "market-selected" : flash[quoteKey(r)] ? "market-tick" : ""} emptyTitle="Ожидание рыночных данных" emptyHint="Шлюз автоматически подключает инструменты из справочника" summary={marketDataSummary} />
+          <OrderBookPanel quote={selected} />
+        </div>
 
         {snapshot && (
-          <div className="text-xs text-slate-400">
-            Источник: FIX Market Data · адаптер {snapshot.adapter_id} · MDReqID {snapshot.md_req_id} · строк{" "}
-            {snapshot.report_count}
+          <div className="text-xs text-muted">
+            Источник: FIX Market Data · адаптер {snapshot.adapter_id}{snapshot.md_req_id ? ` · MDReqID ${snapshot.md_req_id}` : ""} · данные получены по {filtered.length - missingData} из {filtered.length} инструментов
           </div>
         )}
       </div>
@@ -444,12 +289,12 @@ function OrderBookPanel({ quote }: { quote: Quote | null }) {
           {quote.symbol || quote.security_id} · {quote.board || "—"}
         </div>
       ) : (
-        <div className="text-xs text-slate-400">Выберите инструмент</div>
+        <div className="text-xs text-muted">Выберите инструмент</div>
       )}
       <div className="grid grid-cols-2 gap-2 text-xs">
         <div>
           <div className="mb-1 font-medium text-emerald-700">Спрос</div>
-          {bids.length === 0 && <div className="text-slate-400">нет заявок</div>}
+          {bids.length === 0 && <div className="text-muted">нет заявок</div>}
           {bids.map((l, i) => (
             <div key={`b-${l.price}-${i}`} className="flex justify-between font-mono tabular-nums">
               <span className="text-emerald-700">{fmt(l.price)}</span>
@@ -459,7 +304,7 @@ function OrderBookPanel({ quote }: { quote: Quote | null }) {
         </div>
         <div>
           <div className="mb-1 font-medium text-rose-700">Предл.</div>
-          {offers.length === 0 && <div className="text-slate-400">нет заявок</div>}
+          {offers.length === 0 && <div className="text-muted">нет заявок</div>}
           {offers.map((l, i) => (
             <div key={`o-${l.price}-${i}`} className="flex justify-between font-mono tabular-nums">
               <span className="text-rose-700">{fmt(l.price)}</span>

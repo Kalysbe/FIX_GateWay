@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"github.com/jackc/pgx/v5"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -11,9 +12,16 @@ import (
 )
 
 type Config struct {
+	loadError                error
+	ExportDir                string
+	BackupStatusFile         string
 	FIXSessionDir            string
 	PrometheusURL            string
 	HTTPAddr                 string
+	OperationsAddr           string
+	ExecutionInboxDir        string
+	ExecutionInboxMaxBytes   int64
+	ExecutionInboxMaxEntries int
 	APIReadConcurrency       int
 	APITradeConcurrency      int
 	APIRequestTimeout        time.Duration
@@ -48,8 +56,9 @@ type Config struct {
 	DefaultOrderRateLimit    int
 	AuthFailMaxPerMinute     int
 	AppEnv                   string
-	PositionSyncInterval     time.Duration // 0 disables background FIX position sync
-	MarketDataSyncInterval   time.Duration // 0 disables background FIX market data sync
+	PositionSyncInterval     time.Duration // automatic snapshot fallback; defaults to 30s when unset/longer
+	PositionStreamEnabled    bool
+	MarketDataSyncInterval   time.Duration // automatic subscription supervision; defaults to 5s when unset/longer
 	MarketDataBoards         []string      // QUIK class codes for 35=V (tag 100)
 	TrustedProxies           string
 	ObsFastMS                int
@@ -80,10 +89,17 @@ type Config struct {
 func Load() Config {
 	appEnv := getEnv("APP_ENV", "development")
 	prod := isProdEnv(appEnv)
-	return Config{
-		FIXSessionDir:            getEnv("FIX_SESSION_DIR", filepath.Join(os.TempDir(), "fix-gateway-sessions")),
+	fixSessionDir := getEnv("FIX_SESSION_DIR", filepath.Join(os.TempDir(), "fix-gateway-sessions"))
+	c := Config{
+		ExportDir:                getEnv("EXPORT_DIR", filepath.Join(fixSessionDir, "exports")),
+		BackupStatusFile:         getEnv("BACKUP_STATUS_FILE", ""),
+		FIXSessionDir:            fixSessionDir,
 		PrometheusURL:            getEnv("PROMETHEUS_URL", ""),
 		HTTPAddr:                 getEnv("HTTP_ADDR", ":8080"),
+		OperationsAddr:           getEnv("OPERATIONS_ADDR", ":9080"),
+		ExecutionInboxDir:        getEnv("EXECUTION_INBOX_DIR", filepath.Join(fixSessionDir, "inbox")),
+		ExecutionInboxMaxBytes:   int64(getInt("EXECUTION_INBOX_MAX_BYTES", 1<<30)),
+		ExecutionInboxMaxEntries: getInt("EXECUTION_INBOX_MAX_ENTRIES", 100000),
 		APIReadConcurrency:       getInt("API_READ_CONCURRENCY", 32),
 		APITradeConcurrency:      getInt("API_TRADE_CONCURRENCY", 16),
 		APIRequestTimeout:        getDuration("API_REQUEST_TIMEOUT", 15*time.Second),
@@ -119,6 +135,7 @@ func Load() Config {
 		AuthFailMaxPerMinute:     getInt("AUTH_FAIL_MAX_PER_MINUTE", 30),
 		AppEnv:                   appEnv,
 		PositionSyncInterval:     getDuration("POSITION_SYNC_INTERVAL", 30*time.Second),
+		PositionStreamEnabled:    getBool("POSITION_STREAM_ENABLED", true),
 		MarketDataSyncInterval:   getDuration("MARKET_DATA_SYNC_INTERVAL", 15*time.Second),
 		MarketDataBoards:         getCSV("MARKET_DATA_BOARDS", "LISTEDSTOCKK,LIST_GBA"),
 		TrustedProxies:           getEnv("TRUSTED_PROXIES", ""),
@@ -146,6 +163,48 @@ func Load() Config {
 		AllowInsecureHMAC:        getBool("ALLOW_INSECURE_HMAC", false),
 		DocsPublic:               getBool("DOCS_PUBLIC", !prod),
 	}
+	for _, item := range []struct {
+		key  string
+		dest *string
+	}{
+		{"DATABASE_URL", &c.DatabaseURL}, {"QUIK_EXPORT_DATABASE_URL", &c.QuikExportDatabaseURL},
+		{"JWT_SECRET", &c.JWTSecret}, {"API_TOKEN_PEPPER", &c.APITokenPepper}, {"ADMIN_PASSWORD", &c.AdminPassword},
+	} {
+		if path := os.Getenv(item.key + "_FILE"); path != "" {
+			if os.Getenv(item.key) != "" {
+				c.loadError = errors.Join(c.loadError, errors.New(item.key+" and "+item.key+"_FILE cannot both be set"))
+				continue
+			}
+			value, err := readSecretFile(path)
+			if err != nil {
+				c.loadError = errors.Join(c.loadError, errors.New(item.key+"_FILE is unreadable, empty, or oversized"))
+				continue
+			}
+			*item.dest = value
+		}
+	}
+	return c
+}
+
+func readSecretFile(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	st, err := f.Stat()
+	if err != nil || !st.Mode().IsRegular() || st.Size() > 8192 {
+		return "", errors.New("invalid secret file")
+	}
+	b := make([]byte, st.Size())
+	if _, err = io.ReadFull(f, b); err != nil {
+		return "", err
+	}
+	v := strings.TrimRight(string(b), "\r\n")
+	if v == "" || strings.ContainsAny(v, "\r\n\x00") {
+		return "", errors.New("invalid secret value")
+	}
+	return v, nil
 }
 
 func isProdEnv(appEnv string) bool {
@@ -172,6 +231,9 @@ func isWeakSecret(v string) bool {
 
 // Validate refuses to boot a production process on documented defaults.
 func (c Config) Validate() error {
+	if c.loadError != nil {
+		return c.loadError
+	}
 	if !c.IsProduction() {
 		return nil
 	}
@@ -187,17 +249,17 @@ func (c Config) Validate() error {
 	}
 	if !c.AllowInsecureDB {
 		parsed, err := pgx.ParseConfig(c.DatabaseURL)
-		secure := err == nil && parsed.TLSConfig != nil
+		secure := err == nil && parsed.TLSConfig != nil && !parsed.TLSConfig.InsecureSkipVerify
 		if secure {
 			for _, fallback := range parsed.Fallbacks {
-				if fallback.TLSConfig == nil {
+				if fallback.TLSConfig == nil || fallback.TLSConfig.InsecureSkipVerify {
 					secure = false
 					break
 				}
 			}
 		}
 		if !secure {
-			errs = append(errs, "DATABASE_URL must enforce TLS without plaintext fallback (set ALLOW_INSECURE_DB=true to override)")
+			errs = append(errs, "DATABASE_URL must enforce verified TLS (sslmode=verify-full; ALLOW_INSECURE_DB=true is an explicit override)")
 		}
 	}
 	if !c.RequireHTTPS && !c.AllowInsecureHTTP {
@@ -205,6 +267,12 @@ func (c Config) Validate() error {
 	}
 	if !c.HMACRequired && !c.AllowInsecureHMAC {
 		errs = append(errs, "HMAC_REQUIRED must be true in production (set ALLOW_INSECURE_HMAC=true to override)")
+	}
+	if !c.GRPCRequireClientCert {
+		errs = append(errs, "GRPC_MTLS_REQUIRED must be true in production")
+	}
+	if c.DocsPublic {
+		errs = append(errs, "DOCS_PUBLIC must be false in production")
 	}
 	if len(errs) == 0 {
 		return nil

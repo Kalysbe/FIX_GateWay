@@ -22,6 +22,11 @@ function Icon({ size = 18, children, ...props }: IconProps & { children: ReactNo
 }
 
 export const Icons = {
+  search: (p: IconProps) => <Icon {...p}><circle cx="10.5" cy="10.5" r="6.5" /><path d="m16 16 4.5 4.5" /></Icon>,
+  sort: (p: IconProps) => <Icon {...p}><path d="M12 4v16m-5-11 5-5 5 5" /></Icon>,
+  columns: (p: IconProps) => <Icon {...p}><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M9 4v16M15 4v16" /></Icon>,
+  density: (p: IconProps) => <Icon {...p}><path d="M4 5h16M4 10h16M4 15h16M4 20h16" /></Icon>,
+  download: (p: IconProps) => <Icon {...p}><path d="M12 3v12m-4-4 4 4 4-4M4 17v4h16v-4" /></Icon>,
   logo: (p: IconProps) => (
     <Icon {...p}>
       <path d="M4 7h16M4 12h10M4 17h14" />

@@ -12,7 +12,7 @@ jobs:
     runs-on: ubuntu-latest
     services:
       postgres:
-        image: postgres:16-alpine
+        image: postgres:16.15-alpine3.24@sha256:721873c34ceb9f8d8fc265984940dc982404c105f19ad51be9fdc5970a6080ea
         env:
           POSTGRES_USER: gateway
           POSTGRES_PASSWORD: ci-only
@@ -29,6 +29,7 @@ jobs:
       DATABASE_URL: postgres://gateway:ci-only@localhost:5432/gateway_test?sslmode=disable
       SECURITY_AUDIT_DATABASE_URL: postgres://gateway:ci-only@localhost:5432/gateway_security_test?sslmode=disable
       SECURITY_AUDIT_MIGRATIONS: ../../migrations
+      RATE_LIMIT_TEST_DATABASE_URL: postgres://gateway:ci-only@localhost:5432/rate_limit_test?sslmode=disable
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -37,6 +38,12 @@ jobs:
           cache-dependency-path: backend/go.sum
       - name: Create separate security test database
         run: PGPASSWORD=ci-only psql -h localhost -U gateway -d gateway_test -c 'CREATE DATABASE gateway_security_test'
+      - name: Create separate rate limit test database
+        run: PGPASSWORD=ci-only psql -h localhost -U gateway -d gateway_test -c 'CREATE DATABASE rate_limit_test'
+      - name: Check reachable Go vulnerabilities
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@v1.9.0
+          govulncheck ./...
       - run: go vet -tags integration ./...
       - run: go test -race -tags integration ./...
 
@@ -52,10 +59,11 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 24
           cache: npm
           cache-dependency-path: ${{ matrix.project }}/package-lock.json
       - run: npm ci
+      - run: npm audit --audit-level=moderate
       - run: npm test --if-present
       - run: npm run build
 
@@ -65,7 +73,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 24
       - run: node --test scripts/stack-health.test.cjs
       - run: node --check scripts/pm2-supervisor.cjs
       - run: docker compose -f deploy/docker-compose.local.yml config --quiet
@@ -77,7 +85,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 24
       - name: Build isolated simulator stack
         run: docker compose -f deploy/docker-compose.local.yml up -d --build --wait --wait-timeout 180
       - name: Verify REST, FIX, trades, cancellation and realtime
@@ -98,11 +106,13 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 24
       - name: Build separate trading verification stack
         run: docker compose -p fix-gateway-verification -f deploy/docker-compose.local.yml -f deploy/docker-compose.verification.yml up -d --build --wait --wait-timeout 180 access
       - name: Verify FIX recovery, trading limits and restart persistence
         run: node scripts/verify-trading-release.mjs
+      - name: Verify executions survive database outage and process death
+        run: node scripts/verify-execution-recovery.mjs
       - name: Show verification logs on failure
         if: failure()
         run: docker compose -p fix-gateway-verification -f deploy/docker-compose.local.yml -f deploy/docker-compose.verification.yml logs --tail 100

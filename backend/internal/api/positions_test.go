@@ -35,3 +35,20 @@ func TestMapPositionsResponseSplitsAndSource(t *testing.T) {
 		t.Fatal("empty snapshot should be omitted")
 	}
 }
+
+func TestAdminPositionsNeverLabelsCachedOrMissingSnapshotAsLive(t *testing.T) {
+	state := domain.PositionSubscription{AdapterID: "a1", RequestID: "new", Status: "ACTIVE"}
+	snapshot := positions.Snapshot{ID: 7, AdapterID: "a1", PosReqID: "new"}
+	if response := mapAdminPositionsResponse(snapshot, nil, state); response["live"] != true {
+		t.Fatal("confirmed empty snapshot not live", response)
+	}
+	for _, sn := range []positions.Snapshot{{}, {ID: 7, AdapterID: "a1", PosReqID: "old"}, {ID: 7, AdapterID: "a2", PosReqID: "new"}} {
+		if response := mapAdminPositionsResponse(sn, nil, state); response["live"] != false {
+			t.Fatal("cache announced live", response)
+		}
+	}
+	state.Status = "RETRYING"
+	if response := mapAdminPositionsResponse(snapshot, nil, state); response["live"] != false {
+		t.Fatal("recovering stream announced live", response)
+	}
+}

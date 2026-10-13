@@ -15,11 +15,13 @@ export function Modal({
   const titleId = useId();
   const panelRef = useRef<HTMLDivElement>(null);
   const lastFocus = useRef<HTMLElement | null>(null);
+  const closeRef = useRef(onClose);
+  useEffect(() => { closeRef.current = onClose; }, [onClose]);
 
   useEffect(() => {
     lastFocus.current = document.activeElement as HTMLElement | null;
     const panel = panelRef.current;
-    const focusable = panel?.querySelector<HTMLElement>(
+    const focusable = panel?.querySelector<HTMLElement>('[data-autofocus]') ?? panel?.querySelector<HTMLElement>('input:not(:disabled), select:not(:disabled), textarea:not(:disabled)') ?? panel?.querySelector<HTMLElement>(
       'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
     );
     focusable?.focus();
@@ -27,7 +29,7 @@ export function Modal({
     function onKey(e: KeyboardEvent) {
       if (e.key === "Escape") {
         e.preventDefault();
-        onClose();
+        closeRef.current();
         return;
       }
       if (e.key !== "Tab" || !panel) return;
@@ -51,7 +53,7 @@ export function Modal({
       document.removeEventListener("keydown", onKey);
       lastFocus.current?.focus();
     };
-  }, [onClose]);
+  }, []);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4" onClick={onClose}>

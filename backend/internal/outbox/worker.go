@@ -28,16 +28,19 @@ type eventStore interface {
 var errReconciliationRequired = errors.New("RECONCILIATION_REQUIRED")
 
 type Worker struct {
-	store    eventStore
-	orders   *orders.Store
-	manager  *adapters.Manager
-	log      *slog.Logger
-	workerID string
-	interval time.Duration
-	batch    int
-	obs      observability.Emitter
-	wake     chan struct{}
+	store         eventStore
+	orders        *orders.Store
+	manager       *adapters.Manager
+	log           *slog.Logger
+	workerID      string
+	interval      time.Duration
+	batch         int
+	obs           observability.Emitter
+	wake          chan struct{}
+	dispatchGuard func() bool
 }
+
+func (w *Worker) SetDispatchGuard(guard func() bool) { w.dispatchGuard = guard }
 
 func NewWorker(store *Store, orderStore *orders.Store, manager *adapters.Manager, log *slog.Logger, workerID string, interval time.Duration, batch int) *Worker {
 	if batch <= 0 {
@@ -106,6 +109,9 @@ func (w *Worker) Notify() {
 }
 
 func (w *Worker) tick(ctx context.Context) {
+	if w.dispatchGuard != nil && !w.dispatchGuard() {
+		return
+	}
 	defer func() {
 		if count, err := w.store.PendingCount(ctx); err == nil {
 			metrics.OutboxQueueSize.Set(float64(count))
@@ -154,6 +160,9 @@ func (w *Worker) finish(ctx context.Context, ev domain.OutboxEvent, processErr e
 }
 
 func (w *Worker) process(ctx context.Context, ev domain.OutboxEvent) error {
+	if w.dispatchGuard != nil && !w.dispatchGuard() {
+		return errors.New("execution recovery in progress; FIX dispatch paused")
+	}
 	var payload struct {
 		OrderID string `json:"order_id"`
 	}

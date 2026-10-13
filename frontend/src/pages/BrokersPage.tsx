@@ -9,7 +9,9 @@ import { useToast } from "../components/Toast";
 import { StatusBadge } from "../components/StatusBadge";
 import { Icons } from "../components/icons";
 import { PageHeader } from "../components/PageHeader";
-import { EmptyState, ErrorBanner, TableSkeleton } from "../components/feedback";
+import { ErrorBanner } from "../components/feedback";
+import { DataTable, type TableColumn } from "../components/DataTable";
+import { dateValue } from "../lib/table";
 import { Modal } from "../components/Modal";
 import type { Broker } from "../types/admin";
 
@@ -50,6 +52,16 @@ export default function BrokersPage() {
     create.mutate();
   }
 
+  const columns: TableColumn<Broker>[] = [
+    { id: "id", header: "ID", value: b => b.id, numeric: true },
+    { id: "code", header: "Код", value: b => b.code, className: "font-mono" },
+    { id: "name", header: "Брокер", value: b => b.name, cell: b => <Link to={"/brokers/" + b.id + "?tab=tokens"} className="font-medium hover:text-accent">{b.name}</Link> },
+    { id: "connected", header: "Подключение", value: b => b.connected ? "Подключён" : "Нет соединения", cell: b => <><StatusBadge status={b.connected ? "CONNECTED" : "OFFLINE"} />{b.connected && <div className="mt-1 text-[10px] text-muted">{formatRelative(b.last_activity)}{b.last_ip ? " · " + b.last_ip : ""}</div>}</> },
+    { id: "status", header: "Статус", value: b => b.status, cell: b => <StatusBadge status={b.status} /> },
+    { id: "created", header: "Создан", value: b => dateValue(b.created_at), cell: b => formatDateTime(b.created_at), className: "text-[10px] whitespace-nowrap" },
+    { id: "actions", header: "Действия", value: () => "", sortable: false, cell: b => <div className="flex gap-1.5"><Link className="btn-muted" to={"/brokers/" + b.id + "?tab=tokens"}>Открыть</Link><button type="button" className="btn-muted" onClick={() => setStatus(b.id, b.status === "ACTIVE" ? "BLOCKED" : "ACTIVE")}>{b.status === "ACTIVE" ? "Заблокировать" : "Активировать"}</button></div> },
+  ];
+
   return (
     <div className="space-y-4">
       <PageHeader
@@ -63,76 +75,7 @@ export default function BrokersPage() {
         }
       />
       {q.error && <ErrorBanner error={q.error} onRetry={() => q.refetch()} />}
-      <div className="card !p-0 overflow-hidden">
-        {q.isLoading ? (
-          <TableSkeleton cols={6} />
-        ) : (
-          <table className="table">
-            <thead>
-              <tr>
-                <th>ID</th>
-                <th>Код</th>
-                <th>Название</th>
-                <th>Подключение</th>
-                <th>Статус</th>
-                <th>Создан</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody>
-              {(q.data?.brokers || []).map((b) => (
-                <tr key={b.id}>
-                  <td className="text-slate-500">{b.id}</td>
-                  <td className="font-mono text-sm">{b.code}</td>
-                  <td>
-                    <Link to={`/brokers/${b.id}?tab=tokens`} className="font-medium text-ink hover:text-accent">
-                      {b.name}
-                    </Link>
-                  </td>
-                  <td>
-                    {b.connected ? (
-                      <div>
-                        <StatusBadge status="CONNECTED" />
-                        <div className="mt-0.5 text-xs text-slate-500">
-                          {formatRelative(b.last_activity)}
-                          {b.last_ip ? ` · ${b.last_ip}` : ""}
-                        </div>
-                      </div>
-                    ) : (
-                      <StatusBadge status="OFFLINE" />
-                    )}
-                  </td>
-                  <td>
-                    <StatusBadge status={b.status} />
-                  </td>
-                  <td className="text-slate-500">{formatDateTime(b.created_at)}</td>
-                  <td className="space-x-2 whitespace-nowrap">
-                    <Link className="btn-muted" to={`/brokers/${b.id}?tab=tokens`}>
-                      Открыть
-                    </Link>
-                    {b.status === "ACTIVE" ? (
-                      <button type="button" className="btn-muted" onClick={() => setStatus(b.id, "BLOCKED")}>
-                        Заблокировать
-                      </button>
-                    ) : (
-                      <button type="button" className="btn-muted" onClick={() => setStatus(b.id, "ACTIVE")}>
-                        Активировать
-                      </button>
-                    )}
-                  </td>
-                </tr>
-              ))}
-              {(q.data?.brokers || []).length === 0 && (
-                <tr>
-                  <td colSpan={7}>
-                    <EmptyState title="Брокеров пока нет" />
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        )}
-      </div>
+      <DataTable title="Брокеры" rows={q.data?.brokers ?? []} columns={columns} rowKey={b => b.id} loading={q.isLoading} searchPlaceholder="Название, код, статус…" onRefresh={() => void q.refetch()} refreshing={q.isFetching} emptyTitle="Брокеров пока нет" summary={rows => [{ label: "Брокеров", value: rows.length }, { label: "Подключены", value: rows.filter(b => b.connected).length, tone: "success" }, { label: "Активны", value: rows.filter(b => b.status === "ACTIVE").length }, { label: "Заблокированы", value: rows.filter(b => b.status === "BLOCKED").length, tone: "danger" }]} />
 
       {showCreate && (
         <Modal title="Создать брокера" onClose={() => setShowCreate(false)}>

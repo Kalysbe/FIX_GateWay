@@ -99,6 +99,11 @@ func (a *sessionApp) handlePositionMaintenanceReport(msg *quickfix.Message) {
 func (a *sessionApp) handleFIXReject(msg *quickfix.Message) {
 	text, _ := msg.Body.GetString(tag.Text)
 	refType, _ := msg.Body.GetString(tag.RefMsgType)
+	if a.onExec != nil && (refType == "" || refType == "D" || refType == "F" || refType == "G") {
+		seq, _ := msg.Body.GetString(tag.RefSeqNum)
+		ref, _ := msg.Body.GetString(tag.BusinessRejectRefID)
+		a.onExec(domain.ExecutionReport{AdapterID: a.adapterID, ProtocolReject: true, RefMessageType: refType, RefSeqNum: seq, ClOrdID: ref, Text: text, RawFIX: formatWireFIX(msg)})
+	}
 	a.posMu.Lock()
 	mw := a.maintWait
 	pw := a.posWait

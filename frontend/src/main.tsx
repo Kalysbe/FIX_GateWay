@@ -1,3 +1,15 @@
+import "@fontsource/onest/latin-400.css";
+import "@fontsource/onest/latin-500.css";
+import "@fontsource/onest/latin-600.css";
+import "@fontsource/onest/latin-700.css";
+import "@fontsource/onest/cyrillic-400.css";
+import "@fontsource/onest/cyrillic-500.css";
+import "@fontsource/onest/cyrillic-600.css";
+import "@fontsource/onest/cyrillic-700.css";
+import "@fontsource/jetbrains-mono/latin-400.css";
+import "@fontsource/jetbrains-mono/latin-500.css";
+import "@fontsource/jetbrains-mono/cyrillic-400.css";
+import "@fontsource/jetbrains-mono/cyrillic-500.css";
 import React from "react";
 import ReactDOM from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";

@@ -6,7 +6,7 @@ option go_package = "github.com/fix-gateway/backend/gen/realtime/v1;realtimev1";
 import "google/protobuf/struct.proto";
 import "google/protobuf/timestamp.proto";
 
-// JWT authorization metadata is required in addition to TLS/mTLS.
+// Admin JWT or broker API-token authorization is required in addition to TLS/mTLS.
 service RealtimeService {
   rpc Stream(stream ClientMessage) returns (stream ServerMessage);
 }

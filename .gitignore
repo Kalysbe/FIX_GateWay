@@ -30,3 +30,10 @@ backend/bin/
 gateway.out.log
 logs/
 artifacts/
+output/
+.deploy-tmp/
+output/**/fixture/
+deploy/production/secrets/
+deploy/production/pki/
+deploy/production/fix/
+deploy/production/*.env

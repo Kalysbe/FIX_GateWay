@@ -16,6 +16,8 @@ import (
 )
 
 type sessionApp struct {
+	username  string
+	password  string
 	adapterID string
 	log       *slog.Logger
 	onExec    domain.ExecutionHandler
@@ -33,27 +35,37 @@ type sessionApp struct {
 	secDefMu   sync.Mutex
 	secDefWait *secDefWaiter
 
-	posMu     sync.Mutex
-	posWait   *posWaiter
-	maintWait *maintWaiter
+	posMu       sync.Mutex
+	posWait     *posWaiter
+	maintWait   *maintWaiter
+	posStream   *positionStream
+	posRetryAt  time.Time
+	posError    string
+	posAttempts int
+	posReceived time.Time
+	posNow      func() time.Time
+	onPositions func(string, string, []domain.FIXPosition) error
 
-	mdMu     sync.Mutex
-	mdWait   *mdWaiter
-	mdBook   map[string]domain.MarketQuote
-	mdSubIDs map[string]struct{}
-	onMD     domain.MarketDataHandler
-	onLogon  func()
-	onFIX    func(kind, sessionID, msgType, direction, clOrdID, reason string, seq int)
+	mdMu            sync.Mutex
+	mdWait          *mdWaiter
+	mdBook          map[string]domain.MarketQuote
+	mdSubIDs        map[string]struct{}
+	mdSubscriptions map[string]*mdSubscription
+	mdNow           func() time.Time
+	onMD            domain.MarketDataHandler
+	onLogon         func()
+	onFIX           func(kind, sessionID, msgType, direction, clOrdID, reason string, seq int)
 }
 
 func newSessionApp(adapterID string, log *slog.Logger, onExec domain.ExecutionHandler) *sessionApp {
 	a := &sessionApp{
-		adapterID:  adapterID,
-		log:        log,
-		onExec:     onExec,
-		pendingRaw: map[string]string{},
-		mdBook:     map[string]domain.MarketQuote{},
-		mdSubIDs:   map[string]struct{}{},
+		adapterID:       adapterID,
+		log:             log,
+		onExec:          onExec,
+		pendingRaw:      map[string]string{},
+		mdBook:          map[string]domain.MarketQuote{},
+		mdSubIDs:        map[string]struct{}{},
+		mdSubscriptions: map[string]*mdSubscription{},
 	}
 	a.lastError.Store("")
 	return a
@@ -79,16 +91,30 @@ func (a *sessionApp) OnLogon(sessionID quickfix.SessionID) {
 
 func (a *sessionApp) OnLogout(sessionID quickfix.SessionID) {
 	a.loggedOn.Store(false)
+	a.posMu.Lock()
+	a.posStream = nil
+	a.posRetryAt, a.posError, a.posAttempts = time.Time{}, "", 0
+	a.posMu.Unlock()
 	// Quotes from the old session must not suppress background resubscription.
 	a.mdMu.Lock()
 	a.mdBook = map[string]domain.MarketQuote{}
 	a.mdSubIDs = map[string]struct{}{}
+	a.mdSubscriptions = map[string]*mdSubscription{}
 	a.mdMu.Unlock()
 	a.log.Info("fix session logout", "adapter_id", a.adapterID, "session", sessionID.String())
 	a.emitFIX("FIX_SESSION_DISCONNECTED", sessionID.String(), "5", "IN", "", "logout", 0)
 }
 
-func (a *sessionApp) ToAdmin(msg *quickfix.Message, sessionID quickfix.SessionID) {}
+func (a *sessionApp) ToAdmin(msg *quickfix.Message, sessionID quickfix.SessionID) {
+	if kind, _ := msg.MsgType(); kind == "A" {
+		if a.username != "" {
+			msg.Body.SetString(tag.Username, a.username)
+		}
+		if a.password != "" {
+			msg.Body.SetString(tag.Password, a.password)
+		}
+	}
+}
 func (a *sessionApp) ToApp(msg *quickfix.Message, sessionID quickfix.SessionID) error {
 	clOrdID, err := msg.Body.GetString(tag.ClOrdID)
 	if err == nil && clOrdID != "" {
@@ -188,21 +214,34 @@ func (a *sessionApp) handleExecutionReport(msg *quickfix.Message) {
 		return v
 	}
 	a.onExec(domain.ExecutionReport{
-		AdapterID:    a.adapterID,
-		ClOrdID:      get(tag.ClOrdID),
-		OrigClOrdID:  get(tag.OrigClOrdID),
-		OrderID:      get(tag.OrderID),
-		ExecID:       get(tag.ExecID),
-		ExecType:     get(tag.ExecType),
-		OrdStatus:    get(tag.OrdStatus),
-		LastQty:      get(tag.LastQty),
-		LastPx:       get(tag.LastPx),
-		CumQty:       get(tag.CumQty),
-		LeavesQty:    get(tag.LeavesQty),
-		Text:         get(tag.Text),
-		OrdRejReason: get(tag.OrdRejReason),
-		RawFIX:       formatWireFIX(msg),
+		AdapterID:     a.adapterID,
+		ClOrdID:       get(tag.ClOrdID),
+		OrigClOrdID:   get(tag.OrigClOrdID),
+		OrderID:       get(tag.OrderID),
+		ExecID:        get(tag.ExecID),
+		ExecType:      get(tag.ExecType),
+		ExecTransType: get(tag.ExecTransType),
+		ExecRefID:     get(tag.ExecRefID),
+		TradeDate:     get(tag.TradeDate),
+		TransactTime:  get(tag.TransactTime),
+		OriginalTime:  executionOriginalTime(msg),
+		OrdStatus:     get(tag.OrdStatus),
+		LastQty:       get(tag.LastQty),
+		LastPx:        get(tag.LastPx),
+		CumQty:        get(tag.CumQty),
+		LeavesQty:     get(tag.LeavesQty),
+		Text:          get(tag.Text),
+		OrdRejReason:  get(tag.OrdRejReason),
+		RawFIX:        formatWireFIX(msg),
 	})
+}
+
+func executionOriginalTime(msg *quickfix.Message) string {
+	if value, err := msg.Header.GetString(tag.OrigSendingTime); err == nil && value != "" {
+		return value
+	}
+	value, _ := msg.Header.GetString(tag.SendingTime)
+	return value
 }
 
 func (a *sessionApp) handleOrderCancelReject(msg *quickfix.Message) {
@@ -275,6 +314,14 @@ func formatWireFIX(msg *quickfix.Message) string {
 
 func sanitizeFIX(msg *quickfix.Message) string {
 	s := formatWireFIX(msg)
+	parts := strings.Split(s, "|")
+	for i, p := range parts {
+		key, _, ok := strings.Cut(p, "=")
+		if ok && (key == "553" || key == "554" || key == "925" || key == "96") {
+			parts[i] = key + "=[redacted]"
+		}
+	}
+	s = strings.Join(parts, "|")
 	if len(s) > 500 {
 		return s[:500]
 	}

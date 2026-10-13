@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { api } from "../api";
 import { formatDateTime, formatNumber } from "../labels";
@@ -7,6 +7,8 @@ import { useBreadcrumbs } from "../components/breadcrumbs";
 import { PageHeader } from "../components/PageHeader";
 import { liveRefetchInterval } from "../lib/poll";
 import { useAdminStream } from "../hooks/useAdminStream";
+import { ErrorBanner } from "../components/feedback";
+import { StatusBadge } from "../components/StatusBadge";
 
 type Note = {
   id: string;
@@ -52,11 +54,13 @@ export default function NotificationsPage() {
   const qc = useQueryClient();
   const { connected } = useAdminStream();
   const [page, setPage] = useState(1);
+  const [unreadOnly, setUnreadOnly] = useState(false);
   const [pageSize, setPageSize] = useState(PAGE_SIZE);
   const q = useQuery({
-    queryKey: ["notifications", "list", page, pageSize],
+    queryKey: ["notifications", "list", page, pageSize, unreadOnly],
     queryFn: ({ signal }) =>
-      api<NotesPage>(`/api/v1/admin/notifications?limit=${pageSize}&page=${page}`, { signal }),
+      api<NotesPage>(`/api/v1/admin/notifications?limit=${pageSize}&page=${page}${unreadOnly ? "&unread=1" : ""}`, { signal }),
+    placeholderData: keepPreviousData,
     refetchInterval: liveRefetchInterval(connected, 8000),
   });
   const readAll = useMutation({
@@ -78,44 +82,46 @@ export default function NotificationsPage() {
   const to = Math.min(page * pageSize, total);
 
   useEffect(() => {
-    if (page > pages) setPage(pages);
-  }, [page, pages]);
+    if (q.data && !q.isPlaceholderData && page > pages) setPage(pages);
+  }, [page, pages, q.data, q.isPlaceholderData]);
 
   return (
     <div className="space-y-4">
       <PageHeader
         title="Уведомления"
-        subtitle={`Непрочитанных: ${formatNumber(q.data?.unread ?? 0)}. Одинаковые ошибки агрегируются за минуту.`}
+        subtitle="События системы и торгового потока · повторяющиеся ошибки объединяются"
         actions={
           <button type="button" className="btn-muted" onClick={() => readAll.mutate()} disabled={readAll.isPending}>
             Прочитать все
           </button>
         }
       />
+      <div className="notification-toolbar"><div className="flex gap-1"><button type="button" className={unreadOnly ? "btn-muted" : "btn"} aria-pressed={!unreadOnly} onClick={() => { setUnreadOnly(false); setPage(1); }}>Все события</button><button type="button" className={unreadOnly ? "btn" : "btn-muted"} aria-pressed={unreadOnly} onClick={() => { setUnreadOnly(true); setPage(1); }}>Непрочитанные · {formatNumber(q.data?.unread ?? 0)}</button></div><span>{q.isFetching ? "Обновление…" : `Всего ${formatNumber(total)}`}</span></div>
+      {q.error && <ErrorBanner error={q.error} onRetry={() => q.refetch()} />}
+      {readAll.error && <ErrorBanner error={readAll.error} />}
+      {readOne.error && <ErrorBanner error={readOne.error} />}
       <div className="space-y-2">
         {items.map((n) => (
-          <div key={n.id} className={`card border ${tone(n.severity)} ${n.severity === "CRITICAL" ? "ring-1 ring-rose-300" : ""}`}>
+          <div key={n.id} className={`card notification-card ${!n.read_at ? "notification-unread" : ""} border ${tone(n.severity)}`}>
             <div className="flex items-start justify-between gap-3">
               <div>
                 <div className="flex flex-wrap items-center gap-2">
-                  <span className={n.severity === "CRITICAL" || n.severity === "ERROR" ? "badge-danger" : n.severity === "WARNING" ? "badge-warn" : "badge-info"}>
-                    {n.severity}
-                  </span>
-                  <span className="font-medium">{n.title}</span>
+                  <StatusBadge status={n.severity} />
+                  <span className="font-medium">{n.title}</span>{!n.read_at && <span className="notification-new">Новое</span>}
                   {n.count > 1 && <span className="badge-muted">×{n.count}</span>}
                 </div>
                 <p className="mt-1 text-sm text-slate-600">{n.message || n.subtype}</p>
-                <p className="mt-1 text-xs text-slate-400">
+                <p className="mt-1 text-xs text-muted">
                   {formatDateTime(n.last_seen_at)}
                   {n.broker_name ? ` · ${n.broker_name}` : ""}
                 </p>
               </div>
               <div className="flex gap-2">
-                <Link className="btn-muted" to={`/logs/errors?${n.error_code ? `error_code=${n.error_code}` : ""}`}>
+                <Link className="btn-muted" to={`/logs/errors?${n.error_code ? `error_code=${encodeURIComponent(n.error_code)}` : ""}`}>
                   Логи
                 </Link>
                 {!n.read_at && (
-                  <button type="button" className="btn-muted" onClick={() => readOne.mutate(n.id)}>
+                  <button type="button" className="btn-muted" disabled={readOne.isPending} onClick={() => readOne.mutate(n.id)}>
                     Прочитано
                   </button>
                 )}
@@ -123,7 +129,7 @@ export default function NotificationsPage() {
             </div>
           </div>
         ))}
-        {items.length === 0 && <div className="card text-sm text-slate-400">{q.isLoading ? "Загрузка…" : "Нет уведомлений"}</div>}
+        {items.length === 0 && !q.error && <div className="card text-sm text-muted">{q.isLoading ? "Загрузка…" : unreadOnly ? "Все уведомления прочитаны" : "Нет уведомлений"}</div>}
       </div>
       <div className="flex flex-wrap items-center justify-between gap-3 text-sm">
         <div className="text-slate-500">

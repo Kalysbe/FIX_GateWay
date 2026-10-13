@@ -40,13 +40,14 @@ func TestValidateProductionRejectsDefaults(t *testing.T) {
 
 func TestValidateProductionAcceptsStrongConfig(t *testing.T) {
 	c := Config{
-		AppEnv:         "production",
-		JWTSecret:      "abcdefghijklmnopqrstuvwxyz012345",
-		APITokenPepper: "abcdefghijklmnopqrstuvwxyz012345",
-		AdminPassword:  "not-the-default-pw",
-		DatabaseURL:    "postgres://x:y@db/db?sslmode=require",
-		RequireHTTPS:   true,
-		HMACRequired:   true,
+		AppEnv:                "production",
+		JWTSecret:             "abcdefghijklmnopqrstuvwxyz012345",
+		APITokenPepper:        "abcdefghijklmnopqrstuvwxyz012345",
+		AdminPassword:         "not-the-default-pw",
+		DatabaseURL:           "postgres://x:y@db/db?sslmode=verify-full",
+		GRPCRequireClientCert: true,
+		RequireHTTPS:          true,
+		HMACRequired:          true,
 	}
 	if err := c.Validate(); err != nil {
 		t.Fatal(err)
@@ -55,12 +56,13 @@ func TestValidateProductionAcceptsStrongConfig(t *testing.T) {
 
 func TestValidateProductionRequiresHMAC(t *testing.T) {
 	c := Config{
-		AppEnv:         "production",
-		JWTSecret:      "abcdefghijklmnopqrstuvwxyz012345",
-		APITokenPepper: "abcdefghijklmnopqrstuvwxyz012345",
-		AdminPassword:  "not-the-default-pw",
-		DatabaseURL:    "postgres://x:y@db/db?sslmode=require",
-		RequireHTTPS:   true,
+		AppEnv:                "production",
+		JWTSecret:             "abcdefghijklmnopqrstuvwxyz012345",
+		APITokenPepper:        "abcdefghijklmnopqrstuvwxyz012345",
+		AdminPassword:         "not-the-default-pw",
+		DatabaseURL:           "postgres://x:y@db/db?sslmode=verify-full",
+		GRPCRequireClientCert: true,
+		RequireHTTPS:          true,
 	}
 	if err := c.Validate(); err == nil {
 		t.Fatal("expected HMAC_REQUIRED error")

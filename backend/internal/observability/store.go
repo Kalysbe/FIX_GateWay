@@ -551,7 +551,7 @@ func (s *Store) GetExportJob(ctx context.Context, id uuid.UUID) (ExportJob, erro
 	var rows *int
 	var completed *time.Time
 	err := s.pool.QueryRow(ctx, `
-		SELECT id, admin_user_id, format, status, filter, file_path, row_count, error, created_at, completed_at
+		SELECT id, COALESCE(admin_user_id,''), format, status, filter, file_path, row_count, error, created_at, completed_at
 		FROM obs_export_jobs WHERE id=$1`, id,
 	).Scan(&j.ID, &j.AdminUserID, &j.Format, &j.Status, &j.Filter, &path, &rows, &errMsg, &j.CreatedAt, &completed)
 	if err != nil {

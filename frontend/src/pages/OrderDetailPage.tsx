@@ -1,3 +1,5 @@
+import { DataTable, type TableColumn } from "../components/DataTable";
+import { dateValue, numberValue } from "../lib/table";
 import type { ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useParams } from "react-router-dom";
@@ -44,6 +46,15 @@ export default function OrderDetailPage() {
   const events = q.data?.events || [];
   const trades = q.data?.trades || [];
 
+  const tradeColumns: TableColumn<AdminTrade>[] = [
+    { id: "created", header: "Время", value: t => dateValue(t.created_at), exportValue: t => t.created_at, cell: t => formatDateTime(t.created_at), className: "text-[10px] whitespace-nowrap" },
+    { id: "exec", header: "ExecID", value: t => t.exec_id, className: "font-mono text-[10px]" },
+    { id: "qty", header: "Кол-во", value: t => numberValue(t.last_qty), numeric: true },
+    { id: "px", header: "Цена", value: t => numberValue(t.last_px), numeric: true },
+    { id: "cum", header: "Накоплено", value: t => numberValue(t.cum_qty), numeric: true },
+    { id: "leaves", header: "Остаток", value: t => numberValue(t.leaves_qty), numeric: true },
+    { id: "adapter", header: "Адаптер", value: t => t.adapter_id, className: "font-mono text-[10px]" },
+  ];
   return (
     <div className="space-y-6">
       <PageHeader title={`Заявка ${o?.client_order_id || ""}`} subtitle={<span className="font-mono">{o?.id}</span>} />
@@ -91,39 +102,7 @@ export default function OrderDetailPage() {
         </div>
       </div>
 
-      <div className="card overflow-x-auto">
-        <h2 className="mb-3 font-medium">Сделки (FIX)</h2>
-        {trades.length === 0 ? (
-          <EmptyState title="Нет исполнений по этой заявке" />
-        ) : (
-          <table className="table">
-            <thead>
-              <tr>
-                <th>Время</th>
-                <th>ExecID</th>
-                <th>Кол-во</th>
-                <th>Цена</th>
-                <th>Накоплено</th>
-                <th>Остаток</th>
-                <th>Адаптер</th>
-              </tr>
-            </thead>
-            <tbody>
-              {trades.map((t) => (
-                <tr key={t.id}>
-                  <td className="text-xs">{formatDateTime(t.created_at)}</td>
-                  <td className="font-mono text-xs">{t.exec_id}</td>
-                  <td className="font-mono">{t.last_qty}</td>
-                  <td className="font-mono">{t.last_px}</td>
-                  <td className="font-mono text-xs">{t.cum_qty}</td>
-                  <td className="font-mono text-xs">{t.leaves_qty}</td>
-                  <td className="text-xs">{t.adapter_id || "—"}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </div>
+      <DataTable title="Исполнения заявки" rows={trades} columns={tradeColumns} rowKey={t => t.id} exportName="order-executions" initialSort={{ id: "created", direction: "desc" }} emptyTitle="Нет исполнений по этой заявке" summary={rows => [{ label: "Исполнений", value: rows.length }, { label: "Исполнено, ед.", value: rows.reduce((n, t) => n + (numberValue(t.last_qty) ?? 0), 0).toLocaleString("ru-RU", { maximumFractionDigits: 8 }) }]} />
 
       <div className="card">
         <h2 className="mb-3 font-medium">Полный trace (Gateway → FIX)</h2>

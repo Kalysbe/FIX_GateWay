@@ -9,6 +9,7 @@ import { AdminStreamProvider } from "./hooks/useAdminStream";
 import LoginPage from "./pages/LoginPage";
 import DashboardPage from "./pages/DashboardPage";
 import MonitoringPage from "./pages/MonitoringPage";
+import GrpcPage from "./pages/GrpcPage";
 import BrokersPage from "./pages/BrokersPage";
 import BrokerDetailPage from "./pages/BrokerDetailPage";
 import TokensPage from "./pages/TokensPage";
@@ -61,6 +62,7 @@ export default function App() {
       <Route element={<Private />}>
         <Route path="/" element={<DashboardPage />} />
         <Route path="/monitoring" element={<MonitoringPage />} />
+        <Route path="/grpc" element={<GrpcPage />} />
         <Route path="/rate-limits" element={<RateLimitsPage />} />
         <Route path="/brokers" element={<BrokersPage />} />
         <Route path="/brokers/:id" element={<BrokerDetailPage />} />

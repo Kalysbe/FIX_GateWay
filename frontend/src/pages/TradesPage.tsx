@@ -6,6 +6,9 @@ import { formatDateTime, sideLabel } from "../labels";
 import { liveRefetchInterval } from "../lib/poll";
 import { PageHeader } from "../components/PageHeader";
 import { useAdminStream } from "../hooks/useAdminStream";
+import { DataTable, type TableColumn } from "../components/DataTable";
+import { ErrorBanner } from "../components/feedback";
+import { compactIdentifier, numberValue } from "../lib/table";
 
 type Trade = {
   id: string;
@@ -101,33 +104,6 @@ function groupDeals(trades: Trade[]): Deal[] {
   return deals.sort((a, b) => b.createdAt - a.createdAt);
 }
 
-function dealMatchesQuery(deal: Deal, q: string): boolean {
-  if (!q) return true;
-  const hay = deal.trades
-    .flatMap((t) => [
-      t.exec_id,
-      t.client_order_id,
-      t.order_id,
-      t.firm_name,
-      t.quik_firm,
-      t.client_code,
-      t.symbol,
-      t.board,
-      t.side,
-      t.adapter_id,
-      t.fix_cl_ord_id,
-      t.quik_order_id,
-      String(t.last_qty),
-      String(t.last_px),
-      deal.label,
-      deal.key,
-    ])
-    .filter(Boolean)
-    .join(" ")
-    .toLowerCase();
-  return hay.includes(q);
-}
-
 function dealPassesFilters(
   deal: Deal,
   filters: { side: string; firm: string; symbol: string; adapter: string },
@@ -153,13 +129,10 @@ export default function TradesPage() {
   });
 
   const data = q.data?.trades || [];
-  const [globalFilter, setGlobalFilter] = useState("");
   const [sideFilter, setSideFilter] = useState("");
   const [firmFilter, setFirmFilter] = useState("");
   const [symbolFilter, setSymbolFilter] = useState("");
   const [adapterFilter, setAdapterFilter] = useState("");
-  const [pageIndex, setPageIndex] = useState(0);
-  const [pageSize, setPageSize] = useState(20);
 
   const allDeals = useMemo(() => groupDeals(data), [data]);
 
@@ -188,227 +161,41 @@ export default function TradesPage() {
     return Array.from(set).sort();
   }, [data]);
 
-  const filteredDeals = useMemo(() => {
-    const query = globalFilter.trim().toLowerCase();
-    const filters = {
-      side: sideFilter,
-      firm: firmFilter,
-      symbol: symbolFilter,
-      adapter: adapterFilter,
-    };
-    return allDeals.filter(
-      (d) => dealMatchesQuery(d, query) && dealPassesFilters(d, filters),
-    );
-  }, [allDeals, globalFilter, sideFilter, firmFilter, symbolFilter, adapterFilter]);
-
-  const pageCount = Math.max(1, Math.ceil(filteredDeals.length / pageSize));
-  const safePage = Math.min(pageIndex, pageCount - 1);
-  const pageDeals = filteredDeals.slice(safePage * pageSize, (safePage + 1) * pageSize);
-
-  const totalLegs = data.length;
-
-  function resetFilters() {
-    setGlobalFilter("");
-    setSideFilter("");
-    setFirmFilter("");
-    setSymbolFilter("");
-    setAdapterFilter("");
-    setPageIndex(0);
-  }
-
-  function exportCsv() {
-    const rows = filteredDeals.flatMap((d) =>
-      d.trades.map((t) => ({ ...t, deal_id: d.label, paired: d.paired ? "yes" : "no" })),
-    );
-    const header = [
-      "deal_id",
-      "paired",
-      "created_at",
-      "exec_id",
-      "client_order_id",
-      "firm_name",
-      "quik_firm",
-      "client_code",
-      "symbol",
-      "board",
-      "side",
-      "last_qty",
-      "last_px",
-      "cum_qty",
-      "leaves_qty",
-      "adapter_id",
-    ];
-    const lines = [
-      header.join(","),
-      ...rows.map((t) =>
-        header
-          .map((k) => {
-            const v = String((t as Record<string, unknown>)[k] ?? "");
-            return `"${v.replace(/"/g, '""')}"`;
-          })
-          .join(","),
-      ),
-    ];
-    const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `trades-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-")}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
-  }
-
-  return (
-    <div className="space-y-4">
-      <PageHeader
-        title="Сделки"
-        subtitle="FIX ExecutionReport · LastQty > 0"
-        actions={
-          <div className="flex flex-wrap gap-2 text-xs">
-            <StatPill label="Всего" value={totalLegs} />
-            <StatPill label="Сделок" value={allDeals.length} />
-            <StatPill label="После фильтра" value={filteredDeals.length} />
-          </div>
-        }
-      />
-
-      <div className="card space-y-3">
-        <div className="flex flex-wrap items-center gap-2">
-          <div className="relative min-w-[240px] flex-1">
-            <input
-              className="input pl-9"
-              placeholder="Поиск: ExecID, сделка, ордер, фирма, клиент…"
-              value={globalFilter}
-              onChange={(e) => {
-                setGlobalFilter(e.target.value);
-                setPageIndex(0);
-              }}
-            />
-            <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400">⌕</span>
-          </div>
-          <select
-            className="input w-auto"
-            value={sideFilter}
-            onChange={(e) => {
-              setSideFilter(e.target.value);
-              setPageIndex(0);
-            }}
-          >
-            <option value="">Сторона: все</option>
-            <option value="BUY">Покупка</option>
-            <option value="SELL">Продажа</option>
-          </select>
-          <select
-            className="input w-auto max-w-[180px]"
-            value={firmFilter}
-            onChange={(e) => {
-              setFirmFilter(e.target.value);
-              setPageIndex(0);
-            }}
-          >
-            <option value="">Фирма: все</option>
-            {firmOptions.map((f) => (
-              <option key={f} value={f}>
-                {f}
-              </option>
-            ))}
-          </select>
-          <select
-            className="input w-auto max-w-[180px]"
-            value={symbolFilter}
-            onChange={(e) => {
-              setSymbolFilter(e.target.value);
-              setPageIndex(0);
-            }}
-          >
-            <option value="">Инструмент: все</option>
-            {symbolOptions.map((s) => (
-              <option key={s} value={s}>
-                {s}
-              </option>
-            ))}
-          </select>
-          <select
-            className="input w-auto max-w-[160px]"
-            value={adapterFilter}
-            onChange={(e) => {
-              setAdapterFilter(e.target.value);
-              setPageIndex(0);
-            }}
-          >
-            <option value="">Адаптер: все</option>
-            {adapterOptions.map((a) => (
-              <option key={a} value={a}>
-                {a}
-              </option>
-            ))}
-          </select>
-          <button className="btn-muted" onClick={resetFilters}>
-            Сбросить
-          </button>
-          <button className="btn-muted" onClick={() => void q.refetch()}>
-            Обновить
-          </button>
-          <button className="btn" onClick={exportCsv} disabled={filteredDeals.length === 0}>
-            CSV
-          </button>
-        </div>
-
-        <div className="overflow-x-auto rounded-lg border border-slate-200">
-          <table className="w-full min-w-[1100px] text-left text-sm">
-            <thead className="sticky top-0 z-10 bg-slate-50">
-              <tr className="border-b border-slate-200">
-                {[
-                  "Время",
-                  "ExecID",
-                  "Ордер",
-                  "Фирма",
-                  "Клиент",
-                  "Инструмент",
-                  "Сторона",
-                  "Кол-во",
-                  "Цена",
-                  "Накоплено",
-                  "Остаток",
-                  "Адаптер",
-                ].map((h) => (
-                  <th
-                    key={h}
-                    className="border-b border-line px-3 py-2.5 text-[12px] font-medium text-muted"
-                  >
-                    {h}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {q.isLoading && (
-                <tr>
-                  <td colSpan={12} className="px-3 py-10 text-center text-slate-500">
-                    Загрузка сделок…
-                  </td>
-                </tr>
-              )}
-              {!q.isLoading && pageDeals.length === 0 && (
-                <tr>
-                  <td colSpan={12} className="px-3 py-10 text-center text-slate-500">
-                    {totalLegs === 0
-                      ? "Нет сделок — появятся после FILL/PARTIAL из FIX"
-                      : "Ничего не найдено по текущим фильтрам"}
-                  </td>
-                </tr>
-              )}
-              {pageDeals.map((deal, dealIdx) => {
+  const filteredDeals = allDeals.filter(d => dealPassesFilters(d, { side: sideFilter, firm: firmFilter, symbol: symbolFilter, adapter: adapterFilter }));
+  const columns: TableColumn<Deal>[] = [
+    { id: "created", header: "Время", value: d => d.createdAt },
+    { id: "exec", header: "ExecID", value: d => d.label },
+    { id: "order", header: "Ордер", value: d => d.trades[0].client_order_id || d.trades[0].order_id },
+    { id: "firm", header: "Фирма", value: d => d.trades[0].firm_name || d.trades[0].quik_firm },
+    { id: "client", header: "Клиент", value: d => d.trades[0].client_code },
+    { id: "symbol", header: "Инструмент", value: d => d.symbol },
+    { id: "side", header: "Сторона", value: d => d.paired ? "BUY SELL" : d.trades[0].side },
+    { id: "quantity", header: "Кол-во", value: d => numberValue(d.lastQty), numeric: true },
+    { id: "price", header: "Цена", value: d => numberValue(d.lastPx), numeric: true },
+    { id: "cumulative", header: "Накоплено", value: d => numberValue(d.trades[0].cum_qty), numeric: true },
+    { id: "leaves", header: "Остаток", value: d => numberValue(d.trades[0].leaves_qty), numeric: true },
+    { id: "adapter", header: "Адаптер", value: d => d.trades[0].adapter_id },
+  ];
+  return <div className="space-y-4">
+    <PageHeader title="Сделки" subtitle="Исполнения заявок · парные покупка и продажа остаются в одном блоке" />
+    {q.error && <ErrorBanner error={q.error} onRetry={() => q.refetch()} />}
+    <DataTable title="Сделки" rows={filteredDeals} columns={columns} rowKey={d => d.key} loading={q.isLoading} initialSort={{ id: "created", direction: "desc" }} resetKey={[sideFilter, firmFilter, symbolFilter, adapterFilter].join(":")} onRefresh={() => void q.refetch()} refreshing={q.isFetching} searchPlaceholder="Сделка, ExecID, ордер, клиент…" getSearchText={d => d.label + " " + d.trades.map(t => Object.values(t).join(" ")).join(" ")} exportName="trades" exportRows={deals => ({ headers: ["deal_id", "paired", "created_at", "exec_id", "order_id", "client_order_id", "firm_name", "quik_firm", "client_code", "symbol", "board", "side", "last_qty", "last_px", "cum_qty", "leaves_qty", "adapter_id"], rows: deals.flatMap(d => d.trades.map(t => [d.label, d.paired, t.created_at, t.exec_id, t.order_id, t.client_order_id, t.firm_name, t.quik_firm, t.client_code, t.symbol, t.board, t.side, t.last_qty, t.last_px, t.cum_qty, t.leaves_qty, t.adapter_id])) })} emptyTitle="Сделок пока нет" emptyHint="Исполнения появятся после отчёта FIX" filters={<>
+      <select className="input w-auto" aria-label="Сторона сделки" value={sideFilter} onChange={e => setSideFilter(e.target.value)}><option value="">Все стороны</option><option value="BUY">Покупка</option><option value="SELL">Продажа</option></select>
+      <select className="input w-auto" aria-label="Фирма сделки" value={firmFilter} onChange={e => setFirmFilter(e.target.value)}><option value="">Все фирмы</option>{firmOptions.map(f => <option key={f}>{f}</option>)}</select>
+      <select className="input w-auto" aria-label="Инструмент сделки" value={symbolFilter} onChange={e => setSymbolFilter(e.target.value)}><option value="">Все инструменты</option>{symbolOptions.map(f => <option key={f}>{f}</option>)}</select>
+      <select className="input w-auto" aria-label="Адаптер сделки" value={adapterFilter} onChange={e => setAdapterFilter(e.target.value)}><option value="">Все адаптеры</option>{adapterOptions.map(f => <option key={f}>{f}</option>)}</select>
+      {(sideFilter || firmFilter || symbolFilter || adapterFilter) && <button className="btn-muted" onClick={() => { setSideFilter(""); setFirmFilter(""); setSymbolFilter(""); setAdapterFilter(""); }}>Сбросить</button>}
+    </>} summary={rows => [{ label: "Сделок", value: rows.length }, { label: "Исполнений", value: rows.reduce((n, d) => n + d.trades.length, 0) }, { label: "Парных", value: rows.filter(d => d.paired).length, tone: "success" }]} renderRow={(deal, dealIdx) => {
                 // paired buy/sell share one gray block; alternate shade between deals
                 const bg =
-                  dealIdx % 2 === 0 ? "bg-slate-100/90" : "bg-slate-50";
+                  dealIdx % 2 === 0 ? "bg-slate-50/70" : "bg-white";
 
                 return deal.trades.map((t, legIdx) => {
                   const isLast = legIdx === deal.trades.length - 1;
                   return (
                     <tr
                       key={t.id}
-                      className={`${bg} transition-colors hover:bg-slate-200/60 ${
+                      className={`${bg} transition-colors hover:bg-teal-50/50 ${
                         isLast ? "border-b border-slate-200" : "border-b border-slate-100/80"
                       }`}
                     >
@@ -431,7 +218,7 @@ export default function TradesPage() {
                           to={`/orders/${t.order_id}`}
                           title={t.client_order_id || t.order_id}
                         >
-                          {t.client_order_id || String(t.order_id).slice(0, 8)}
+                          {compactIdentifier(t.client_order_id || String(t.order_id).slice(0, 8))}
                         </Link>
                       </td>
                       <td className="px-3 py-2 align-middle">
@@ -470,87 +257,6 @@ export default function TradesPage() {
                     </tr>
                   );
                 });
-              })}
-            </tbody>
-          </table>
-        </div>
-
-        <div className="flex flex-wrap items-center justify-between gap-3 text-sm">
-          <div className="text-slate-500">
-            Показано{" "}
-            <span className="font-mono text-ink">
-              {filteredDeals.length === 0 ? 0 : safePage * pageSize + 1}–
-              {Math.min((safePage + 1) * pageSize, filteredDeals.length)}
-            </span>{" "}
-            из <span className="font-mono text-ink">{filteredDeals.length}</span>
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <label className="flex items-center gap-2 text-slate-500">
-              На странице
-              <select
-                className="input w-auto py-1"
-                value={pageSize}
-                onChange={(e) => {
-                  setPageSize(Number(e.target.value));
-                  setPageIndex(0);
-                }}
-              >
-                {[10, 25, 50, 100].map((n) => (
-                  <option key={n} value={n}>
-                    {n}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <button
-              className="btn-muted px-2 py-1"
-              disabled={safePage <= 0}
-              onClick={() => setPageIndex(0)}
-            >
-              «
-            </button>
-            <button
-              className="btn-muted px-2 py-1"
-              disabled={safePage <= 0}
-              onClick={() => setPageIndex((p) => Math.max(0, p - 1))}
-            >
-              ‹
-            </button>
-            <span className="min-w-[7rem] text-center font-mono text-xs text-slate-600">
-              {safePage + 1} / {pageCount}
-            </span>
-            <button
-              className="btn-muted px-2 py-1"
-              disabled={safePage >= pageCount - 1}
-              onClick={() => setPageIndex((p) => Math.min(pageCount - 1, p + 1))}
-            >
-              ›
-            </button>
-            <button
-              className="btn-muted px-2 py-1"
-              disabled={safePage >= pageCount - 1}
-              onClick={() => setPageIndex(pageCount - 1)}
-            >
-              »
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function StatPill({
-  label,
-  value,
-}: {
-  label: string;
-  value: number;
-}) {
-  return (
-    <div className="rounded-lg border border-line bg-panel px-3 py-1.5 text-ink">
-      <span className="mr-2 text-slate-500">{label}</span>
-      <span className="font-mono font-semibold">{value}</span>
-    </div>
-  );
+    }} />
+  </div>;
 }

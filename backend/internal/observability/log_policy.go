@@ -2,12 +2,16 @@ package observability
 
 import (
 	"net/http"
-	"strings"
 )
 
-// keepEvent suppresses routine diagnostics without changing broker request
-// statistics, security failures, trading history, or administrative audit.
+// HTTP request records are limited to POST, PATCH and DELETE. Independent
+// security audit, trading lifecycle and system events retain their own policy.
 func keepEvent(e Event) bool {
+	if e.Type == TypeAPI || (e.Type == TypeError && e.HTTPMethod != "") {
+		if e.HTTPMethod != http.MethodPost && e.HTTPMethod != http.MethodPatch && e.HTTPMethod != http.MethodDelete {
+			return false
+		}
+	}
 	if e.Result == ResultFailure || e.ErrorMessage != "" ||
 		e.Severity == SeverityWarning || e.Severity == SeverityError || e.Severity == SeverityCritical ||
 		e.Type == TypeError || e.Type == TypeAudit || e.Type == TypeBusiness {
@@ -27,10 +31,6 @@ func keepEvent(e Event) bool {
 			return true
 		}
 		if e.Subtype == SubHealthRequest || e.HTTPMethod == http.MethodOptions {
-			return false
-		}
-		admin := e.Endpoint == "/api/v1/admin" || strings.HasPrefix(e.Endpoint, "/api/v1/admin/")
-		if admin && (e.HTTPMethod == http.MethodGet || e.HTTPMethod == http.MethodHead) {
 			return false
 		}
 	}

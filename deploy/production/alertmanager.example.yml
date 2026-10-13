@@ -1,0 +1,15 @@
+# Supply the operator's real, tested receiver configuration through
+# ALERTMANAGER_CONFIG_FILE. This example is deliberately not used by Compose.
+global:
+  resolve_timeout: 5m
+route:
+  receiver: operations
+  group_by: [alertname]
+  group_wait: 10s
+  group_interval: 1m
+  repeat_interval: 1h
+receivers:
+  - name: operations
+    webhook_configs:
+      - url: https://replace-with-your-operations-receiver.invalid/alerts
+        send_resolved: true

@@ -446,6 +446,13 @@ func (s *Store) ApplyCancelReject(ctx context.Context, clOrdID, origClOrdID, qui
 		return domain.Order{}, err
 	}
 	to := o.Status
+	claimed, err := claimExecutionReceipt(ctx, tx, o.ID)
+	if err != nil {
+		return domain.Order{}, err
+	}
+	if !claimed {
+		return domain.Order{}, nil
+	}
 	if o.Status == domain.OrderCancelPending {
 		if o.FilledQuantity.GreaterThan(decimal.Zero) {
 			to = domain.OrderPartiallyFilled
@@ -489,6 +496,13 @@ func (s *Store) ApplyExecutionReport(ctx context.Context, fixClOrdID, origClOrdI
 		return domain.Order{}, nil, err
 	}
 
+	claimed, err := claimExecutionReceipt(ctx, tx, o.ID)
+	if err != nil {
+		return domain.Order{}, nil, err
+	}
+	if !claimed {
+		return domain.Order{}, nil, nil
+	}
 	to := mapExecStatus(execType, ordStatus, o.Status)
 	erMsg := formatExecutionMessage(execType, ordStatus, text, ordRejReason)
 	payload := fixWirePayload(rawFIX)
@@ -497,6 +511,9 @@ func (s *Store) ApplyExecutionReport(ctx context.Context, fixClOrdID, origClOrdI
 	if lastQty.GreaterThan(decimal.Zero) {
 		if execID == "" {
 			return domain.Order{}, nil, fmt.Errorf("fill report missing ExecID")
+		}
+		if lastPx.IsNegative() || lastQty.IsNegative() || cumQty.IsNegative() || leavesQty.IsNegative() {
+			return domain.Order{}, nil, fmt.Errorf("negative execution quantities or price")
 		}
 		exec, err = insertExecution(ctx, tx, o.ID, execID, lastQty, lastPx, filled, leavesQty, adapterID)
 		if err != nil {
@@ -1011,17 +1028,35 @@ func effectiveFillQty(prior, lastQty, cumQty decimal.Decimal) decimal.Decimal {
 }
 
 func insertExecution(ctx context.Context, tx pgx.Tx, orderID uuid.UUID, execID string, lastQty, lastPx, cumQty, leavesQty decimal.Decimal, adapterID string) (*domain.Execution, error) {
+	executionDate, err := executionDateFromContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	// Legacy executions have no reliable venue date. Preserve their original
+	// per-order replay protection rather than guessing a date during migration.
+	var legacyID uuid.UUID
+	var legacyQty, legacyPx, legacyCum, legacyLeaves decimal.Decimal
+	err = tx.QueryRow(ctx, `SELECT id,last_qty,last_px,cum_qty,leaves_qty FROM executions WHERE order_id=$1 AND exec_id=$2 AND execution_date IS NULL FOR UPDATE`, orderID, execID).Scan(&legacyID, &legacyQty, &legacyPx, &legacyCum, &legacyLeaves)
+	if err == nil {
+		if !legacyQty.Equal(lastQty) || !legacyPx.Equal(lastPx) || (executionDate != nil && (!legacyCum.Equal(cumQty) || !legacyLeaves.Equal(leavesQty))) {
+			return nil, fmt.Errorf("conflicting legacy execution ID %s; operator date reconciliation required", execID)
+		}
+		return nil, nil
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return nil, err
+	}
 	eid := uuid.New()
 	result, err := tx.Exec(ctx, `
-		INSERT INTO executions (id, order_id, exec_id, last_qty, last_px, cum_qty, leaves_qty, adapter_id)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT(exec_id) DO NOTHING`, eid, orderID, execID, lastQty, lastPx, cumQty, leavesQty, adapterID)
+		INSERT INTO executions (id, order_id, exec_id, last_qty, last_px, cum_qty, leaves_qty, adapter_id,execution_date)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT(order_id,execution_date,exec_id) DO NOTHING`, eid, orderID, execID, lastQty, lastPx, cumQty, leavesQty, adapterID, executionDate)
 	if err != nil {
 		return nil, err
 	}
 	if result.RowsAffected() == 0 {
 		var previousOrder uuid.UUID
 		var qty, px decimal.Decimal
-		if err := tx.QueryRow(ctx, `SELECT order_id,last_qty,last_px FROM executions WHERE exec_id=$1`, execID).Scan(&previousOrder, &qty, &px); err != nil {
+		if err := tx.QueryRow(ctx, `SELECT order_id,last_qty,last_px FROM executions WHERE order_id=$1 AND execution_date IS NOT DISTINCT FROM $2::date AND exec_id=$3`, orderID, executionDate, execID).Scan(&previousOrder, &qty, &px); err != nil {
 			return nil, err
 		}
 		if previousOrder != orderID || !qty.Equal(lastQty) || !px.Equal(lastPx) {

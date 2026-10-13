@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/fix-gateway/backend/internal/admin"
 	"github.com/fix-gateway/backend/internal/audit"
 	"github.com/fix-gateway/backend/internal/auth"
 	"github.com/fix-gateway/backend/internal/brokers"
@@ -162,6 +163,10 @@ func (s *Server) brokerAuth(next http.Handler) http.Handler {
 
 		if s.cfg.HMACRequired || r.Header.Get("X-Signature") != "" || r.Header.Get("X-Timestamp") != "" || r.Header.Get("X-Nonce") != "" {
 			if err := s.verifyOptionalHMAC(r, raw); err != nil {
+				if errors.Is(err, auth.ErrNonceUnavailable) {
+					writeErr(w, http.StatusServiceUnavailable, "authentication replay protection temporarily unavailable")
+					return
+				}
 				bid := b.ID
 				tid := tok.ID
 				s.authFailLimiter.Record(ip)
@@ -234,7 +239,7 @@ func (s *Server) verifyOptionalHMAC(r *http.Request, secret string) error {
 		return errHMAC("bad signature")
 	}
 	if s.hmacNonces != nil {
-		if err := s.hmacNonces.UseScoped(auth.HashToken(secret, "hmac-nonce"), nonce); err != nil {
+		if err := s.hmacNonces.UseScopedContext(r.Context(), auth.HashToken(secret, "hmac-nonce"), nonce); err != nil {
 			return err
 		}
 	}
@@ -315,6 +320,10 @@ func (s *Server) adminAuth(next http.Handler) http.Handler {
 		}
 		claims, err := s.users.AuthenticateSession(r.Context(), s.cfg.JWTSecret, raw)
 		if err != nil {
+			if errors.Is(err, admin.ErrAuthenticationUnavailable) {
+				writeErr(w, http.StatusServiceUnavailable, "authentication temporarily unavailable")
+				return
+			}
 			if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
 				s.writeInternal(w, err)
 				return
@@ -389,7 +398,7 @@ func (s *Server) cors(next http.Handler) http.Handler {
 			w.Header().Set("Access-Control-Allow-Origin", origin)
 			w.Header().Set("Vary", "Origin")
 			w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Timestamp, X-Nonce, X-Signature, X-Request-ID, X-Trace-ID")
-			w.Header().Set("Access-Control-Allow-Methods", "GET,POST,PATCH,DELETE,OPTIONS")
+			w.Header().Set("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS")
 			w.Header().Set("Access-Control-Expose-Headers", "X-Request-ID, X-Trace-ID, Retry-After")
 		}
 		w.Header().Set("X-Content-Type-Options", "nosniff")

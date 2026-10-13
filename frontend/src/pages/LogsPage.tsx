@@ -5,6 +5,11 @@ import { api, apiDownload } from "../api";
 import { PageHeader } from "../components/PageHeader";
 import { formatDateTime, formatMs, formatNumber, logTypeLabel } from "../labels";
 import { useBreadcrumbs } from "../components/breadcrumbs";
+import { DataTable, type TableColumn } from "../components/DataTable";
+import { StatusBadge } from "../components/StatusBadge";
+import { ErrorBanner } from "../components/feedback";
+import { dateValue } from "../lib/table";
+import { Modal } from "../components/Modal";
 
 const PAGE_SIZE = 25;
 
@@ -55,21 +60,6 @@ const KINDS: { id: string; label: string }[] = [
   { id: "system", label: "Система" },
   { id: "audit", label: "Audit" },
 ];
-
-function severityClass(s?: string) {
-  switch ((s || "").toUpperCase()) {
-    case "CRITICAL":
-      return "badge-danger";
-    case "ERROR":
-      return "badge-danger";
-    case "WARNING":
-      return "badge-warn";
-    case "DEBUG":
-      return "badge-muted";
-    default:
-      return "badge-info";
-  }
-}
 
 function isoDayStart() {
   const d = new Date();
@@ -167,6 +157,19 @@ export default function LogsPage() {
     URL.revokeObjectURL(url);
   }
 
+  const columns: TableColumn<LogRow>[] = [
+    { id: "time", header: "Время", value: row => dateValue(row.timestamp), cell: row => <button type="button" className="text-accent whitespace-nowrap font-mono text-[10px]" onClick={() => setSelected(row)} aria-label={"Открыть событие " + row.id}>{formatDateTime(row.timestamp)}</button> },
+    { id: "severity", header: "Важность", value: row => row.severity, cell: row => <StatusBadge status={row.severity} /> },
+    { id: "type", header: "Тип", value: row => logTypeLabel(row.type) },
+    { id: "subtype", header: "Событие", value: row => row.subtype, className: "font-mono text-[10px]" },
+    { id: "broker", header: "Брокер", value: row => row.broker_name || row.broker_id },
+    { id: "ip", header: "IP", value: row => row.client_ip, className: "font-mono text-[10px]" },
+    { id: "endpoint", header: "Endpoint", value: row => [row.http_method, row.endpoint].filter(Boolean).join(" "), className: "font-mono text-[10px]" },
+    { id: "status", header: "Статус", value: row => row.status_code ?? row.result, cell: row => <span className={row.status_code && row.status_code >= 400 ? "badge-danger" : row.status_code ? "badge-success" : "badge-muted"}>{row.status_code ?? row.result ?? "—"}</span> },
+    { id: "duration", header: "Задержка", value: row => row.response_time_ms, cell: row => formatMs(row.response_time_ms), numeric: true },
+    { id: "request", header: "Request ID", value: row => row.request_id, className: "font-mono text-[10px]" },
+  ];
+
   return (
     <div className="space-y-4">
       <PageHeader
@@ -197,9 +200,9 @@ export default function LogsPage() {
       </div>
 
       <div className="card flex flex-wrap items-center gap-2">
-        <input className="input w-auto" type="datetime-local" value={toLocal(from)} onChange={(e) => setFrom(fromLocal(e.target.value))} />
-        <input className="input w-auto" type="datetime-local" value={toLocal(to)} onChange={(e) => setTo(fromLocal(e.target.value))} />
-        <select className="input w-auto" value={brokerId} onChange={(e) => setParams(mergeParam(params, "broker_id", e.target.value))}>
+        <input className="input w-auto" type="datetime-local" aria-label="Начало периода" value={toLocal(from)} onChange={(e) => setFrom(fromLocal(e.target.value))} />
+        <input className="input w-auto" type="datetime-local" aria-label="Конец периода" value={toLocal(to)} onChange={(e) => setTo(fromLocal(e.target.value))} />
+        <select className="input w-auto" aria-label="Фирма" value={brokerId} onChange={(e) => setParams(mergeParam(params, "broker_id", e.target.value))}>
           <option value="">Все фирмы</option>
           {(brokers.data?.brokers || []).map((b) => (
             <option key={b.id} value={b.id}>
@@ -207,13 +210,13 @@ export default function LogsPage() {
             </option>
           ))}
         </select>
-        <select className="input w-auto" value={severity} onChange={(e) => setSeverity(e.target.value)}>
+        <select className="input w-auto" aria-label="Важность" value={severity} onChange={(e) => setSeverity(e.target.value)}>
           <option value="">Важность</option>
           {["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"].map((s) => (
             <option key={s}>{s}</option>
           ))}
         </select>
-        <select className="input w-auto" value={method} onChange={(e) => setMethod(e.target.value)}>
+        <select className="input w-auto" aria-label="HTTP метод" value={method} onChange={(e) => setMethod(e.target.value)}>
           <option value="">Метод</option>
           {["GET", "POST", "PATCH", "DELETE"].map((s) => (
             <option key={s}>{s}</option>
@@ -228,53 +231,8 @@ export default function LogsPage() {
         <input className="input min-w-[140px]" placeholder="Код ошибки" value={errorCode} onChange={(e) => setErrorCode(e.target.value)} />
       </div>
 
-      <div className={`card !p-0 overflow-x-auto ${q.isPlaceholderData ? "opacity-60" : ""}`}>
-        <table className="table">
-          <thead>
-            <tr>
-              <th>Время</th>
-              <th>Важность</th>
-              <th>Тип</th>
-              <th>Подтип</th>
-              <th>Фирма</th>
-              <th>IP</th>
-              <th>Endpoint</th>
-              <th>Статус</th>
-              <th>Длительность</th>
-              <th>Request ID</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((row) => (
-              <tr key={row.id} className="cursor-pointer hover:bg-slate-50" onClick={() => setSelected(row)}>
-                <td className="whitespace-nowrap font-mono text-xs">{formatDateTime(row.timestamp)}</td>
-                <td>
-                  <span className={severityClass(row.severity)}>{row.severity}</span>
-                </td>
-                <td>{logTypeLabel(row.type)}</td>
-                <td className="font-mono text-xs">{row.subtype}</td>
-                <td>{row.broker_name || row.broker_id || "—"}</td>
-                <td className="font-mono text-xs">{row.client_ip || "—"}</td>
-                <td className="font-mono text-xs">
-                  {row.http_method ? `${row.http_method} ` : ""}
-                  {row.endpoint || "—"}
-                </td>
-                <td>{row.status_code ?? row.result ?? "—"}</td>
-                <td>{formatMs(row.response_time_ms)}</td>
-                <td className="font-mono text-[11px] text-slate-500">{row.request_id || "—"}</td>
-              </tr>
-            ))}
-            {rows.length === 0 && (
-              <tr>
-                <td colSpan={10} className="py-10 text-center text-slate-400">
-                  {q.isLoading ? "Загрузка…" : q.isError ? "Не удалось загрузить логи" : "Нет событий по выбранным фильтрам"}
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
-
+      {q.error && <ErrorBanner error={q.error} onRetry={() => q.refetch()} />}
+      <div className={q.isPlaceholderData ? "opacity-60" : ""}><DataTable title="Журнал событий" rows={rows} columns={columns} rowKey={row => row.id} loading={q.isLoading} resetKey={qs} initialSort={{ id: "time", direction: "desc" }} searchPlaceholder="Поиск в загруженных событиях…" getSearchText={row => Object.values(row).join(" ")} emptyTitle="Нет событий по выбранным фильтрам" summary={list => [{ label: "Событий", value: list.length }, { label: "Ошибок", value: list.filter(row => ["ERROR", "CRITICAL"].includes(row.severity)).length, tone: "danger" }, { label: "Предупреждений", value: list.filter(row => row.severity === "WARNING").length, tone: "warn" }]} /></div>
       <div className="flex flex-wrap items-center justify-between gap-3 text-sm">
         <div className="text-slate-500">
           Загружено <span className="font-mono text-ink">{formatNumber(loaded)}</span>
@@ -312,14 +270,7 @@ function LogDetails({ row, onClose }: { row: LogRow; onClose: () => void }) {
   });
   const d = q.data?.log || row;
   return (
-    <div className="fixed inset-y-0 right-0 z-50 flex items-start justify-end bg-slate-900/40 md:left-[240px]" onClick={onClose}>
-      <div className="h-full w-full max-w-lg overflow-y-auto bg-panel p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
-        <div className="mb-4 flex items-center justify-between">
-          <h2 className="text-lg font-semibold">Детали события</h2>
-          <button type="button" className="btn-muted" onClick={onClose}>
-            Закрыть
-          </button>
-        </div>
+    <Modal title="Детали события" onClose={onClose} wide>
         <dl className="space-y-2 text-sm">
           <Row k="Timestamp" v={formatDateTime(d.timestamp)} />
           <Row k="Request ID" v={d.request_id} mono />
@@ -352,8 +303,7 @@ function LogDetails({ row, onClose }: { row: LogRow; onClose: () => void }) {
             Открыть заявку и полный trace →
           </Link>
         )}
-      </div>
-    </div>
+    </Modal>
   );
 }
 

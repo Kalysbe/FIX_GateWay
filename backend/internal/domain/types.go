@@ -347,22 +347,30 @@ type FIXPosition struct {
 }
 
 type ExecutionReport struct {
-	AdapterID    string
-	ClOrdID      string
-	OrigClOrdID  string // FIX tag 41 — original order id on cancel/replace reports
-	OrderID      string
-	ExecID       string
-	ExecType     string
-	OrdStatus    string
-	LastQty      string
-	LastPx       string
-	CumQty       string
-	LeavesQty    string
-	Text         string // FIX tag 58
-	OrdRejReason string // FIX tag 103
-	CxlRejReason string // FIX tag 102 on 35=9
-	CancelReject bool
-	RawFIX       string // wire format with | separators (8=FIX.4.2|9=…|35=8|…)
+	ProtocolReject bool
+	RefMessageType string
+	RefSeqNum      string
+	AdapterID      string
+	ClOrdID        string
+	OrigClOrdID    string // FIX tag 41 — original order id on cancel/replace reports
+	OrderID        string
+	ExecID         string
+	ExecType       string
+	ExecTransType  string // FIX 20: NEW=0; corrections/busts require explicit support
+	ExecRefID      string // FIX 19, original execution for a correction/bust
+	TradeDate      string // FIX 75; otherwise original SendingTime date
+	TransactTime   string // FIX 60
+	OriginalTime   string // FIX 122 (PossDup) or 52
+	OrdStatus      string
+	LastQty        string
+	LastPx         string
+	CumQty         string
+	LeavesQty      string
+	Text           string // FIX tag 58
+	OrdRejReason   string // FIX tag 103
+	CxlRejReason   string // FIX tag 102 on 35=9
+	CancelReject   bool
+	RawFIX         string // wire format with | separators (8=FIX.4.2|9=…|35=8|…)
 }
 
 type ExecutionHandler func(report ExecutionReport)

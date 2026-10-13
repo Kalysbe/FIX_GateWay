@@ -1,10 +1,13 @@
 import { useMemo, useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { api } from "../api";
 import { liveRefetchInterval } from "../lib/poll";
 import { useAdminStream } from "../hooks/useAdminStream";
 import { PageHeader } from "../components/PageHeader";
+import { DataTable, type TableColumn } from "../components/DataTable";
+import { ErrorBanner } from "../components/feedback";
+import { numberValue } from "../lib/table";
 
 type FIXPos = {
   adapter_id?: string;
@@ -49,7 +52,12 @@ type PositionsResp = {
   snapshot?: Snapshot;
   instruments: FIXPos[];
   cash: FIXPos[];
+  live?: boolean;
+  subscription?: PositionSubscription;
 };
+
+type PositionSubscription = { adapter_id?: string; pos_req_id?: string; status: string; mode?: string; positions: number; error?: string; next_retry_at?: string; last_received_at?: string };
+const subscriptionLabels: Record<string, string> = { ACTIVE: "Подписка активна", STARTING: "Получение позиций", WAITING: "Ожидание FIX-связи", RETRYING: "Восстановление позиций", OFFLINE: "Ожидание FIX-связи" };
 
 function fmt(v: string | number | null | undefined, digits = 2): string {
   if (v == null || v === "") return "—";
@@ -87,12 +95,10 @@ function posTypeLabel(t?: string): string {
 }
 
 export default function PositionsPage() {
-  const qc = useQueryClient();
   const { connected } = useAdminStream();
   const [brokerFilter, setBrokerFilter] = useState("");
   const [firmFilter, setFirmFilter] = useState("");
   const [clientFilter, setClientFilter] = useState("");
-  const [q, setQ] = useState("");
   const [tab, setTab] = useState<"instruments" | "cash">("instruments");
 
   const brokersQ = useQuery({
@@ -102,31 +108,17 @@ export default function PositionsPage() {
 
   const positions = useQuery({
     queryKey: ["admin-positions", brokerFilter],
-    queryFn: () => {
+    queryFn: ({ signal }) => {
       const qs = brokerFilter ? `?broker_id=${encodeURIComponent(brokerFilter)}` : "";
-      return api<PositionsResp>(`/api/v1/admin/positions${qs}`);
+      return api<PositionsResp>(`/api/v1/admin/positions${qs}`, { signal });
     },
-    refetchInterval: liveRefetchInterval(connected, 10000),
-  });
-
-  const sync = useMutation({
-    mutationFn: () =>
-      api<{ summary?: string; received?: number; adapter_id?: string }>("/api/v1/admin/positions/sync", {
-        method: "POST",
-        body: JSON.stringify({
-          broker_id: brokerFilter ? Number(brokerFilter) : undefined,
-          firm_id: firmFilter || undefined,
-          client_code: clientFilter || undefined,
-        }),
-      }),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["admin-positions"] });
-    },
+    refetchInterval: liveRefetchInterval(connected, 2000, 5000),
   });
 
   const instruments = positions.data?.instruments || [];
   const cash = positions.data?.cash || [];
   const snapshot = positions.data?.snapshot;
+  const subscription = positions.data?.subscription;
 
   const brokers = useMemo(() => {
     return (brokersQ.data?.brokers || [])
@@ -134,39 +126,45 @@ export default function PositionsPage() {
       .sort((a, b) => a[1].localeCompare(b[1], "ru"));
   }, [brokersQ.data]);
 
-  const filteredInstruments = useMemo(() => {
-    const needle = q.trim().toLowerCase();
-    if (!needle) return instruments;
-    return instruments.filter((r) =>
-      [r.firm_id, r.client_code, r.account_code, r.symbol, r.security_id, r.board, r.currency, r.pos_type, JSON.stringify(r.keys || {})]
-        .join(" ")
-        .toLowerCase()
-        .includes(needle),
-    );
-  }, [instruments, q]);
-
-  const filteredCash = useMemo(() => {
-    const needle = q.trim().toLowerCase();
-    if (!needle) return cash;
-    return cash.filter((r) =>
-      [r.firm_id, r.client_code, r.currency, r.symbol, r.keys?.TAG, r.keys?.KIND, item(r, "CUR_BAL")]
-        .join(" ")
-        .toLowerCase()
-        .includes(needle),
-    );
-  }, [cash, q]);
+  const matches = (r: FIXPos) => (!firmFilter || r.firm_id.toLowerCase().includes(firmFilter.trim().toLowerCase())) && (!clientFilter || r.client_code.toLowerCase().includes(clientFilter.trim().toLowerCase()));
+  const filteredInstruments = instruments.filter(matches);
+  const filteredCash = cash.filter(matches);
+  const instrumentColumns: TableColumn<FIXPos>[] = [
+    { id: "firm", header: "Фирма", value: r => r.firm_id, className: "font-mono" },
+    { id: "client", header: "Клиент", value: r => r.client_code, className: "font-mono" },
+    { id: "account", header: "Счёт", value: r => r.account_code || r.keys?.ACC, className: "font-mono" },
+    { id: "symbol", header: "Инструмент", value: r => r.symbol || r.security_id || r.keys?.SEC, cell: r => <><strong className="font-medium">{r.symbol || r.security_id || r.keys?.SEC || "—"}</strong><div className="text-[10px] text-muted">{[r.board, r.currency, r.keys?.KIND].filter(Boolean).join(" · ")}</div></> },
+    { id: "balance", header: "Баланс", value: r => numberValue(item(r, "CUR_BAL") || item(r, "OPEN_BAL") || r.net_qty), cell: r => fmt(item(r, "CUR_BAL") || item(r, "OPEN_BAL") || r.net_qty, 4), numeric: true },
+    { id: "long", header: "Long", value: r => numberValue(item(r, "CUR_LONG_POS") || r.long_qty), cell: r => <span className="text-emerald-700">{fmt(item(r, "CUR_LONG_POS") || r.long_qty, 4)}</span>, numeric: true },
+    { id: "short", header: "Short", value: r => numberValue(item(r, "CUR_SHORT_POS") || r.short_qty), cell: r => <span className="text-rose-700">{fmt(item(r, "CUR_SHORT_POS") || r.short_qty, 4)}</span>, numeric: true },
+    { id: "net", header: "Нетто", value: r => numberValue(item(r, "CUR_NET_POS") || r.net_qty), cell: r => <strong className={netTone(item(r, "CUR_NET_POS") || r.net_qty)}>{fmt(item(r, "CUR_NET_POS") || r.net_qty, 4)}</strong>, numeric: true },
+    { id: "type", header: "Тип", value: r => r.pos_type, cell: r => posTypeLabel(r.pos_type) },
+    { id: "price", header: "Цена", value: r => numberValue(item(r, "AVG_POS_PRICE") || item(r, "EFFECT_POS_PRICE") || r.settl_price), cell: r => fmt(item(r, "AVG_POS_PRICE") || item(r, "EFFECT_POS_PRICE") || r.settl_price), numeric: true },
+    { id: "date", header: "Дата", value: r => r.clearing_date, className: "font-mono text-[10px]" },
+  ];
+  const cashColumns: TableColumn<FIXPos>[] = [
+    { id: "firm", header: "Фирма", value: r => r.firm_id, className: "font-mono" },
+    { id: "client", header: "Клиент", value: r => r.client_code, className: "font-mono" },
+    { id: "currency", header: "Валюта", value: r => r.currency || r.keys?.CUR },
+    { id: "tag", header: "TAG", value: r => r.keys?.TAG || r.symbol, className: "font-mono" },
+    { id: "balance", header: "Текущий баланс", value: r => numberValue(item(r, "CUR_BAL") || r.pos_amt), cell: r => <strong className={netTone(item(r, "CUR_BAL") || r.pos_amt)}>{fmt(item(r, "CUR_BAL") || r.pos_amt)}</strong>, numeric: true },
+    ...[ ["OPEN_BAL", "Входящий баланс"], ["CUR_LIM", "Лимит"], ["LOCKED", "Заблокировано"] ].map(([key, header]) => ({ id: key, header, value: (r: FIXPos) => numberValue(item(r, key)), cell: (r: FIXPos) => fmt(item(r, key)), numeric: true })),
+    { id: "kind", header: "Вид", value: r => r.keys?.KIND },
+    { id: "date", header: "Дата", value: r => r.clearing_date, className: "font-mono text-[10px]" },
+  ];
 
   return (
     <div className="space-y-4">
       <PageHeader
         title="Позиции"
-        subtitle="Снимок позиций по FIX Request For Positions (AN→AP)"
+        subtitle="Инструменты и денежные остатки · автоматический поток из QUIK"
         actions={
           <div className="flex flex-wrap gap-2 text-xs">
+            <div className={`status-badge ${subscription?.status === "ACTIVE" ? "badge-success" : "badge-warn"}`} title="Сервер поддерживает получение позиций независимо от открытой страницы"><i aria-hidden="true" />{subscription?.status === "ACTIVE" && subscription.mode === "snapshot" ? "Автообновление активно" : subscriptionLabels[subscription?.status || "STARTING"] || "Автоматическое получение позиций"}</div>
             <Pill label="Инструменты" value={filteredInstruments.length} />
             <Pill label="Денежные" value={filteredCash.length} />
             {positions.data?.source && <Pill label="Источник" value={positions.data.source} />}
-            {snapshot && <Pill label="Снимок" value={new Date(snapshot.requested_at).toLocaleString("ru-RU")} />}
+            {snapshot && <Pill label={positions.data?.live ? "Данные" : "Сохранённый снимок"} value={new Date(snapshot.completed_at || snapshot.requested_at).toLocaleString("ru-RU")} />}
           </div>
         }
       />
@@ -193,14 +191,8 @@ export default function PositionsPage() {
               По деньгам (ML)
             </button>
           </div>
-          <input
-            className="input min-w-[180px] flex-1"
-            placeholder="Поиск…"
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
-          />
           <select
-            className="input w-auto max-w-[200px]"
+            className="input w-auto max-w-[200px]" aria-label="Брокер"
             value={brokerFilter}
             onChange={(e) => setBrokerFilter(e.target.value)}
           >
@@ -213,149 +205,31 @@ export default function PositionsPage() {
           </select>
           <input
             className="input w-36"
-            placeholder="Firm (role 13)"
+            aria-label="Фирма" placeholder="Фирма"
             value={firmFilter}
             onChange={(e) => setFirmFilter(e.target.value)}
           />
           <input
             className="input w-36"
-            placeholder="Client (role 3)"
+            aria-label="Код клиента" placeholder="Код клиента"
             value={clientFilter}
             onChange={(e) => setClientFilter(e.target.value)}
           />
-          <button className="btn-muted" onClick={() => void positions.refetch()}>
-            Обновить
-          </button>
-          <button className="btn" disabled={sync.isPending} onClick={() => sync.mutate()}>
-            {sync.isPending ? "Запрос…" : "Запросить по FIX"}
-          </button>
         </div>
+        <div className="text-xs text-muted">Получение позиций и восстановление потока выполняются автоматически. Фильтры меняют только отображение данных.</div>
 
         {positions.data?.note && (
           <div className="rounded-lg border border-amber-100 bg-amber-50 px-3 py-2 text-sm text-amber-900">
             {positions.data.note}
           </div>
         )}
-        {sync.isError && (
-          <div className="text-sm text-danger">{(sync.error as Error).message}</div>
-        )}
-        {sync.isSuccess && (
-          <div className="text-sm text-emerald-700">
-            {sync.data?.summary ||
-              `Получено позиций: ${sync.data?.received ?? 0}`}
-            {sync.data?.adapter_id ? ` · адаптер ${sync.data.adapter_id}` : ""}
-            <span className="ml-2 text-slate-500">
-              (каждый AP = одна позиция: ML деньги / DL инструмент)
-            </span>
-          </div>
-        )}
-
-        {positions.isLoading && <div className="py-8 text-center text-slate-400">Загрузка…</div>}
-
-        {tab === "instruments" && !positions.isLoading && (
-          <div className="overflow-x-auto rounded-lg border border-slate-200">
-            <table className="w-full min-w-[1100px] text-left text-sm">
-              <thead className="bg-slate-50">
-                <tr>
-                  {["Фирма", "Клиент", "Счёт", "Инструмент", "Баланс", "Long", "Short", "Нетто", "Тип", "Цена", "Дата"].map(
-                    (h) => (
-                      <th
-                        key={h}
-                        className="border-b border-line px-3 py-2.5 text-[12px] font-medium text-muted"
-                      >
-                        {h}
-                      </th>
-                    ),
-                  )}
-                </tr>
-              </thead>
-              <tbody>
-                {filteredInstruments.length === 0 && (
-                  <tr>
-                    <td colSpan={11} className="px-3 py-10 text-center text-slate-400">
-                      Нет позиций по инструментам — запросите по FIX
-                    </td>
-                  </tr>
-                )}
-                {filteredInstruments.map((r, i) => {
-                  const bal = item(r, "CUR_BAL") || item(r, "OPEN_BAL") || String(r.net_qty);
-                  const avg = item(r, "AVG_POS_PRICE") || item(r, "EFFECT_POS_PRICE") || String(r.settl_price ?? "");
-                  return (
-                    <tr key={`${r.firm_id}-${r.symbol}-${r.client_code}-${i}`} className="border-b border-slate-100 hover:bg-slate-50">
-                      <td className="px-3 py-2 font-mono text-xs">{r.firm_id || "—"}</td>
-                      <td className="px-3 py-2 font-mono text-xs">{r.client_code || "—"}</td>
-                      <td className="px-3 py-2 font-mono text-xs">{r.account_code || r.keys?.ACC || "—"}</td>
-                      <td className="px-3 py-2">
-                        <div className="font-mono text-xs">{r.symbol || r.security_id || r.keys?.SEC || "—"}</div>
-                        <div className="text-[11px] text-slate-400">
-                          {[r.keys?.KIND, r.keys?.STLDATE, r.currency].filter(Boolean).join(" · ") || "—"}
-                        </div>
-                      </td>
-                      <td className={`px-3 py-2 font-mono tabular-nums ${netTone(bal)}`}>{fmt(bal, 4)}</td>
-                      <td className="px-3 py-2 font-mono tabular-nums text-emerald-700">{fmt(item(r, "CUR_LONG_POS") || r.long_qty, 4)}</td>
-                      <td className="px-3 py-2 font-mono tabular-nums text-rose-700">{fmt(item(r, "CUR_SHORT_POS") || r.short_qty, 4)}</td>
-                      <td className={`px-3 py-2 font-mono font-semibold tabular-nums ${netTone(item(r, "CUR_NET_POS") || r.net_qty)}`}>
-                        {fmt(item(r, "CUR_NET_POS") || r.net_qty, 4)}
-                      </td>
-                      <td className="px-3 py-2 font-mono text-[11px] text-slate-500">{posTypeLabel(r.pos_type)}</td>
-                      <td className="px-3 py-2 font-mono tabular-nums">{fmt(avg)}</td>
-                      <td className="px-3 py-2 font-mono text-[11px] text-slate-500">{r.clearing_date || "—"}</td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
-
-        {tab === "cash" && !positions.isLoading && (
-          <div className="overflow-x-auto rounded-lg border border-slate-200">
-            <table className="w-full min-w-[1000px] text-left text-sm">
-              <thead className="bg-slate-50">
-                <tr>
-                  {["Фирма", "Клиент", "Валюта", "TAG", "CUR_BAL", "OPEN_BAL", "CUR_LIM", "LOCKED", "KIND", "Дата"].map((h) => (
-                    <th
-                      key={h}
-                      className="border-b border-line px-3 py-2.5 text-[12px] font-medium text-muted"
-                    >
-                      {h}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {filteredCash.length === 0 && (
-                  <tr>
-                    <td colSpan={10} className="px-3 py-10 text-center text-slate-400">
-                      Нет денежных позиций — запросите по FIX
-                    </td>
-                  </tr>
-                )}
-                {filteredCash.map((r, i) => (
-                  <tr key={`${r.firm_id}-${r.currency}-${r.keys?.TAG}-${i}`} className="border-b border-slate-100 hover:bg-slate-50">
-                    <td className="px-3 py-2 font-mono text-xs">{r.firm_id || "—"}</td>
-                    <td className="px-3 py-2 font-mono text-xs">{r.client_code || "—"}</td>
-                    <td className="px-3 py-2 font-mono text-xs">{r.currency || r.keys?.CUR || "—"}</td>
-                    <td className="px-3 py-2 font-mono text-xs">{r.keys?.TAG || r.symbol || "—"}</td>
-                    <td className={`px-3 py-2 font-mono font-semibold tabular-nums ${netTone(item(r, "CUR_BAL") || r.pos_amt)}`}>
-                      {fmt(item(r, "CUR_BAL") || r.pos_amt)}
-                    </td>
-                    <td className="px-3 py-2 font-mono tabular-nums">{fmt(item(r, "OPEN_BAL"))}</td>
-                    <td className="px-3 py-2 font-mono tabular-nums">{fmt(item(r, "CUR_LIM"))}</td>
-                    <td className="px-3 py-2 font-mono tabular-nums">{fmt(item(r, "LOCKED"))}</td>
-                    <td className="px-3 py-2 font-mono text-[11px] text-slate-500">
-                      {[r.keys?.KIND, r.keys?.STLDATE].filter(Boolean).join(" · ") || "—"}
-                    </td>
-                    <td className="px-3 py-2 font-mono text-[11px] text-slate-500">{r.clearing_date || "—"}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
+        {subscription?.error && <div role="status" className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900"><strong>Автоматическое восстановление позиций.</strong> {subscription.error}{subscription.next_retry_at && ` · следующая проверка ${new Date(subscription.next_retry_at).toLocaleTimeString("ru-RU")}`}</div>}
+        {snapshot && subscription && !positions.data?.live && <div role="status" className="text-xs text-muted">Показан последний сохранённый снимок. После получения полного снимка QUIK таблица обновится автоматически.</div>}
+        {positions.error && <ErrorBanner error={positions.error} />}
+        <DataTable key={tab} title={tab === "instruments" ? "Позиции по инструментам" : "Денежные позиции"} rows={tab === "instruments" ? filteredInstruments : filteredCash} columns={tab === "instruments" ? instrumentColumns : cashColumns} rowKey={r => [r.adapter_id, r.pos_maint_rpt_id, r.firm_id, r.client_code, r.account_code, r.symbol, r.security_id, r.currency, r.pos_type, JSON.stringify(r.keys)].join("|")} loading={positions.isLoading} resetKey={brokerFilter + ":" + firmFilter + ":" + clientFilter} exportName={tab === "instruments" ? "positions" : "cash-positions"} getSearchText={r => [r.firm_id, r.client_code, r.account_code, r.symbol, r.security_id, r.board, r.currency, r.pos_type, JSON.stringify(r.keys), JSON.stringify(r.items)].join(" ")} emptyTitle={subscription?.status === "ACTIVE" ? "В этой выборке позиций нет" : "Ожидание позиций"} emptyHint="Шлюз автоматически получает позиции и денежные остатки из QUIK" summary={rows => [{ label: "Позиций", value: rows.length }, { label: "Клиентов", value: new Set(rows.map(r => r.firm_id + ":" + r.client_code)).size }, { label: "Фирм", value: new Set(rows.map(r => r.firm_id)).size }, { label: "Валют", value: new Set(rows.map(r => r.currency || r.keys?.CUR).filter(Boolean)).size }]} />
 
         {snapshot && (
-          <div className="text-xs text-slate-400">
+          <div className="text-xs text-muted">
             Источник: FIX · адаптер {snapshot.adapter_id} · PosReqID {snapshot.pos_req_id} · отчётов{" "}
             {snapshot.report_count}
             {brokerFilter && (
