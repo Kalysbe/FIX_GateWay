@@ -46,6 +46,14 @@ export type APIToken = {
   expires_at?: string;
   last_used_at?: string;
   last_used_ip?: string;
+  revoked_at?: string;
+  rotated_from?: string;
+};
+
+export type TokenOverview = {
+  token: APIToken;
+  broker: Broker & { rate_limit_rps: number; rate_limit_orders_per_sec: number };
+  ip_whitelist: IPWhitelistEntry[];
 };
 
 export type IPWhitelistEntry = {
@@ -103,14 +111,18 @@ export type OrderEvent = {
 
 export type AdminTrade = {
   id: string;
-  order_id: string;
+  order_id?: string | null;
   exec_id: string;
   last_qty: string | number;
   last_px: string | number;
-  cum_qty: string | number;
-  leaves_qty: string | number;
+  cum_qty?: string | number | null;
+  leaves_qty?: string | number | null;
   adapter_id?: string | null;
   created_at: string;
+  execution_date?: string;
+  trade_match_id?: string;
+  contra_broker?: string;
+  contra_trader?: string;
   client_order_id?: string;
   symbol?: string;
   board?: string;
@@ -120,6 +132,21 @@ export type AdminTrade = {
   firm_name?: string;
   fix_cl_ord_id?: string | null;
   quik_order_id?: string | null;
+  quik_order_num?: string;
+  quik_trade_num?: string;
+  ledger_trade_id?: string;
+  execution_id?: string | null;
+  has_fix_report?: boolean;
+  has_quik_record?: boolean;
+  received_at?: string;
+  trade_time_known?: boolean;
+  account?: string;
+};
+
+export type TradeCoverage = {
+  trades: number; sides: number; complete: number; incomplete: number; report_errors: number;
+  last_sync_at?: string; last_sync_records?: number; last_sync_error?: string; sync_running?: boolean;
+  last_success_at?: string; sync_stale?: boolean;
 };
 
 export type Dashboard = {

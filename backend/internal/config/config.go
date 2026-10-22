@@ -82,7 +82,6 @@ type Config struct {
 	ObsSkipOrigins           []string
 	AllowInsecureDB          bool
 	AllowInsecureHTTP        bool
-	AllowInsecureHMAC        bool
 	DocsPublic               bool
 }
 
@@ -90,6 +89,13 @@ func Load() Config {
 	appEnv := getEnv("APP_ENV", "development")
 	prod := isProdEnv(appEnv)
 	fixSessionDir := getEnv("FIX_SESSION_DIR", filepath.Join(os.TempDir(), "fix-gateway-sessions"))
+	grpcMutualTLS := getBool("GRPC_MTLS_REQUIRED", false)
+	grpcClientCertDefault, grpcClientKeyDefault := "", ""
+	if grpcMutualTLS {
+		certDir := filepath.Dir(getEnv("GRPC_TLS_CERT", "certs/server.crt"))
+		grpcClientCertDefault = filepath.Join(certDir, "bridge.crt")
+		grpcClientKeyDefault = filepath.Join(certDir, "bridge.key")
+	}
 	c := Config{
 		ExportDir:                getEnv("EXPORT_DIR", filepath.Join(fixSessionDir, "exports")),
 		BackupStatusFile:         getEnv("BACKUP_STATUS_FILE", ""),
@@ -107,9 +113,9 @@ func Load() Config {
 		GRPCCertFile:             getEnv("GRPC_TLS_CERT", "certs/server.crt"),
 		GRPCKeyFile:              getEnv("GRPC_TLS_KEY", "certs/server.key"),
 		GRPCCAFile:               getEnv("GRPC_TLS_CA", "certs/ca.crt"),
-		GRPCRequireClientCert:    getBool("GRPC_MTLS_REQUIRED", true),
-		GRPCClientCertFile:       getEnv("GRPC_CLIENT_CERT", "certs/bridge.crt"),
-		GRPCClientKeyFile:        getEnv("GRPC_CLIENT_KEY", "certs/bridge.key"),
+		GRPCRequireClientCert:    grpcMutualTLS,
+		GRPCClientCertFile:       getEnv("GRPC_CLIENT_CERT", grpcClientCertDefault),
+		GRPCClientKeyFile:        getEnv("GRPC_CLIENT_KEY", grpcClientKeyDefault),
 		GRPCTarget:               getEnv("GRPC_TARGET", "localhost:8443"),
 		GRPCServerName:           getEnv("GRPC_SERVER_NAME", "localhost"),
 		DatabaseURL:              getEnv("DATABASE_URL", "postgres://postgres:123@localhost:5432/fix_gateway?sslmode=disable"),
@@ -124,7 +130,7 @@ func Load() Config {
 		OutboxBatchSize:          getInt("OUTBOX_BATCH_SIZE", 20),
 		HealthInterval:           getDuration("HEALTH_INTERVAL", 5*time.Second),
 		WorkerID:                 getEnv("WORKER_ID", "gateway-1"),
-		CORSOrigins:              strings.Split(getEnv("CORS_ORIGINS", "http://localhost:5173,http://localhost:3000,http://localhost:5174"), ","),
+		CORSOrigins:              strings.Split(getEnv("CORS_ORIGINS", "http://localhost:5173,http://localhost:3000"), ","),
 		MigrationsPath:           getEnv("MIGRATIONS_PATH", "migrations"),
 		AdapterHostOverride:      getEnv("ADAPTER_HOST_OVERRIDE", ""),
 		RequireHTTPS:             getBool("REQUIRE_HTTPS", false),
@@ -160,7 +166,6 @@ func Load() Config {
 		ObsSkipOrigins:           strings.Split(getEnv("OBS_SKIP_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173"), ","),
 		AllowInsecureDB:          getBool("ALLOW_INSECURE_DB", false),
 		AllowInsecureHTTP:        getBool("ALLOW_INSECURE_HTTP", false),
-		AllowInsecureHMAC:        getBool("ALLOW_INSECURE_HMAC", false),
 		DocsPublic:               getBool("DOCS_PUBLIC", !prod),
 	}
 	for _, item := range []struct {
@@ -264,12 +269,6 @@ func (c Config) Validate() error {
 	}
 	if !c.RequireHTTPS && !c.AllowInsecureHTTP {
 		errs = append(errs, "REQUIRE_HTTPS must be true in production (set ALLOW_INSECURE_HTTP=true to override)")
-	}
-	if !c.HMACRequired && !c.AllowInsecureHMAC {
-		errs = append(errs, "HMAC_REQUIRED must be true in production (set ALLOW_INSECURE_HMAC=true to override)")
-	}
-	if !c.GRPCRequireClientCert {
-		errs = append(errs, "GRPC_MTLS_REQUIRED must be true in production")
 	}
 	if c.DocsPublic {
 		errs = append(errs, "DOCS_PUBLIC must be false in production")

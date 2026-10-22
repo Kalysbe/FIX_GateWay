@@ -5,6 +5,7 @@ COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /out/gateway ./cmd/gateway
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /out/trade-reconcile ./cmd/trade-reconcile
 RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /out/fixsimulator ./cmd/fixsimulator
 RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /out/devcerts ./cmd/devcerts
 RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /out/admin-password ./cmd/admin-password
@@ -14,6 +15,7 @@ RUN apk add --no-cache ca-certificates tzdata wget
 RUN addgroup -g 10001 gateway && adduser -D -H -u 10001 -G gateway gateway && mkdir -p /app/fix-sessions && chown -R gateway:gateway /app
 WORKDIR /app
 COPY --from=builder /out/gateway /app/gateway
+COPY --from=builder /out/trade-reconcile /app/trade-reconcile
 COPY --from=builder /out/admin-password /app/admin-password
 COPY migrations /app/migrations
 COPY docs /app/docs

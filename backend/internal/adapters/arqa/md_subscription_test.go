@@ -164,8 +164,32 @@ func TestReleasedMDFeedDoesNotLeaveQuotesForReactivation(t *testing.T) {
 	if len(f.adapter.LiveQuotes()) != 0 || len(f.adapter.lastMDQuery.Instruments) != 0 {
 		t.Fatal("released feed retained stale data or reconnect query")
 	}
+	assertMDCancelInstrument(t, f.sent[len(f.sent)-1], id, "AAA")
 	f.ensure(t, mdQuery("BBB"))
 	if rows := f.adapter.LiveQuotes(); len(rows) != 1 || rows[0].SecurityID != "BBB" {
 		t.Fatal("reactivated feed contains an old instrument", rows)
 	}
+}
+
+func assertMDCancelInstrument(t *testing.T, msg *quickfix.Message, reqID, securityID string) {
+	t.Helper()
+	for key, want := range map[quickfix.Tag]string{
+		tag.SubscriptionRequestType: "2", tag.MDReqID: reqID,
+		tag.SecurityID: securityID, tag.ExDestination: "BOARD", tag.SecurityIDSource: "8",
+	} {
+		if got, _ := msg.Body.GetString(key); got != want {
+			t.Fatalf("ARQA cancellation tag %d = %q, want %q", key, got, want)
+		}
+	}
+}
+
+func TestDictionaryReconciliationCancelsTheRemovedInstrument(t *testing.T) {
+	f := newMDFixture()
+	id := f.ensure(t, mdQuery("AAA"))
+	f.adapter.app.handleMarketDataSnapshot(mdReply(id, "AAA", "17"))
+	f.ensure(t, mdQuery("BBB"))
+	if len(f.sent) != 3 {
+		t.Fatal("expected subscribe AAA, unsubscribe AAA, subscribe BBB", len(f.sent))
+	}
+	assertMDCancelInstrument(t, f.sent[1], id, "AAA")
 }

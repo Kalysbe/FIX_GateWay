@@ -77,9 +77,9 @@ services:
       GRPC_TLS_CERT: /certs/server.crt
       GRPC_TLS_KEY: /certs/server.key
       GRPC_TLS_CA: /certs/ca.crt
-      GRPC_MTLS_REQUIRED: "true"
-      GRPC_CLIENT_CERT: /certs/bridge.crt
-      GRPC_CLIENT_KEY: /certs/bridge.key
+      GRPC_MTLS_REQUIRED: ${GRPC_MTLS_REQUIRED:-false}
+      GRPC_CLIENT_CERT: ${GRPC_CLIENT_CERT:-}
+      GRPC_CLIENT_KEY: ${GRPC_CLIENT_KEY:-}
       GRPC_TARGET: localhost:8443
       GRPC_SERVER_NAME: localhost
       MIGRATIONS_PATH: /app/migrations
@@ -88,7 +88,7 @@ services:
       QUIK_API_BASE_URL: http://127.0.0.1:1
       POSITION_SYNC_INTERVAL: "0s"
       MARKET_DATA_SYNC_INTERVAL: "0s"
-      CORS_ORIGINS: http://localhost:5173,http://localhost:25174,http://127.0.0.1:5173,http://127.0.0.1:25174
+      CORS_ORIGINS: http://localhost:5173,http://127.0.0.1:5173
     volumes:
       - grpc-certs:/certs:ro
       - fix-sessions:/app/fix-sessions
@@ -105,6 +105,7 @@ services:
     volumes:
       - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - ./prometheus/rate-limits.rules.yml:/etc/prometheus/rate-limits.rules.yml:ro
+      - ./prometheus/trades.rules.yml:/etc/prometheus/trades.rules.yml:ro
       - prometheus-data:/prometheus
 
   frontend:
@@ -118,29 +119,6 @@ services:
         condition: service_healthy
     ports:
       - "127.0.0.1:5173:8080"
-
-  broker-app:
-    networks: [default, access]
-    build:
-      context: ..
-      dockerfile_inline: |
-        FROM node:24.19.0-alpine3.24@sha256:d32cdf619f63fe0471182d08996dd516c6275bb5fd31ae06e55a570bd9e1ad43 AS build
-        WORKDIR /app
-        COPY broker-app/package.json broker-app/package-lock.json ./
-        RUN npm ci
-        COPY broker-app/ ./
-        RUN npm run build
-        FROM nginx:1.30.5-alpine@sha256:0985e772fb9f729e6fa0980da05fca5d9c468e870eed43071545afa9d2e27d94
-        COPY frontend/nginx-main.conf /etc/nginx/nginx.conf
-        COPY frontend/nginx.conf /etc/nginx/conf.d/default.conf
-        COPY --from=build /app/dist /usr/share/nginx/html
-        USER nginx
-        ENTRYPOINT ["nginx", "-g", "daemon off;"]
-    depends_on:
-      gateway:
-        condition: service_healthy
-    ports:
-      - "127.0.0.1:25174:8080"
 
   # Docker suppresses host publishing on internal-only networks. This fixed
   # TCP bridge exposes loopback ports without giving gateway an egress route.

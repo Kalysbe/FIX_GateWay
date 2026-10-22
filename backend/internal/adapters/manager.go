@@ -230,6 +230,29 @@ func (m *Manager) Get(id string) (Adapter, bool) {
 	return ad, ok
 }
 
+// AuditUsage snapshots active factories without querying another service.
+func (m *Manager) AuditUsage() map[string][2]int64 {
+	out := map[string][2]int64{}
+	for _, ad := range m.snapshotAdapters() {
+		if journal, ok := ad.(interface{ AuditUsage() (int64, int64) }); ok {
+			used, max := journal.AuditUsage()
+			out[ad.ID()] = [2]int64{used, max}
+		}
+	}
+	return out
+}
+
+func (m *Manager) ResettingVenueSessions() []string {
+	var out []string
+	for _, ad := range m.snapshotAdapters() {
+		meta := ad.Meta()
+		if meta.Type == "arqa" && meta.ResetOnLogon {
+			out = append(out, ad.ID())
+		}
+	}
+	return out
+}
+
 func (m *Manager) ListRuntime(ctx context.Context) ([]domain.Adapter, error) {
 	list, err := m.store.List(ctx)
 	if err != nil {
@@ -238,7 +261,11 @@ func (m *Manager) ListRuntime(ctx context.Context) ([]domain.Adapter, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	for i := range list {
+		if m.hostOverride != "" {
+			list[i].Host = m.hostOverride
+		}
 		if ad, ok := m.adapters[list[i].ID]; ok {
+			list[i].Host = ad.Meta().Host
 			list[i].Status = ad.Status()
 			list[i].ActiveOrders = ad.ActiveOrders()
 			list[i].ProcessedOrders = ad.Meta().ProcessedOrders

@@ -1,0 +1,1248 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "FIX_GateWay · как проходят заявка и исполнение",
+    "locale": "ru",
+    "output": ".archify/architecture-fix-gateway-explained-20261014-161645/fix-gateway-diagram.html",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "https://github.com/Kalysbe/FIX_GateWay.git",
+      "revision": "6fdc25181480d2546cb68881f6db8323c01be81c",
+      "link_mode": "web"
+    },
+    "views": [
+      {
+        "id": "order-path",
+        "label": "Отправка заявки",
+        "focus": [
+          "broker",
+          "rest",
+          "orders",
+          "postgres",
+          "dispatcher",
+          "fix",
+          "arqa-service",
+          "quik"
+        ],
+        "note": "Сначала заявка и outbox сохраняются вместе. Отправка разрешена только после записи send fence."
+      },
+      {
+        "id": "execution-path",
+        "label": "Возврат исполнений",
+        "focus": [
+          "quik",
+          "arqa-service",
+          "fix",
+          "inbox",
+          "executions",
+          "postgres"
+        ],
+        "note": "FIX-отчёт сохраняется в inbox, затем применяется в транзакции; ошибки оставляют отчёт для восстановления."
+      },
+      {
+        "id": "client-updates",
+        "label": "Обновления клиентам",
+        "focus": [
+          "rest",
+          "executions",
+          "hub",
+          "streams",
+          "subscribers"
+        ],
+        "note": "После сохранения публикуются order.updated и, при новом исполнении, trade.created."
+      }
+    ],
+    "translations": {
+      "page.title": "{title} — диаграмма",
+      "diagram.description.architecture": "Диаграмма архитектуры, созданная в Archify.",
+      "diagram.description.workflow": "Диаграмма рабочего процесса, созданная в Archify.",
+      "diagram.description.sequence": "Диаграмма последовательности, созданная в Archify.",
+      "diagram.description.dataflow": "Диаграмма потока данных, созданная в Archify.",
+      "diagram.description.lifecycle": "Диаграмма жизненного цикла, созданная в Archify.",
+      "node.focus": "Фокус: {label}",
+      "node.focus.detail": "Фокус: {label}, {detail}",
+      "node.context.architecture": "Компонент архитектуры",
+      "node.context.workflow": "Узел рабочего процесса",
+      "node.context.sequence": "Участник последовательности",
+      "node.context.dataflow": "Узел потока данных",
+      "node.context.lifecycle": "Состояние жизненного цикла",
+      "legend.title": "Легенда",
+      "legend.architecture.frontend": "Фронтенд",
+      "legend.architecture.backend": "Бэкенд",
+      "legend.architecture.database": "База данных",
+      "legend.architecture.cloud": "Облако",
+      "legend.architecture.security": "Безопасность",
+      "legend.architecture.messagebus": "Шина сообщений",
+      "legend.architecture.external": "Внешний",
+      "legend.workflow.frontend": "Интерфейс пользователя",
+      "legend.workflow.backend": "Логика агента",
+      "legend.workflow.security": "Политика",
+      "legend.workflow.messagebus": "Действие инструмента",
+      "legend.workflow.database": "Контекст / трассировка",
+      "legend.workflow.cloud": "Облачный сервис",
+      "legend.workflow.external": "Внешняя система",
+      "legend.sequence.emphasis": "основной запрос",
+      "legend.sequence.return": "возврат",
+      "legend.sequence.security": "безопасность",
+      "legend.sequence.dashed": "асинхронная трассировка",
+      "legend.sequence.default": "сообщение",
+      "legend.dataflow.emphasis": "основные данные",
+      "legend.dataflow.security": "политика / ПДн",
+      "legend.dataflow.dashed": "асинхронный пакет",
+      "legend.dataflow.database": "хранилище данных",
+      "legend.dataflow.default": "поток данных",
+      "legend.lifecycle.start": "начальное состояние",
+      "legend.lifecycle.active": "активно",
+      "legend.lifecycle.waiting": "ожидание",
+      "legend.lifecycle.decision": "решение",
+      "legend.lifecycle.success": "успех",
+      "legend.lifecycle.failure": "ошибка / выход",
+      "legend.lifecycle.neutral": "нейтральное",
+      "legend.lifecycle.external": "внешнее",
+      "legend.lifecycle.final": "конечное состояние",
+      "viewer.kind.frontend": "Фронтенд",
+      "viewer.kind.backend": "Модуль Gateway",
+      "viewer.kind.database": "Хранилище",
+      "viewer.kind.cloud": "Облако",
+      "viewer.kind.security": "Безопасность",
+      "viewer.kind.messagebus": "Рассылка",
+      "viewer.kind.external": "Внешний участник",
+      "viewer.kind.neutral": "Нейтральный",
+      "viewer.kind.node": "Узел",
+      "viewer.kind.start": "Начало",
+      "viewer.kind.active": "Активно",
+      "viewer.kind.waiting": "Ожидание",
+      "viewer.kind.decision": "Решение",
+      "viewer.kind.success": "Успех",
+      "viewer.kind.failure": "Ошибка",
+      "viewer.toolbar.actions": "Действия с диаграммой",
+      "viewer.theme.toggle.title": "Переключить тему (T)",
+      "viewer.theme.toggle": "Переключить цветовую тему",
+      "viewer.theme.dark": "Тёмная",
+      "viewer.theme.light": "Светлая",
+      "viewer.preset.choose.title": "Выбрать визуальный стиль (S — переключение)",
+      "viewer.preset.choose": "Выбрать визуальный стиль",
+      "viewer.preset.style": "Стиль",
+      "viewer.preset.menu": "Визуальный стиль",
+      "viewer.preset.identity": "Визуальная идентичность",
+      "viewer.preset.cycles": "S — переключение",
+      "viewer.preset.classic": "Классический",
+      "viewer.preset.classic.short": "Классика",
+      "viewer.preset.classic.hint": "Стабильный технический стиль по умолчанию",
+      "viewer.preset.flow": "Поток сигналов",
+      "viewer.preset.flow.short": "Поток",
+      "viewer.preset.flow.hint": "Презентация с акцентом на анимацию",
+      "viewer.preset.blueprint": "Чертёж",
+      "viewer.preset.blueprint.hint": "Для инженерного обзора",
+      "viewer.preset.editorial": "Редакционный",
+      "viewer.preset.editorial.hint": "Для публикаций и анонсов",
+      "viewer.preset.badge.signalFlow": "ПОТОК СИГНАЛОВ",
+      "viewer.preset.badge.blueprint": "ЧЕРТЁЖ / РЕД. 01",
+      "viewer.preset.badge.editorial": "РЕДАКЦИЯ / ЗАМЕТКА",
+      "viewer.preset.badge.editorialPlate": "ARCHIFY / ПЛАСТИНА 04",
+      "viewer.preset.current": "Визуальный стиль: {style}. Выбрать визуальный стиль",
+      "viewer.motion.live": "Динамика",
+      "viewer.motion.still": "Статика",
+      "viewer.motion.pause": "Приостановить анимацию",
+      "viewer.motion.resume": "Возобновить анимацию",
+      "viewer.motion.reduced": "Анимация приостановлена из-за настройки сниженного движения",
+      "viewer.motion.hidden": "Анимация приостановлена, пока страница скрыта",
+      "viewer.motion.yielding": "Приостановить анимацию; сейчас уступает место: {owner}",
+      "viewer.motion.yielding.title": "Динамический просмотр включён · уступает место: {owner}",
+      "viewer.owner.route": "Зонд маршрута",
+      "viewer.owner.lens": "Семантическая линза",
+      "viewer.owner.relationship": "Предпросмотр связи",
+      "viewer.owner.intent": "Трассировка намерения",
+      "viewer.owner.focus": "семантический фокус",
+      "viewer.owner.legend": "предпросмотр легенды",
+      "viewer.owner.reader": "взаимодействие читателя",
+      "viewer.present.enter": "Войти в режим презентации",
+      "viewer.present.enter.title": "Режим презентации (F)",
+      "viewer.present.exit": "Выйти из режима презентации",
+      "viewer.present.exit.title": "Выйти из режима презентации (F или Escape)",
+      "viewer.present.present": "Презентация",
+      "viewer.present.exit.label": "Выход",
+      "viewer.export.button": "Экспорт",
+      "viewer.export.button.title": "Экспортировать диаграмму (E)",
+      "viewer.export.diagram": "Экспортировать диаграмму",
+      "viewer.export.menu": "Экспорт",
+      "viewer.export.subtitle": "Портативные, аккуратные файлы",
+      "viewer.export.share": "Поделиться",
+      "viewer.export.shareCard": "Карточка для публикации",
+      "viewer.export.routeShareCard": "Карточка маршрута",
+      "viewer.export.reachShareCard": "Карточка достижимости",
+      "viewer.export.copyDiagram": "Копировать диаграмму",
+      "viewer.export.clipboardPng": "PNG в буфер обмена",
+      "viewer.export.raster": "Растровые изображения",
+      "viewer.export.image": "Изображение",
+      "viewer.export.lossless": "Изображение без потерь",
+      "viewer.export.compact": "Компактное изображение",
+      "viewer.export.modern": "Современный формат изображения",
+      "viewer.export.vectorMotion": "Вектор и анимация",
+      "viewer.export.vectorMotion.heading": "Вектор и анимация",
+      "viewer.export.editable": "Редактируемый вектор",
+      "viewer.export.motion6s": "Анимация 6 с",
+      "viewer.export.unsupported": "Не поддерживается этим браузером",
+      "viewer.export.clipboardUnsupported": "Этот браузер не поддерживает запись изображений в буфер обмена",
+      "viewer.export.clipboardUnsupported.short": "Запись изображений в буфер обмена не поддерживается в этом браузере.",
+      "viewer.export.motionUnavailable": "Запись анимации недоступна в этом браузере",
+      "viewer.export.webmUnavailable": "WebM недоступен в этом браузере",
+      "viewer.export.failed": "Ошибка экспорта: {message}",
+      "viewer.export.unknownVariant": "Неизвестный тип карточки: {variant}",
+      "viewer.export.routeRequired": "Постройте маршрут перед экспортом карточки маршрута",
+      "viewer.export.reachRequired": "Постройте заданную достижимость перед экспортом карточки достижимости",
+      "viewer.export.unknown": "неизвестно",
+      "viewer.export.routeFailed": "Не удалось экспортировать карточку маршрута: {message}",
+      "viewer.export.reachFailed": "Не удалось экспортировать карточку достижимости: {message}",
+      "viewer.export.copyFailed": "Не удалось скопировать: {message}",
+      "viewer.export.copiedPng": "PNG скопирован в буфер обмена",
+      "viewer.export.downloadedRoute": "Карточка маршрута загружена",
+      "viewer.export.downloadedReach": "Карточка достижимости загружена",
+      "viewer.export.downloadedWebm": "WebM загружен",
+      "viewer.export.recording": "Запись анимации, 6 секунд…",
+      "viewer.export.card.routeSummary.one": "Маршрут: {source} → {target} · {count} направленный переход",
+      "viewer.export.card.routeSummary.other": "Маршрут: {source} → {target} · {count} направленных переходов",
+      "viewer.export.card.reachSummary": "Заданная достижимость ({direction}) от {origin} · {nodes} · {links} · макс. {hops}",
+      "viewer.export.card.node.one": "{count} узел",
+      "viewer.export.card.node.other": "{count} узлов",
+      "viewer.export.card.link.one": "{count} связь",
+      "viewer.export.card.link.other": "{count} связей",
+      "viewer.export.card.hop.one": "{count} переход",
+      "viewer.export.card.hop.other": "{count} переходов",
+      "viewer.export.card.routeBadge": "ARCHIFY · МАРШРУТ · {hops}",
+      "viewer.export.card.reachBadge": "ARCHIFY · ДОСТИЖИМОСТЬ ({direction})",
+      "viewer.export.direction.upstream": "Восходящий",
+      "viewer.export.direction.downstream": "Нисходящий",
+      "viewer.export.error.canvasUnavailable": "Canvas недоступен для {label}",
+      "viewer.export.error.contextUnavailable": "2D-контекст canvas недоступен для {label}",
+      "viewer.export.error.toBlobUnavailable": "canvas.toBlob недоступен для {label}",
+      "viewer.export.error.toBlobNull": "canvas.toBlob не вернул данные для {label}",
+      "viewer.export.error.variantsCombined": "Типы карточек нельзя комбинировать",
+      "viewer.export.error.viewerState": "Не удалось удалить временное состояние просмотра при экспорте карточки",
+      "viewer.export.error.routeState": "Не удалось безопасно сохранить построенный маршрут при экспорте карточки",
+      "viewer.export.error.reachState": "Не удалось безопасно сохранить заданную достижимость при экспорте карточки",
+      "viewer.export.error.webmRequirements": "Экспорт анимации в WebM требует анимации трассировки и поддержки MediaRecorder в браузере",
+      "viewer.export.error.mediaRecorder": "Ошибка MediaRecorder",
+      "viewer.export.error.emptyWebm": "MediaRecorder создал пустой файл WebM",
+      "viewer.export.error.webmBackground": "Не удалось загрузить фон SVG для экспорта WebM",
+      "viewer.guide.eyebrow": "Гид по диаграмме",
+      "viewer.guide.close": "Закрыть гид по диаграмме",
+      "viewer.guide.inspecting": "Анализ скомпилированной семантики",
+      "viewer.guide.actions": "Действия для изучения диаграммы",
+      "viewer.guide.find": "Найти любой узел",
+      "viewer.guide.find.hint": "Поиск по меткам, ролям, типам и постоянным ID.",
+      "viewer.guide.route": "Построить маршрут",
+      "viewer.guide.route.aria": "Построить направленный маршрут",
+      "viewer.guide.route.hint": "Узнайте, как два семантических узла связаны в заданном направлении.",
+      "viewer.guide.map": "Просмотреть всю систему",
+      "viewer.guide.map.hint": "Откройте семантический радар с живым видом и постоянными узлами.",
+      "viewer.guide.lens": "Сравнить семантические типы",
+      "viewer.guide.lens.hint": "Подсчитайте роли, покажите их связи и сравните прямые заданные связи.",
+      "viewer.guide.present": "Войти в режим презентации",
+      "viewer.guide.present.hint": "Отдать весь экран живой диаграмме без изменения экспорта.",
+      "viewer.guide.shortcuts": "Дополнительные горячие клавиши",
+      "viewer.guide.shortcut.export": "Экспорт",
+      "viewer.guide.shortcut.theme": "Тема",
+      "viewer.guide.shortcut.style": "Стиль",
+      "viewer.guide.shortcut.reset": "Сброс",
+      "viewer.guide.shortcut.zoomIn": "Увеличить",
+      "viewer.guide.shortcut.zoomOut": "Уменьшить",
+      "viewer.guide.shortcut.close": "Закрыть",
+      "viewer.guide.facts": "{nodes} · {relationships}",
+      "viewer.guide.fact.node.one": "{count} семантический узел",
+      "viewer.guide.fact.node.other": "{count} семантических узлов",
+      "viewer.guide.fact.relationship.one": "{count} связь",
+      "viewer.guide.fact.relationship.other": "{count} связей",
+      "viewer.guide.open": "Открыть гид по диаграмме",
+      "viewer.finder.title": "Найти узел",
+      "viewer.finder.close": "Закрыть поиск узлов",
+      "viewer.finder.placeholder": "Поиск по меткам или ID",
+      "viewer.finder.search": "Поиск узлов диаграммы",
+      "viewer.finder.results": "Узлы диаграммы",
+      "viewer.finder.empty": "Совпадений не найдено",
+      "viewer.finder.result.focus": "Фокус: {label}",
+      "viewer.finder.result.routeStart": "Выбрать {label} как начало маршрута",
+      "viewer.finder.result.routeTarget": "Выбрать {label} как конец маршрута, {links}",
+      "viewer.finder.status.empty": "Совпадений не найдено",
+      "viewer.finder.status.count.one": "{count} совпадающий узел",
+      "viewer.finder.status.count.other": "{count} совпадающих узлов",
+      "viewer.finder.noun.nodes": "узлов",
+      "viewer.finder.link.one": "{count} связь",
+      "viewer.finder.link.other": "{count} связей",
+      "viewer.finder.result.focus.one": "Фокус: {label}, {count} связанное соединение",
+      "viewer.finder.result.focus.other": "Фокус: {label}, {count} связанных соединений",
+      "viewer.finder.status.filtered": "{visible} из {available} {noun}",
+      "viewer.finder.status.all": "{available} {noun}",
+      "viewer.passport.eyebrow": "Семантический паспорт",
+      "viewer.passport.metadata": "Метаданные узла",
+      "viewer.passport.evidence": "Проверенные источники",
+      "viewer.passport.verified": "Проверенный источник",
+      "viewer.passport.verificationScope": "Проверено по локальному Git на фиксированной ревизии. Удалённый доступ не проверялся.",
+      "viewer.passport.reach": "Заданная достижимость",
+      "viewer.passport.reach.trace": "Отследить заданную достижимость",
+      "viewer.passport.upstream": "Восходящий",
+      "viewer.passport.downstream": "Нисходящий",
+      "viewer.passport.upstream.trace": "Отследить восходящую заданную достижимость",
+      "viewer.passport.downstream.trace": "Отследить нисходящую заданную достижимость",
+      "viewer.passport.close": "Закрыть семантический паспорт",
+      "viewer.passport.copy": "Скопировать ссылку",
+      "viewer.passport.copy.focus": "Скопировать ссылку на выделенный узел",
+      "viewer.passport.relations": "Связи",
+      "viewer.passport.relations.show": "Показать связанные отношения",
+      "viewer.passport.relations.hide": "Скрыть связанные отношения",
+      "viewer.passport.relations.list": "Связанные отношения",
+      "viewer.passport.copyRelation": "Копировать связь",
+      "viewer.passport.copyNode": "Копировать узел",
+      "viewer.passport.copyPinned": "Скопировать ссылку на закреплённую связь",
+      "viewer.passport.copySource": "Скопировать ссылку на исходный узел",
+      "viewer.passport.copy.focused.success": "Ссылка на выделенный узел скопирована",
+      "viewer.passport.copy.pinned.success": "Ссылка на закреплённую связь скопирована",
+      "viewer.passport.copy.focused.failed": "Не удалось скопировать ссылку на выделенный узел",
+      "viewer.passport.copy.pinned.failed": "Не удалось скопировать ссылку на закреплённую связь",
+      "viewer.passport.relationship.none": "Нет связанных отношений",
+      "viewer.passport.relationship.count.one": "{count} связь",
+      "viewer.passport.relationship.count.other": "{count} связей",
+      "viewer.passport.relationship.show.one": "Показать {count} связанное отношение",
+      "viewer.passport.relationship.show.other": "Показать {count} связанных отношений",
+      "viewer.passport.relationship.summary": "{out} исходящих · {in} входящих{loops}",
+      "viewer.passport.relationship.loops": " · {count} петля",
+      "viewer.passport.relationship.explorer": "Обзор прямых связей",
+      "viewer.passport.relationship.help": "Используйте стрелки для просмотра связей. Enter или пробел — закрепить детали; Escape — очистить.",
+      "viewer.passport.relationship.loopsBack": "замыкается",
+      "viewer.passport.relationship.connectsTo": "соединяется с",
+      "viewer.passport.relationship.connectsFrom": "соединяется от",
+      "viewer.passport.relationship.pinned": "Закреплённая связь · {from} → {to} · {label}",
+      "viewer.passport.relationship.inspect": "Просмотр связи {index} из {total}: {from} → {to}, {label}. Enter — подробности.",
+      "viewer.passport.relationship.group.out": "Исходящие",
+      "viewer.passport.relationship.group.in": "Входящие",
+      "viewer.passport.relationship.group.loop": "Петли",
+      "viewer.passport.relationship.row": "{group}: {relationship}, {neighbor}",
+      "viewer.passport.relationship.direction.out": "ИСХ →",
+      "viewer.passport.relationship.direction.in": "← ВХ",
+      "viewer.passport.relationship.direction.loop": "ПЕТЛЯ",
+      "viewer.passport.sourceCount.one": "{count} проверенная ссылка на источник",
+      "viewer.passport.sourceCount.other": "{count} проверенных ссылок на источники",
+      "viewer.passport.repository.open": "Открыть проверенную ревизию репозитория {revision}",
+      "viewer.passport.source.open": "Открыть проверенный источник {path} на ревизии {revision}",
+      "viewer.passport.source.openLink": "Открыть ↗",
+      "viewer.passport.reach.upstream.one": "Отследить {count} восходящий заданный узел",
+      "viewer.passport.reach.upstream.other": "Отследить {count} восходящих заданных узлов",
+      "viewer.passport.reach.downstream.one": "Отследить {count} нисходящий заданный узел",
+      "viewer.passport.reach.downstream.other": "Отследить {count} нисходящих заданных узлов",
+      "viewer.passport.reach.noUpstream": "Нет восходящих заданных узлов",
+      "viewer.passport.reach.noDownstream": "Нет нисходящих заданных узлов",
+      "viewer.passport.reach.status": "{direction} · узлов: {nodes} · связей: {links} · макс. переходов: {hops}",
+      "viewer.route.eyebrow": "Зонд маршрута",
+      "viewer.route.start": "Выбрать начальный узел",
+      "viewer.route.start.find": "Найти начало",
+      "viewer.route.start.find.aria": "Найти начало маршрута",
+      "viewer.route.copy": "Скопировать ссылку",
+      "viewer.route.copy.aria": "Скопировать ссылку на построенный маршрут",
+      "viewer.route.clear": "Очистить",
+      "viewer.route.clear.aria": "Очистить зонд маршрута",
+      "viewer.route.traced": "Построенный маршрут",
+      "viewer.route.pickTwo": "Выберите два семантических узла на диаграмме",
+      "viewer.route.pickOne": "Выберите семантический узел на диаграмме",
+      "viewer.route.controls": "Управление воспроизведением маршрута",
+      "viewer.route.previous": "Предыдущая позиция маршрута",
+      "viewer.route.play": "Воспроизвести маршрут",
+      "viewer.route.pause": "Приостановить маршрут",
+      "viewer.route.replay": "Повторить маршрут",
+      "viewer.route.next": "Следующая позиция маршрута",
+      "viewer.route.journey": "Путь",
+      "viewer.route.pause.label": "Пауза",
+      "viewer.route.replay.label": "Повтор",
+      "viewer.route.overview": "Обзор",
+      "viewer.route.overview.aria": "Показать полный обзор маршрута",
+      "viewer.route.instructions": "Сначала выберите источник, затем цель. Направление важно.",
+      "viewer.route.destination": "Выбрать цель от {label}",
+      "viewer.route.destination.find": "Найти цель",
+      "viewer.route.destination.find.aria": "Найти достижимую цель маршрута",
+      "viewer.route.differentDestination": "Выбрать другую цель",
+      "viewer.route.distinct": "Для маршрута нужны два разных семантических узла.",
+      "viewer.route.unreachable": "Нет направленного маршрута к {label}",
+      "viewer.route.unreachable.detail": "{target} недостижим из {source}. Выберите подсвеченную цель.",
+      "viewer.route.start.instructions": "Выберите источник. На следующем шаге будут показаны только направленно достижимые цели.",
+      "viewer.route.copy.success": "Ссылка на построенный маршрут скопирована",
+      "viewer.route.copy.failed": "Не удалось скопировать ссылку на маршрут",
+      "viewer.route.position": "Позиция маршрута {index} из {total}: {label}",
+      "viewer.route.step": "Шаг {index} из {total} · {phase} · {label}",
+      "viewer.route.motionRequired": "Автоматическое воспроизведение требует режима «Динамика»",
+      "viewer.route.trigger.clear": "Очистить построенный маршрут",
+      "viewer.route.overview.status": "{nodes} · {hops} · кратчайший заданный маршрут",
+      "viewer.route.overview.node.one": "{count} узел",
+      "viewer.route.overview.node.other": "{count} узлов",
+      "viewer.route.overview.hop.one": "{count} направленный переход",
+      "viewer.route.overview.hop.other": "{count} направленных переходов",
+      "viewer.route.phase.playing": "Воспроизведение",
+      "viewer.route.phase.complete": "Завершено",
+      "viewer.route.phase.inspecting": "Просмотр",
+      "viewer.route.destination.count.one": "Доступна {count} направленная цель. Выберите подсвеченный узел.",
+      "viewer.route.destination.count.other": "Доступно {count} направленных целей. Выберите подсвеченный узел.",
+      "viewer.route.noOutgoing": "Отсюда не начинается ни один исходящий маршрут. Очистите и выберите другой источник.",
+      "viewer.route.result.title": "{source} → {target}",
+      "viewer.route.finder.source.title": "Выбрать начало маршрута",
+      "viewer.route.finder.source.placeholder": "Поиск источников маршрута",
+      "viewer.route.finder.source.empty": "Совпадающих источников маршрута не найдено",
+      "viewer.route.finder.source.results": "Узлы, с которых можно начать маршрут",
+      "viewer.route.finder.source.noun": "источников маршрута",
+      "viewer.route.finder.source.badge": "начало",
+      "viewer.route.finder.target.title": "Цель от {label}",
+      "viewer.route.finder.target.placeholder": "Поиск достижимых целей",
+      "viewer.route.finder.target.empty": "Совпадающих достижимых целей не найдено",
+      "viewer.route.finder.target.results": "Достижимые цели маршрута",
+      "viewer.route.finder.target.noun": "достижимых целей",
+      "viewer.route.hop.one": "{count} переход",
+      "viewer.route.hop.other": "{count} переходов",
+      "viewer.lens.eyebrow": "Семантическая линза",
+      "viewer.lens.title": "Сравнить роли системы",
+      "viewer.lens.close": "Закрыть семантическую линзу",
+      "viewer.lens.instruction": "Выберите до двух семантических типов. Один тип показывает реальные связи; два — сравнивают только прямые заданные связи.",
+      "viewer.lens.kinds": "Семантические типы",
+      "viewer.lens.choose": "Выберите тип, чтобы просмотреть его узлы и смежные связи.",
+      "viewer.lens.copy": "Скопировать ссылку на семантическую линзу",
+      "viewer.lens.clear": "Очистить семантическую линзу",
+      "viewer.lens.open": "Открыть семантическую линзу",
+      "viewer.lens.openActive": "Открыть активную семантическую линзу",
+      "viewer.lens.legend": "Семантическая легенда",
+      "viewer.lens.legend.inspect.one": "Просмотр {label}, {count} узел",
+      "viewer.lens.legend.inspect.other": "Просмотр {label}, {count} узлов",
+      "viewer.lens.kind.count.one": "{label}, {count} узел",
+      "viewer.lens.kind.count.other": "{label}, {count} узлов",
+      "viewer.lens.compare.one": "{first} → {second}: {forward} · {second} → {first}: {reverse} · {count} прямая связь",
+      "viewer.lens.compare.other": "{first} → {second}: {forward} · {second} → {first}: {reverse} · {count} прямых связей",
+      "viewer.lens.single": "{nodes} · {relationships} · связанные узлы остаются видимыми",
+      "viewer.lens.node.one": "{count} узел типа {label}",
+      "viewer.lens.node.other": "{count} узлов типа {label}",
+      "viewer.lens.relationship.one": "{count} смежная связь",
+      "viewer.lens.relationship.other": "{count} смежных связей",
+      "viewer.radar.title": "Семантический радар",
+      "viewer.radar.building": "Построение обзора",
+      "viewer.radar.openFull": "Открыть полный семантический радар",
+      "viewer.radar.open": "Открыть радар",
+      "viewer.radar.close": "Закрыть семантический радар",
+      "viewer.radar.surface": "Обзор диаграммы. Щёлкните узел, чтобы выделить его, или используйте стрелки для панорамирования.",
+      "viewer.radar.click": "Щёлкнуть узел",
+      "viewer.radar.drag": "Перетащите для панорамирования",
+      "viewer.radar.space": "Семантическому радару нужно больше места на карте.",
+      "viewer.radar.nodes": "Узлы семантического радара диаграммы",
+      "viewer.radar.focus": "Фокус: {label} (из семантического радара)",
+      "viewer.radar.status": "Узлов: {count} · {viewport}",
+      "viewer.radar.fullMap": "Узлов: {count} · полная карта",
+      "viewer.radar.compacted": "Радар уменьшен, чтобы не перекрывать семантический паспорт или элементы управления картой.",
+      "viewer.radar.cancelWaiting": "Отменить ожидание семантическим радаром дополнительного места",
+      "viewer.radar.needsSpace": "Семантическому радару нужно больше видимого места на карте",
+      "viewer.radar.viewport.full": "полная карта",
+      "viewer.radar.viewport.width": "ширина {percent}%",
+      "viewer.radar.viewport.scale": "масштаб {percent}%",
+      "viewer.nav.controls": "Управление видом диаграммы",
+      "viewer.nav.route": "Построить направленный маршрут",
+      "viewer.nav.route.title": "Построить маршрут (R)",
+      "viewer.nav.route.short": "ПУТЬ",
+      "viewer.nav.radar": "Открыть семантический радар",
+      "viewer.nav.radar.title": "Семантический радар (M)",
+      "viewer.nav.radar.short": "КАРТА",
+      "viewer.nav.lens": "Открыть семантическую линзу",
+      "viewer.nav.lens.title": "Семантическая линза (L)",
+      "viewer.nav.lens.short": "ЛИНЗА",
+      "viewer.nav.find": "Найти узел",
+      "viewer.nav.find.title": "Найти узел (/)",
+      "viewer.nav.guide": "Открыть гид по диаграмме",
+      "viewer.nav.guide.title": "Гид по диаграмме (?)",
+      "viewer.nav.zoomOut": "Уменьшить",
+      "viewer.nav.zoomOut.title": "Уменьшить (-)",
+      "viewer.nav.reset": "Сбросить вид диаграммы",
+      "viewer.nav.reset.title": "Сбросить вид (0)",
+      "viewer.nav.read": "ЧТЕНИЕ",
+      "viewer.nav.zoomIn": "Увеличить",
+      "viewer.nav.zoomIn.title": "Увеличить (+)",
+      "viewer.nav.camera": "{hint}. Сбросить вид диаграммы",
+      "viewer.nav.camera.title": "{semantic}{hint} · сбросить вид (0)",
+      "viewer.nav.camera.semantic": "Семантическая камера активна · ",
+      "viewer.nav.level.map": "КАРТА",
+      "viewer.nav.level.read": "ЧТЕНИЕ",
+      "viewer.nav.level.full": "ПОЛНЫЙ",
+      "viewer.nav.level.auto": "АВТО",
+      "viewer.nav.detail.map": "Увеличьте, чтобы увидеть подписи связей и контекст узлов",
+      "viewer.nav.detail.read": "Увеличьте ещё, чтобы увидеть теги и аннотации",
+      "viewer.nav.detail.full": "Полная детализация диаграммы",
+      "viewer.intent.summary": "{label}. {out} исходящих, {in} входящих{loops}. Всего связей: {total}. Enter — подробности.",
+      "viewer.intent.loops": ", {count} петля",
+      "viewer.common.copied": "Скопировано",
+      "viewer.common.copyFailed": "Не удалось скопировать",
+      "viewer.common.copyLink": "Скопировать ссылку",
+      "viewer.common.clear": "Очистить",
+      "viewer.common.close": "Закрыть",
+      "diagram.description.tree": "Иерархическая диаграмма, созданная Archify.",
+      "node.context.tree.root": "Корень",
+      "node.context.tree.branch": "Ветвь",
+      "node.context.tree.leaf": "Лист",
+      "tree.toggle.collapse": "Свернуть {label} (потомков: {count})",
+      "tree.toggle.expand": "Развернуть {label} (скрыто: {count})",
+      "tree.expandAll": "Развернуть всё",
+      "diagram.description.class": "Диаграмма классов и интерфейсов, созданная Archify.",
+      "node.context.class.class": "Класс",
+      "node.context.class.abstract": "Абстрактный класс",
+      "node.context.class.interface": "Интерфейс",
+      "node.context.class.enum": "Перечисление",
+      "node.context.class.record": "Запись",
+      "legend.class.dependency": "Зависит от",
+      "legend.class.association": "Ассоциация",
+      "legend.class.inheritance": "Наследует",
+      "legend.class.realization": "Реализует",
+      "legend.class.composition": "Композиция",
+      "legend.class.aggregation": "Агрегация",
+      "diagram.description.timeline": "Временная шкала событий, созданная Archify.",
+      "timeline.axis": "Время",
+      "timeline.break": "Разрыв оси: пропущен период без событий длительностью {duration}",
+      "timeline.compressed": "Сжато периодов без событий: {count} (≈)",
+      "timeline.evidence.observed": "Наблюдаемые события",
+      "timeline.evidence.illustrative": "Иллюстративные данные",
+      "legend.timeline.default": "Событие",
+      "legend.timeline.change": "Изменение",
+      "legend.timeline.alert": "Предупреждение",
+      "legend.timeline.action": "Реагирование",
+      "legend.timeline.recovery": "Восстановление",
+      "diagram.description.waterfall": "Каскадная диаграмма выполнения, созданная Archify.",
+      "waterfall.evidence.measured": "Измеренное время",
+      "waterfall.evidence.illustrative": "Иллюстративное время",
+      "waterfall.wall": "Полное время {duration}",
+      "waterfall.share": "{percent} от полного времени {total}",
+      "waterfall.incomplete": "не завершено, ≥ {duration}",
+      "waterfall.operation": "Операция",
+      "legend.waterfall.ok": "Завершено",
+      "legend.waterfall.error": "Ошибка",
+      "legend.waterfall.cancelled": "Отменено",
+      "legend.waterfall.incomplete": "Не завершено (конец не записан)",
+      "legend.erd.uk": "Уникальный ключ",
+      "viewer.export.svg.light": "SVG · Светлая",
+      "viewer.export.svg.dark": "SVG · Тёмная",
+      "legend.erd.one": "Один",
+      "diagram.description.erd": "Диаграмма сущностей и связей, созданная в Archify.",
+      "viewer.guide.title": "Изучить систему",
+      "node.context.erd": "Сущность",
+      "legend.erd.many": "Многие",
+      "legend.erd.pk": "Первичный ключ",
+      "viewer.focus.selectedNodes": "Выбрано узлов: {count}",
+      "viewer.rail.controls": "Боковая панель",
+      "viewer.export.svg.auto": "SVG · Авто",
+      "viewer.export.svg.auto.hint": "Тема как у страницы",
+      "viewer.outline.title": "Указатель узлов",
+      "legend.erd.fk": "Внешний ключ",
+      "legend.erd.optional": "Необязательный",
+      "viewer.export.svg.light.hint": "Всегда светлая",
+      "viewer.rail.collapse": "Свернуть боковую панель",
+      "viewer.rail.right": "Поместить панель рядом со схемой",
+      "viewer.rail.bottom": "Поместить панель под схемой",
+      "viewer.guide.credit": "Archify полезен? Поддержите проект звездой на GitHub",
+      "viewer.passport.move": "Переместить карточку узла: перетаскивание, клавиши со стрелками или Home для сброса.",
+      "viewer.guide.star": "Звезда",
+      "viewer.export.svg.dark.hint": "Всегда тёмная",
+      "viewer.rail.show": "Заметки и указатель"
+    },
+    "legend": {
+      "mode": "auto",
+      "entries": {
+        "backend": {
+          "label": "Модуль Gateway"
+        },
+        "database": {
+          "label": "Постоянное хранилище"
+        },
+        "messagebus": {
+          "label": "Рассылка в памяти"
+        },
+        "external": {
+          "label": "Внешний контур"
+        }
+      }
+    }
+  },
+  "components": [
+    {
+      "id": "broker",
+      "type": "external",
+      "label": "Брокер",
+      "sublabel": "Передаёт заявку и токен в API",
+      "pos": [
+        40,
+        40
+      ],
+      "size": [
+        260,
+        88
+      ],
+      "sources": [
+        {
+          "path": "broker-app/src/lib/api.ts",
+          "line": 17,
+          "end_line": 30,
+          "label": "Bearer и HTTP"
+        },
+        {
+          "path": "broker-app/src/lib/api.ts",
+          "line": 119,
+          "end_line": 141,
+          "label": "Создание заявки"
+        },
+        {
+          "end_line": 286,
+          "line": 242,
+          "label": "REST-опрос заявок",
+          "path": "broker-app/src/hooks/useDesk.tsx"
+        }
+      ]
+    },
+    {
+      "id": "rest",
+      "type": "backend",
+      "label": "REST API",
+      "sublabel": "Проверяет доступ и принимает заявку",
+      "tag": "только при здоровом inbox",
+      "pos": [
+        440,
+        40
+      ],
+      "size": [
+        260,
+        88
+      ],
+      "sources": [
+        {
+          "path": "backend/internal/api/server.go",
+          "line": 170,
+          "end_line": 173,
+          "label": "Маршруты и права"
+        },
+        {
+          "path": "backend/internal/api/server.go",
+          "line": 313,
+          "end_line": 360,
+          "label": "Приём и QUEUED event"
+        },
+        {
+          "path": "backend/internal/api/middleware.go",
+          "line": 111,
+          "end_line": 217,
+          "label": "Аутентификация и доступ"
+        }
+      ]
+    },
+    {
+      "id": "orders",
+      "type": "backend",
+      "label": "Сервис заявок",
+      "sublabel": "Проверяет заявку и сохраняет в очередь",
+      "pos": [
+        850,
+        40
+      ],
+      "size": [
+        260,
+        88
+      ],
+      "sources": [
+        {
+          "path": "backend/internal/orders/service.go",
+          "line": 87,
+          "end_line": 166,
+          "label": "Проверки и wake"
+        },
+        {
+          "path": "backend/internal/orders/store.go",
+          "line": 113,
+          "end_line": 192,
+          "label": "Лимиты и транзакция"
+        }
+      ]
+    },
+    {
+      "id": "dispatcher",
+      "type": "backend",
+      "label": "Обработчик очереди",
+      "sublabel": "Читает очередь и выбирает адаптер",
+      "tag": "без прежней попытки отправки",
+      "pos": [
+        1270,
+        40
+      ],
+      "size": [
+        260,
+        88
+      ],
+      "sources": [
+        {
+          "path": "backend/internal/outbox/worker.go",
+          "line": 111,
+          "end_line": 268,
+          "label": "Claim, маршрут и send fence"
+        },
+        {
+          "path": "backend/internal/adapters/manager.go",
+          "line": 204,
+          "end_line": 224,
+          "label": "Выбор адаптера"
+        },
+        {
+          "path": "backend/cmd/gateway/main.go",
+          "line": 296,
+          "end_line": 300,
+          "label": "Inbox guard и wake"
+        }
+      ]
+    },
+    {
+      "id": "postgres",
+      "type": "database",
+      "label": "PostgreSQL",
+      "sublabel": "Хранит заявки, очередь и исполнения",
+      "pos": [
+        850,
+        260
+      ],
+      "size": [
+        260,
+        88
+      ],
+      "sources": [
+        {
+          "path": "backend/internal/orders/store.go",
+          "line": 113,
+          "end_line": 192,
+          "label": "Order + outbox COMMIT"
+        },
+        {
+          "path": "backend/internal/outbox/store.go",
+          "line": 20,
+          "end_line": 72,
+          "label": "SKIP LOCKED и claim"
+        },
+        {
+          "path": "backend/internal/orders/store.go",
+          "line": 487,
+          "end_line": 590,
+          "label": "Исполнения и статус / TX"
+        }
+      ]
+    },
+    {
+      "id": "fix",
+      "type": "backend",
+      "label": "Go FIX-адаптер",
+      "sublabel": "Преобразует заявку в FIX-сообщение",
+      "pos": [
+        1270,
+        260
+      ],
+      "size": [
+        260,
+        88
+      ],
+      "sources": [
+        {
+          "path": "backend/internal/adapters/arqa/adapter.go",
+          "line": 157,
+          "end_line": 185,
+          "label": "NewOrderSingle"
+        },
+        {
+          "path": "backend/internal/adapters/arqa/session_app.go",
+          "line": 163,
+          "end_line": 290,
+          "label": "FIX send и callback ER"
+        },
+        {
+          "path": "backend/cmd/gateway/main.go",
+          "line": 134,
+          "end_line": 148,
+          "label": "Callback пишет inbox"
+        }
+      ]
+    },
+    {
+      "id": "arqa-service",
+      "type": "external",
+      "label": "ARQA FIX Service",
+      "sublabel": "Связывает FIX-сессию с QUIK",
+      "pos": [
+        1270,
+        480
+      ],
+      "size": [
+        260,
+        88
+      ],
+      "sources": [
+        {
+          "path": "docs/arqa-fix-contract.md",
+          "line": 7,
+          "end_line": 18,
+          "label": "Gateway → ARQA → QUIK"
+        },
+        {
+          "path": "backend/internal/adapters/arqa/adapter.go",
+          "line": 251,
+          "end_line": 278,
+          "label": "FIX host / port и session"
+        }
+      ]
+    },
+    {
+      "id": "quik",
+      "type": "external",
+      "label": "QUIK",
+      "sublabel": "Обрабатывает торговую заявку",
+      "pos": [
+        1270,
+        700
+      ],
+      "size": [
+        260,
+        88
+      ],
+      "sources": [
+        {
+          "path": "docs/arqa-fix-contract.md",
+          "line": 7,
+          "end_line": 18,
+          "label": "Downstream через ARQA"
+        },
+        {
+          "end_line": 108,
+          "line": 103,
+          "label": "Контракт ответов ARQA",
+          "path": "docs/arqa-fix-contract.md"
+        }
+      ]
+    },
+    {
+      "id": "inbox",
+      "type": "database",
+      "label": "Inbox исполнений",
+      "sublabel": "Сохраняет входящий отчёт на диск",
+      "pos": [
+        850,
+        480
+      ],
+      "size": [
+        260,
+        88
+      ],
+      "sources": [
+        {
+          "path": "backend/internal/executioninbox/inbox.go",
+          "line": 186,
+          "end_line": 231,
+          "label": "Запись ER на диск"
+        },
+        {
+          "path": "backend/internal/executioninbox/inbox.go",
+          "line": 276,
+          "end_line": 315,
+          "label": "Apply, ACK и удержание"
+        },
+        {
+          "path": "backend/cmd/gateway/main.go",
+          "line": 225,
+          "end_line": 239,
+          "label": "Вызов OnExecution"
+        }
+      ]
+    },
+    {
+      "id": "executions",
+      "type": "backend",
+      "label": "Обработчик исполнений",
+      "sublabel": "Применяет отчёт к заявке и сделкам",
+      "pos": [
+        440,
+        480
+      ],
+      "size": [
+        260,
+        88
+      ],
+      "sources": [
+        {
+          "path": "backend/internal/api/server.go",
+          "line": 1622,
+          "end_line": 1698,
+          "label": "OnExecution и broadcast"
+        },
+        {
+          "path": "backend/internal/orders/store.go",
+          "line": 487,
+          "end_line": 594,
+          "label": "Транзакция и dedup ER"
+        }
+      ]
+    },
+    {
+      "id": "hub",
+      "type": "messagebus",
+      "label": "Рассылка обновлений",
+      "sublabel": "Рассылает события по подпискам",
+      "pos": [
+        40,
+        480
+      ],
+      "size": [
+        260,
+        88
+      ],
+      "sources": [
+        {
+          "path": "backend/internal/realtime/hub.go",
+          "line": 194,
+          "end_line": 237,
+          "label": "Рассылка и фильтры"
+        },
+        {
+          "path": "backend/internal/realtime/broker.go",
+          "line": 5,
+          "end_line": 31,
+          "label": "Права на топики"
+        }
+      ]
+    },
+    {
+      "id": "streams",
+      "type": "backend",
+      "label": "Доставка событий",
+      "sublabel": "Передаёт события через gRPC или SSE",
+      "pos": [
+        40,
+        700
+      ],
+      "size": [
+        260,
+        88
+      ],
+      "sources": [
+        {
+          "path": "backend/internal/grpcstream/service.go",
+          "line": 69,
+          "end_line": 278,
+          "label": "Подписка и отправка events"
+        },
+        {
+          "path": "backend/internal/api/stream.go",
+          "line": 20,
+          "end_line": 98,
+          "label": "gRPC → SSE bridge"
+        },
+        {
+          "path": "backend/cmd/gateway/main.go",
+          "line": 252,
+          "end_line": 283,
+          "label": "TLS и bridge client"
+        }
+      ]
+    },
+    {
+      "id": "subscribers",
+      "type": "external",
+      "label": "Клиенты событий",
+      "sublabel": "Получают статусы заявок и сделки",
+      "pos": [
+        440,
+        700
+      ],
+      "size": [
+        260,
+        88
+      ],
+      "sources": [
+        {
+          "path": "frontend/src/api.ts",
+          "line": 102,
+          "end_line": 143,
+          "label": "Браузер читает SSE"
+        },
+        {
+          "path": "frontend/src/hooks/useAdminStream.tsx",
+          "line": 46,
+          "end_line": 59,
+          "label": "Обновление query cache"
+        },
+        {
+          "path": "backend/internal/grpcstream/service.go",
+          "line": 127,
+          "end_line": 145,
+          "label": "Доступ брокера к stream"
+        }
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "id": "broker-rest",
+      "from": "broker",
+      "to": "rest",
+      "label": "заявка + токен",
+      "variant": "emphasis"
+    },
+    {
+      "id": "rest-orders",
+      "from": "rest",
+      "to": "orders",
+      "label": "после проверки прав",
+      "variant": "security"
+    },
+    {
+      "id": "orders-storage",
+      "from": "orders",
+      "to": "postgres",
+      "label": "заявка + очередь",
+      "variant": "emphasis"
+    },
+    {
+      "id": "orders-wake",
+      "from": "orders",
+      "to": "dispatcher",
+      "label": "записано → сигнал",
+      "variant": "dashed"
+    },
+    {
+      "id": "dispatcher-storage",
+      "from": "dispatcher",
+      "to": "postgres",
+      "label": "чтение / отметка"
+    },
+    {
+      "id": "dispatcher-fix",
+      "from": "dispatcher",
+      "to": "fix",
+      "label": "попытка записана",
+      "variant": "emphasis"
+    },
+    {
+      "id": "fix-arqa-order",
+      "from": "fix",
+      "to": "arqa-service",
+      "label": "заявка FIX (D)",
+      "variant": "emphasis"
+    },
+    {
+      "id": "arqa-quik",
+      "from": "arqa-service",
+      "to": "quik",
+      "label": "заявка: контракт",
+      "variant": "emphasis"
+    },
+    {
+      "id": "arqa-fix-report",
+      "from": "arqa-service",
+      "to": "fix",
+      "label": "отчёт FIX (8)",
+      "variant": "dashed"
+    },
+    {
+      "id": "fix-inbox",
+      "from": "fix",
+      "to": "inbox",
+      "label": "запись на диск",
+      "variant": "dashed"
+    },
+    {
+      "id": "inbox-apply",
+      "from": "inbox",
+      "to": "executions",
+      "label": "сохранённый отчёт",
+      "variant": "dashed"
+    },
+    {
+      "id": "execution-storage",
+      "from": "executions",
+      "to": "postgres",
+      "label": "статус + сделки"
+    },
+    {
+      "id": "execution-events",
+      "from": "executions",
+      "to": "hub",
+      "label": "после сохранения",
+      "variant": "dashed"
+    },
+    {
+      "id": "queued-event",
+      "from": "rest",
+      "to": "hub",
+      "label": "заявка сохранена",
+      "variant": "dashed"
+    },
+    {
+      "id": "hub-streams",
+      "from": "hub",
+      "to": "streams",
+      "label": "события подписки",
+      "variant": "dashed"
+    },
+    {
+      "id": "streams-subscribers",
+      "from": "streams",
+      "to": "subscribers",
+      "label": "gRPC / SSE",
+      "variant": "dashed"
+    },
+    {
+      "to": "arqa-service",
+      "variant": "dashed",
+      "label": "результат: контракт",
+      "id": "quik-arqa-result",
+      "from": "quik"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "slate",
+      "title": "Как читать эту схему",
+      "items": [
+        "Зелёные блоки — модули одного процесса FIX_GateWay. Поддерживается одна активная торговая реплика.",
+        "Фиолетовые блоки — постоянные хранилища: PostgreSQL и файлы inbox. Оранжевый Hub хранит подписки и события в памяти.",
+        "Стрелки показывают запрос, запись, уведомление или поток данных. Они не означают гарантированную доставку каждого события.",
+        "Связи ARQA ↔ QUIK обозначены как контракт внешнего контура."
+      ]
+    },
+    {
+      "dot": "slate",
+      "title": "01 · Брокер",
+      "items": [
+        "Это программа брокера, которая просит купить или продать инструмент. В репозитории такой клиент представлен приложением broker-app.",
+        "Получает: Инструмент, направление сделки, количество, цена, счёт и уникальный client_order_id.",
+        "Передаёт: HTTP-запрос POST /api/v1/orders с Bearer-токеном.",
+        "Повтор запроса с тем же client_order_id у того же брокера должен вернуть прежнюю заявку. broker-app получает состояние заявок через REST и периодический опрос; gRPC-подписки доступны брокерским клиентам отдельно."
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "02 · REST API",
+      "items": [
+        "Входная точка для торговых HTTP-запросов. Определяет брокера по токену, проверяет его права и передаёт заявку в сервис заявок.",
+        "Получает: JSON-заявка и токен брокера.",
+        "Передаёт: Вызов сервиса заявок, ответ клиенту и событие о сохранённой заявке.",
+        "Нездоровый inbox приостанавливает новые торговые заявки. HTTP 201 означает сохранение заявки в очереди; подтверждение площадки приходит позднее."
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "03 · Сервис заявок",
+      "items": [
+        "Проверяет поля заявки, разрешённый счёт, наличие инструмента и торговые лимиты. Защищает от создания дубликатов.",
+        "Получает: Заявка и подтверждённая личность брокера.",
+        "Передаёт: Заявка и задание на отправку в PostgreSQL; после успешного сохранения — сигнал обработчику очереди.",
+        "Заявка и запись outbox_events сохраняются одной транзакцией: либо обе записи, либо ни одной. Outbox означает «постоянная очередь исходящих заданий»."
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "04 · Обработчик очереди",
+      "items": [
+        "Забирает задания из PostgreSQL и через Adapter Manager выбирает подходящий FIX-адаптер. Сохраняет маршрут и отметку о попытке до вызова SendOrder.",
+        "Получает: Сохранённое задание ORDER_SEND и текущая заявка.",
+        "Передаёт: Вызов FIX-адаптера и обновление результата обработки очереди.",
+        "Сигнал после сохранения лишь ускоряет запуск; периодический опрос БД работает независимо. После неопределённой попытки новая автоматическая отправка запрещена: нужна сверка."
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "05 · PostgreSQL",
+      "items": [
+        "Главное хранилище состояния Gateway. Здесь находятся заявки, исходящая очередь, история изменений, исполнения и записи защиты от повторного учёта.",
+        "Получает: SQL-чтение и запись от сервиса заявок, worker и обработчика исполнений.",
+        "Передаёт: Сохранённые заявки, задания очереди, статусы и сведения о сделках.",
+        "Таблицы orders, outbox_events, order_events и executions переживают перезапуск процесса. Стрелки к БД показывают владельца операции, а не отдельную сетевую службу для каждой таблицы."
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "06 · Go FIX-адаптер",
+      "items": [
+        "Код внутри Gateway, который превращает заявку в сообщение торгового протокола FIX. QuickFIX/Go управляет FIX-сессией с внешним ARQA-сервисом.",
+        "Получает: Подготовленная заявка от worker; входящие FIX-сообщения от ARQA.",
+        "Передаёт: NewOrderSingle (тип D) наружу; разобранный ExecutionReport (тип 8) в постоянный inbox.",
+        "Это клиентская реализация протокола в нашем Go-процессе. Она отличается от внешнего ARQA FIX Service. Возврат SendOrder не подтверждает принятие заявки в QUIK."
+      ]
+    },
+    {
+      "dot": "slate",
+      "title": "07 · ARQA FIX Service",
+      "items": [
+        "Внешний сервер, который принимает FIX-соединение Gateway и связывает его с QUIK. Для локальных тестов вместо него используется fixsimulator.",
+        "Получает: FIX-заявки и сообщения управления сессией от Gateway.",
+        "Передаёт: ExecutionReport и другие FIX-ответы в Gateway; взаимодействие с QUIK согласно контракту.",
+        "Внутренние исходники этого сервиса не исследовались. Связи с QUIK показывают контракт интеграции, а не проверенное внутреннее устройство или состояние работающего подключения."
+      ]
+    },
+    {
+      "dot": "slate",
+      "title": "08 · QUIK",
+      "items": [
+        "Торговая система за ARQA-сервисом. На этом уровне заявка получает результат обработки: принятие, отказ, частичное или полное исполнение.",
+        "Получает: Заявка, переданная внешним ARQA-сервисом.",
+        "Передаёт: Результат во внешний ARQA-контур; Gateway получает его в виде FIX-отчёта.",
+        "В показанном пути отправки заявок Gateway обращается к QUIK через ARQA. Протокол и внутренняя обработка участка ARQA ↔ QUIK в этом репозитории не реализованы и не проверялись."
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "09 · Inbox исполнений",
+      "items": [
+        "Приёмная очередь входящих FIX-отчётов. Сначала записывает отчёт в файл и синхронизирует его с диском, затем передаёт на применение к заявке.",
+        "Получает: Разобранный ExecutionReport от Go FIX-адаптера.",
+        "Передаёт: Сохранённый отчёт для обработчика исполнений.",
+        "Это файлы на устойчивом FIX-volume. fsync означает синхронизацию записи с диском. Отчёт удаляется только после успешной обработки; ошибка оставляет его для восстановления и приостанавливает новые отправки."
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "10 · Обработчик исполнений",
+      "items": [
+        "Находит заявку по FIX-идентификаторам, проверяет отчёт и обновляет статус, исполненное количество и сведения о сделке. Предотвращает повторный учёт одного исполнения.",
+        "Получает: Отчёт из постоянного inbox.",
+        "Передаёт: Транзакция в PostgreSQL, затем события order.updated и, при новом исполнении, trade.created.",
+        "ER — сокращение ExecutionReport, то есть «отчёт об исполнении или статусе заявки». Неподдерживаемые коррекции, отмены исполнений и замены сохраняются для сверки; их нельзя считать обычным успешным исполнением."
+      ]
+    },
+    {
+      "dot": "orange",
+      "title": "11 · Рассылка обновлений",
+      "items": [
+        "Принимает события об изменении заявок и сделок и передаёт их только подходящим подписчикам.",
+        "Получает: События после сохранения заявок и применения FIX-отчётов.",
+        "Передаёт: События для подписок с проверкой брокера, роли, прав и выбранных типов.",
+        "Hub работает в памяти процесса. Он не хранит долговременную историю событий и отключает медленных получателей. Источник состояния заявок — PostgreSQL."
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "12 · Доставка событий",
+      "items": [
+        "Доставляет события из Hub внешним клиентам. Брокерские клиенты могут подключиться к gRPC/TLS; серверный мост переводит тот же gRPC-поток в SSE для админпанели.",
+        "Получает: События подписки, действующий токен и права клиента.",
+        "Передаёт: gRPC ServerMessage либо браузерный поток text/event-stream.",
+        "gRPC и SSE — два способа доставки событий. Этот блок объединяет gRPC-сервис и SSE-мост. SSE-мост сам подписывается на gRPC; отдельного независимого источника событий нет."
+      ]
+    },
+    {
+      "dot": "slate",
+      "title": "13 · Клиенты событий",
+      "items": [
+        "Клиенты, которые подписались на обновления: брокерский gRPC-клиент или браузерная админпанель.",
+        "Получает: События order.updated, trade.created и другие разрешённые типы.",
+        "Передаёт: Обновлённые данные и интерфейс пользователя.",
+        "Пропущенные события не воспроизводятся. После переподключения состояние нужно перечитать через REST. Админпанель это уже делает. broker-app на входе схемы использует собственный REST-опрос."
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "Границы проверки",
+      "items": [
+        "Схема сверена с кодом коммита 6fdc251 и текущими изменениями в затронутых main.go и manager.go: показанный путь заявок и исполнений сохраняется.",
+        "Ссылки SRC относятся к закоммиченному коду. Незакоммиченные изменения справочников, market data и настроек не представлены как доказательства этого коммита.",
+        "Внутреннее устройство и работа внешних ARQA/QUIK не проверялись. Фокус — заявки и исполнения; отмена заявки, позиции и market data требуют отдельных подробных схем."
+      ]
+    }
+  ]
+}

@@ -14,6 +14,15 @@ import (
 )
 
 var (
+	FIXAuditBytes                     = promauto.NewGaugeVec(prometheus.GaugeOpts{Name: "gateway_fix_audit_bytes", Help: "Persisted FIX transport audit bytes, retained until operator archives them"}, []string{"adapter_id"})
+	FIXAuditCapacity                  = promauto.NewGaugeVec(prometheus.GaugeOpts{Name: "gateway_fix_audit_capacity_bytes", Help: "Maximum retained FIX transport audit bytes per adapter"}, []string{"adapter_id"})
+	FIXAuditFailures                  = promauto.NewCounterVec(prometheus.CounterOpts{Name: "gateway_fix_audit_failures_total", Help: "Fatal FIX transport audit persistence failures"}, []string{"adapter_id"})
+	TradeReconciliationEnabled        = promauto.NewGauge(prometheus.GaugeOpts{Name: "gateway_trade_reconciliation_enabled", Help: "Whether the configured QUIK trade reconciliation worker is enabled"})
+	TradeLastSuccess                  = promauto.NewGauge(prometheus.GaugeOpts{Name: "gateway_trade_last_success_timestamp_seconds", Help: "Last complete successful QUIK snapshot verification, Unix time"})
+	TradeIncomplete                   = promauto.NewGauge(prometheus.GaugeOpts{Name: "gateway_trade_incomplete_total", Help: "Trades missing a real side for more than two minutes"})
+	TradeReportErrors                 = promauto.NewGauge(prometheus.GaugeOpts{Name: "gateway_trade_report_errors", Help: "Persisted source records requiring reconciliation"})
+	TradeSyncFailed                   = promauto.NewGauge(prometheus.GaugeOpts{Name: "gateway_trade_sync_failed", Help: "Whether the latest completed QUIK trade reconciliation failed"})
+	TradeMonitorFailed                = promauto.NewGauge(prometheus.GaugeOpts{Name: "gateway_trade_monitor_failed", Help: "Whether trade integrity checks cannot read their database state"})
 	DatabaseAvailable                 = promauto.NewGauge(prometheus.GaugeOpts{Name: "gateway_database_available", Help: "Whether the private metrics probe can reach PostgreSQL"})
 	FIXAvailable                      = promauto.NewGauge(prometheus.GaugeOpts{Name: "gateway_fix_available_sessions", Help: "Runtime FIX sessions available for routing"})
 	BackupAge                         = promauto.NewGauge(prometheus.GaugeOpts{Name: "gateway_backup_age_seconds", Help: "Age of latest successful encrypted database backup; configured production backups only"})

@@ -99,7 +99,7 @@ func TestSimulatorFillThenCancelReject(t *testing.T) {
 	readSim(t, r)
 	sendSim(t, conn, "D", &seq, map[string]string{"11": "order", "48": "SBER", "54": "1", "38": "2", "44": "100"})
 	readSim(t, r)
-	if msg := readSim(t, r); msg["39"] != "2" || msg["32"] != "2" || msg["34"] != "3" {
+	if msg := readSim(t, r); msg["39"] != "2" || msg["32"] != "2" || msg["34"] != "3" || msg["880"] == "" || msg["5001"] == "" || msg["5002"] == "" || msg["75"] == "" || msg["100"] != "TQBR" {
 		t.Fatalf("fill: %#v", msg)
 	}
 	sendSim(t, conn, "F", &seq, map[string]string{"11": "cancel", "41": "order"})

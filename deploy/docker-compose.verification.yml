@@ -1,6 +1,11 @@
 # Used together with docker-compose.local.yml and -p fix-gateway-verification.
 # Separate project volumes and loopback ports keep the existing local stack intact.
 services:
+  gateway:
+    environment:
+      TRADE_RECONCILIATION_ENABLED: "true"
+      # Loopback-only unavailable history source exercises Gateway notifications.
+      QUIK_API_BASE_URL: http://127.0.0.1:1
   access:
     ports: !override
       - "127.0.0.1:38080:8080"

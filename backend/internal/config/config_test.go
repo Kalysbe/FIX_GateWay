@@ -1,6 +1,10 @@
 package config
 
-import "testing"
+import (
+	"path/filepath"
+	"strings"
+	"testing"
+)
 
 func TestProductionRejectsDatabasePlaintextFallback(t *testing.T) {
 	for _, dsn := range []string{"postgres://x:y@db/db", "postgres://x:y@db/db?sslmode=prefer", "postgres://x:y@db/db?sslmode=allow", "postgres://x:y@db/db?sslmode=%64isable"} {
@@ -54,22 +58,43 @@ func TestValidateProductionAcceptsStrongConfig(t *testing.T) {
 	}
 }
 
-func TestValidateProductionRequiresHMAC(t *testing.T) {
+func TestValidateProductionAllowsOptionalClientProtection(t *testing.T) {
 	c := Config{
-		AppEnv:                "production",
-		JWTSecret:             "abcdefghijklmnopqrstuvwxyz012345",
-		APITokenPepper:        "abcdefghijklmnopqrstuvwxyz012345",
-		AdminPassword:         "not-the-default-pw",
-		DatabaseURL:           "postgres://x:y@db/db?sslmode=verify-full",
-		GRPCRequireClientCert: true,
-		RequireHTTPS:          true,
+		AppEnv:         "production",
+		JWTSecret:      "abcdefghijklmnopqrstuvwxyz012345",
+		APITokenPepper: "abcdefghijklmnopqrstuvwxyz012345",
+		AdminPassword:  "not-the-default-pw",
+		DatabaseURL:    "postgres://x:y@db/db?sslmode=verify-full",
+		RequireHTTPS:   true,
 	}
-	if err := c.Validate(); err == nil {
-		t.Fatal("expected HMAC_REQUIRED error")
+	for _, mtls := range []bool{false, true} {
+		for _, hmac := range []bool{false, true} {
+			c.GRPCRequireClientCert, c.HMACRequired = mtls, hmac
+			if err := c.Validate(); err != nil {
+				t.Fatalf("mTLS=%t HMAC=%t: %v", mtls, hmac, err)
+			}
+		}
 	}
-	c.AllowInsecureHMAC = true
-	if err := c.Validate(); err != nil {
-		t.Fatal(err)
+	c.RequireHTTPS = false
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "REQUIRE_HTTPS") {
+		t.Fatalf("plaintext REST accepted: %v", err)
+	}
+}
+
+func TestTokenOnlyGRPCDefaults(t *testing.T) {
+	t.Setenv("GRPC_MTLS_REQUIRED", "")
+	t.Setenv("GRPC_CLIENT_CERT", "")
+	t.Setenv("GRPC_CLIENT_KEY", "")
+	t.Setenv("HMAC_REQUIRED", "")
+	c := Load()
+	if c.GRPCRequireClientCert || c.HMACRequired || c.GRPCClientCertFile != "" || c.GRPCClientKeyFile != "" {
+		t.Fatal("token-only mode requires client credentials or signatures")
+	}
+	t.Setenv("GRPC_MTLS_REQUIRED", "true")
+	t.Setenv("GRPC_TLS_CERT", filepath.Join("operator-pki", "server.crt"))
+	c = Load()
+	if !c.GRPCRequireClientCert || c.GRPCClientCertFile != filepath.Join("operator-pki", "bridge.crt") || c.GRPCClientKeyFile != filepath.Join("operator-pki", "bridge.key") {
+		t.Fatal("mTLS bridge credentials were not selected from the server PKI directory")
 	}
 }
 

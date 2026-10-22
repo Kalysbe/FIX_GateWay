@@ -170,6 +170,9 @@ func (h *Hub) enqueueSnapshot(s *Subscription) {
 	if protojson.Unmarshal(encoded, payload) != nil {
 		return
 	}
+	if s.info.BrokerID > 0 {
+		payload = brokerMarketDataPayload(payload)
+	}
 	event := &pb.Event{Sequence: h.sequence.Add(1), Type: "marketdata.tick", Data: payload, OccurredAt: timestamppb.Now()}
 	select {
 	case s.Events <- event:
@@ -208,6 +211,7 @@ func (h *Hub) BroadcastForBroker(eventType string, data any, brokerID int64) {
 	var slow []*Subscription
 	h.mu.Lock()
 	event := &pb.Event{Sequence: h.sequence.Add(1), Type: eventType, Data: payload, OccurredAt: timestamppb.Now()}
+	var brokerMarketEvent *pb.Event
 	for s := range h.clients {
 		if !s.topics[eventType] {
 			continue
@@ -220,6 +224,12 @@ func (h *Hub) BroadcastForBroker(eventType string, data any, brokerID int64) {
 			continue
 		}
 		delivery := event
+		if s.info.BrokerID > 0 && eventType == "marketdata.tick" {
+			if brokerMarketEvent == nil {
+				brokerMarketEvent = &pb.Event{Sequence: event.Sequence, Type: event.Type, Data: brokerMarketDataPayload(payload), OccurredAt: event.OccurredAt}
+			}
+			delivery = brokerMarketEvent
+		}
 		if s.info.BrokerID > 0 && eventType == "positions.updated" {
 			// Only a trigger reaches broker streams. The service replaces it with
 			// a snapshot fetched using the authenticated token's firm scope.

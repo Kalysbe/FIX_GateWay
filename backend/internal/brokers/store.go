@@ -283,13 +283,16 @@ type TokenWithBroker struct {
 }
 
 func (s *Store) ListAllTokens(ctx context.Context) ([]TokenWithBroker, error) {
+	return s.listTokensWithBroker(ctx, ` ORDER BY t.created_at DESC`)
+}
+
+func (s *Store) listTokensWithBroker(ctx context.Context, suffix string, args ...any) ([]TokenWithBroker, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT t.id, t.broker_id, t.name, COALESCE(t.description, ''), t.token_hash, t.token_prefix, t.status,
 		       t.permissions, COALESCE(t.quik_firm, ''), t.expires_at, t.created_at, t.revoked_at, t.last_used_at, t.last_used_ip,
 		       t.created_by, t.revoked_by, t.rotated_from, b.code, b.name
 		FROM api_tokens t
-		JOIN brokers b ON b.id = t.broker_id
-		ORDER BY t.created_at DESC`)
+		JOIN brokers b ON b.id = t.broker_id`+suffix, args...)
 	if err != nil {
 		return nil, err
 	}

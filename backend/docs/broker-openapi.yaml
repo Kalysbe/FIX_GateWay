@@ -5,8 +5,9 @@ info:
   description: |
     REST API для брокеров Кыргызской Фондовой Биржи.
 
-    Авторизация: `Authorization: Bearer sk_live_…`
+    Авторизация: `Authorization: Bearer <API-токен>`
     Токен выдаётся оператором. `broker_id` определяется по токену автоматически.
+    Подключение: VPN + TLS. Клиентские сертификаты и HMAC по умолчанию не требуются.
 
     Брокерские события gRPC имеют REST-источники: `order.updated` → GET `/api/v1/orders`,
     `trade.created` → GET `/api/v1/trades`, `positions.updated` → GET `/api/v1/positions`,
@@ -14,7 +15,7 @@ info:
     gRPC передаёт обновления через `fixgateway.realtime.v1.RealtimeService/Stream`.
     REST не воспроизводит последовательность пропущенных событий.
 
-    Руководство: [Broker API Guide](/docs/broker-api-guide.md)
+    Единое руководство по REST и gRPC: `docs/broker-api-guide.md` в репозитории.
   contact:
     name: KSE Gateway Support
 servers:
@@ -61,6 +62,7 @@ paths:
       security:
         - bearerAuth: []
       description: |
+        Требует `orders:read`.
         Возвращает код фирмы, привязанный к токену (`quik_firm` → FIX tag 5018),
         и название фирмы из локального кэша (если есть).
       responses:
@@ -113,14 +115,18 @@ paths:
       description: |
         Требует `orders:read`. REST-источник события gRPC `marketdata.tick`.
         Возвращает все подписанные инструменты: цены, стакан, OHLC, средневзвешенную
-        цену, объём, оборот, торговый статус и состояние автоматической FIX-подписки.
-        Десятичные значения передаются строками. `raw_fix` не выдаётся.
+        цену, объём, оборот, торговый статус и время обновления.
+        Десятичные значения передаются строками. ID адаптера, ID FIX-запроса,
+        сырые FIX-поля и состояние внутренней подписки не выдаются.
 
         Без фильтров возвращается весь рынок. Необязательные `symbol` (тикер или
         SecurityID) и `board` ограничивают только ответ, не изменяя FIX-подписку.
-        `replace: true` означает полный снимок выбранной выборки.
-        `live` истинен только при доступном потоке в состоянии ACTIVE или PARTIAL.
-        Строка из справочника сама по себе не подтверждает получение данных.
+        Успешный GET всегда возвращает полный снимок выбранной выборки в `quotes`.
+        Поля `source`, `live`, `replace` и `subscription` в REST-ответе отсутствуют.
+        При недоступности потока возвращается HTTP 503 с `Retry-After`;
+        пустая успешная выборка возвращается как `quotes: []`.
+        Время получения конкретной котировки передаётся в `updated_at`;
+        подключение потока само по себе не гарантирует её свежесть или полноту.
       parameters:
         - in: query
           name: symbol
@@ -134,16 +140,12 @@ paths:
           example: LIST_GBA
       responses:
         "200":
-          description: Текущий снимок; quotes пуст, если поток ещё недоступен или фильтр не нашёл инструмент
+          description: Текущий снимок; quotes пуст, если доступный поток не содержит совпадений с фильтром
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/MarketDataResponse"
               example:
-                source: live
-                live: true
-                replace: true
-                subscription: {adapter_id: quik-fix-1, status: ACTIVE, expected: 1, confirmed: 1}
                 quotes:
                   - symbol: GBA02280810
                     security_id: GBA02280810
@@ -156,6 +158,7 @@ paths:
                     volume: "1500"
                     value: "150000.0"
                     trading_status: "17"
+                    updated_at: "2026-10-21T09:00:00Z"
                     bids: [{price: "99.5", size: "10"}]
                     offers: [{price: "100.5", size: "12"}]
         "401":
@@ -165,7 +168,7 @@ paths:
         "429":
           description: Rate limited
         "503":
-          description: Временно недоступна авторизация или исчерпана ёмкость обработки
+          description: Временно недоступен поток рыночных данных, авторизация или исчерпана ёмкость обработки
   /api/v1/orderbook:
     get:
       tags: [Справочники]
@@ -391,7 +394,7 @@ paths:
       x-grpc-event: trade.created
       security:
         - bearerAuth: []
-      description: Требует `trades:read`. Последние 100 сделок своего брокера. REST-источник события gRPC `trade.created`; поля сделки совпадают с данными события.
+      description: Требует `trades:read`. Последние 100 сделок своего брокера. Событие gRPC `trade.created` содержит исполнение (id, order_id, exec_id, last_qty, last_px, cum_qty, leaves_qty, adapter_id, created_at). REST дополнительно возвращает реквизиты заявки, инструмента, клиента и фирмы.
       responses:
         "200":
           description: OK
@@ -608,7 +611,7 @@ components:
     bearerAuth:
       type: http
       scheme: bearer
-      bearerFormat: sk_live_…
+      bearerFormat: API token
       description: |
         API-токен брокера, выданный оператором.
         Вставьте только токен — Swagger автоматически добавит `Bearer `.
@@ -795,8 +798,6 @@ components:
       type: object
       description: Строка текущих торгов; пустая строка цены или статуса означает, что значение ещё не получено
       properties:
-        adapter_id: {type: string}
-        md_req_id: {type: string}
         symbol: {type: string}
         security_id: {type: string}
         board: {type: string}
@@ -831,35 +832,15 @@ components:
         official_price: {type: string}
         volume: {type: string}
         value: {type: string, description: Оборот}
-        entries:
-          type: object
-          additionalProperties: {type: string}
         updated_at: {type: string, format: date-time}
-    MarketDataSubscription:
-      type: object
-      required: [status, expected, confirmed]
-      properties:
-        adapter_id: {type: string}
-        status: {type: string, enum: [WAITING, STARTING, ACTIVE, PARTIAL, RETRYING, OFFLINE]}
-        expected: {type: integer, description: Количество подписанных инструментов всего шлюза}
-        confirmed: {type: integer, description: Количество подтверждённых инструментов всего шлюза}
-        error: {type: string}
-        next_retry_at: {type: string, format: date-time}
-        last_received_at: {type: string, format: date-time}
     MarketDataResponse:
       type: object
-      required: [source, live, quotes, subscription, replace]
+      required: [quotes]
       properties:
-        source: {type: string, enum: [live]}
-        live: {type: boolean}
-        replace: {type: boolean, enum: [true]}
         quotes:
           type: array
           items:
             $ref: "#/components/schemas/MarketQuote"
-        subscription:
-          $ref: "#/components/schemas/MarketDataSubscription"
-        note: {type: string}
     OrderBook:
       type: object
       properties:
@@ -915,6 +896,19 @@ components:
     Trade:
       type: object
       properties:
+        trade_match_id:
+          type: string
+          description: Exchange matched trade identifier (FIX 880). Distinct from per-order exec_id.
+        contra_broker:
+          type: string
+          description: Counterparty broker from FIX 375, when disclosed.
+        contra_trader:
+          type: string
+          description: Counterparty trader from FIX 337, not a client identifier.
+        execution_date:
+          type: string
+          format: date
+          description: FIX trade date, or UTC receipt date for legacy executions.
         broker_id: {type: integer, format: int64}
         adapter_id: {type: string, nullable: true}
         firm_name: {type: string}

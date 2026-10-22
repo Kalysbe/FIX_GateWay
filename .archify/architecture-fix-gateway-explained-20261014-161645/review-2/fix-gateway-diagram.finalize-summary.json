@@ -1,0 +1,47 @@
+{
+  "schemaVersion": 1,
+  "ok": true,
+  "command": "finalize",
+  "status": "pass",
+  "type": "architecture",
+  "quality": "showcase",
+  "specification": {
+    "path": "C:\\Users\\krahmanberdiev\\Desktop\\Проекты\\FIX_GateWay\\.archify\\architecture-fix-gateway-explained-20261014-161645\\candidate.json",
+    "sha256": "8044a46bfdd060727d99b23ced4b1b6e77b143257da10b9656e456c12411fbc3",
+    "bytes": 70906
+  },
+  "artifact": {
+    "path": "C:\\Users\\krahmanberdiev\\Desktop\\Проекты\\FIX_GateWay\\.archify\\architecture-fix-gateway-explained-20261014-161645\\fix-gateway-diagram.html",
+    "sha256": "00cfcc86f81d21d1059a647f62c575af1e6355e2cc51ceab4b2a67684cd0162c",
+    "bytes": 878797
+  },
+  "gates": {
+    "validate": "pass",
+    "deliver": "pass",
+    "check": "pass",
+    "browser-check": "pass"
+  },
+  "diagnostics": [],
+  "diagnosticSummary": {
+    "total": 0,
+    "shown": 0,
+    "truncated": false
+  },
+  "evidence": {
+    "receipt": "C:\\Users\\krahmanberdiev\\Desktop\\Проекты\\FIX_GateWay\\.archify\\architecture-fix-gateway-explained-20261014-161645\\review-2\\fix-gateway-diagram.finalize.json",
+    "summaryReceipt": "C:\\Users\\krahmanberdiev\\Desktop\\Проекты\\FIX_GateWay\\.archify\\architecture-fix-gateway-explained-20261014-161645\\review-2\\fix-gateway-diagram.finalize-summary.json",
+    "browserCheckReceipt": "C:\\Users\\krahmanberdiev\\Desktop\\Проекты\\FIX_GateWay\\.archify\\architecture-fix-gateway-explained-20261014-161645\\review-2\\fix-gateway-diagram.browser-check.json"
+  },
+  "update": {
+    "status": "current",
+    "installedVersion": "3.1.0",
+    "availableVersion": "3.1.0",
+    "releaseNotes": null,
+    "checkedAt": "2026-10-14T08:58:30.148Z",
+    "source": "cache",
+    "noticeRequired": false,
+    "noticeText": null
+  },
+  "visualReview": "not-requested",
+  "durationMs": 6147
+}

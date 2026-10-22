@@ -444,6 +444,7 @@ func parseMarketDataFromRaw(raw, adapterID string, incremental bool) (reqID stri
 		if !ok || v == "" {
 			continue
 		}
+		v = decodeFIXText(v)
 		switch k {
 		case "262":
 			reqID = v
@@ -936,12 +937,19 @@ func (a *sessionApp) trackSub(reqID string) {
 	a.mdMu.Unlock()
 }
 
-func (a *sessionApp) takeSubIDs() []string {
+type mdCancellation struct {
+	id    string
+	query domain.MarketDataQuery
+}
+
+func (a *sessionApp) takeSubscriptions() []mdCancellation {
 	a.mdMu.Lock()
 	defer a.mdMu.Unlock()
-	out := make([]string, 0, len(a.mdSubIDs))
-	for id := range a.mdSubIDs {
-		out = append(out, id)
+	out := make([]mdCancellation, 0, len(a.mdSubscriptions))
+	for _, sub := range a.mdSubscriptions {
+		if sub.reqID != "" {
+			out = append(out, mdCancellation{id: sub.reqID, query: sub.query})
+		}
 	}
 	a.mdSubIDs = map[string]struct{}{}
 	a.mdSubscriptions = map[string]*mdSubscription{}
@@ -960,12 +968,11 @@ func (a *sessionApp) liveQuotes() []domain.MarketQuote {
 	return out
 }
 
-func buildMDUnsubscribe(reqID string) *quickfix.Message {
-	msg := quickfix.NewMessage()
-	msg.Header.SetField(tag.MsgType, field.NewMsgType(enum.MsgType_MARKET_DATA_REQUEST))
-	msg.Body.SetString(tag.MDReqID, reqID)
-	msg.Body.SetString(tag.SubscriptionRequestType, "2") // DISABLE_PREVIOUS
-	return msg
+func buildMDUnsubscribe(reqID string, query domain.MarketDataQuery) *quickfix.Message {
+	// ARQA validates the instrument even for 263=2. A bare MDReqID is rejected
+	// with "NoRelatedSym dont match real size of valid InstrmtMDReqGrps".
+	query.SubscriptionType = "2"
+	return buildMarketDataRequest(reqID, query)
 }
 
 // SubscribeMarketData sends 35=V with 263=1 (SNAPSHOT+UPDATES) and keeps the book live.
@@ -1041,10 +1048,10 @@ func (a *Adapter) UnsubscribeMarketData(_ context.Context) error {
 	a.subMu.Lock()
 	a.lastMDQuery = domain.MarketDataQuery{}
 	a.subMu.Unlock()
-	ids := a.app.takeSubIDs()
-	for _, id := range ids {
-		if err := a.sendMarketData(buildMDUnsubscribe(id)); err != nil {
-			a.log.Warn("market data unsubscribe failed", "adapter_id", a.meta.ID, "req_id", id, "error", err)
+	requests := a.app.takeSubscriptions()
+	for _, req := range requests {
+		if err := a.sendMarketData(buildMDUnsubscribe(req.id, req.query)); err != nil {
+			a.log.Warn("market data unsubscribe failed", "adapter_id", a.meta.ID, "req_id", req.id, "error", err)
 		}
 	}
 	return nil

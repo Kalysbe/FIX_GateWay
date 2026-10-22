@@ -216,13 +216,16 @@ func shouldNotify(e Event) bool {
 	if strings.HasPrefix(e.Endpoint, "/api/v1/admin/notifications") {
 		return false
 	}
+	if e.Type == TypeSystem && e.Subtype == "TRADE_SAFETY_RECOVERED" {
+		return true
+	}
 	switch e.Severity {
 	case SeverityCritical, SeverityError:
 		return true
 	case SeverityWarning:
 		switch e.Subtype {
 		case AuthFailed, AuthIPNotAllowed, AuthRateLimitExceeded, AuthHMACFailed,
-			"ADAPTER_DISCONNECTED", "ADAPTER_OVERLOAD", "FIX_SESSION_DISCONNECTED",
+			"ADAPTER_DISCONNECTED", "ADAPTER_ERROR", "ADAPTER_OVERLOAD", "FIX_SESSION_DISCONNECTED",
 			"ADAPTER_HIGH_LOAD", "RATE_LIMIT_NEAR_LIMIT":
 			return true
 		}

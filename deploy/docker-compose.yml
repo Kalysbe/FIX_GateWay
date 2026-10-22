@@ -59,9 +59,9 @@ services:
       GRPC_TLS_CERT: /certs/server.crt
       GRPC_TLS_KEY: /certs/server.key
       GRPC_TLS_CA: /certs/ca.crt
-      GRPC_MTLS_REQUIRED: "true"
-      GRPC_CLIENT_CERT: /certs/bridge.crt
-      GRPC_CLIENT_KEY: /certs/bridge.key
+      GRPC_MTLS_REQUIRED: ${GRPC_MTLS_REQUIRED:-false}
+      GRPC_CLIENT_CERT: ${GRPC_CLIENT_CERT:-}
+      GRPC_CLIENT_KEY: ${GRPC_CLIENT_KEY:-}
       GRPC_TARGET: localhost:8443
       GRPC_SERVER_NAME: localhost
       DATABASE_URL: postgres://gateway:gateway@postgres:5432/fix_gateway?sslmode=disable
@@ -70,9 +70,10 @@ services:
       ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@localhost}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin123}
       LB_STRATEGY: ${LB_STRATEGY:-least_connections}
-      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173,http://localhost:3000,http://localhost:5174}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173,http://localhost:3000}
       MIGRATIONS_PATH: /app/migrations
       FIX_SESSION_DIR: /app/fix-sessions
+      FIX_AUDIT_MAX_BYTES: ${FIX_AUDIT_MAX_BYTES:-4294967296}
       WORKER_ID: gateway-1
 
       POSITION_STREAM_ENABLED: ${POSITION_STREAM_ENABLED:-true}
@@ -86,6 +87,7 @@ services:
       ADAPTER_HOST_OVERRIDE: ${ADAPTER_HOST_OVERRIDE:-}
       MARKET_DATA_BOARDS: ${MARKET_DATA_BOARDS:-LISTEDSTOCKK,LIST_GBA}
       QUIK_API_BASE_URL: ${QUIK_API_BASE_URL:-http://192.168.0.89:5000}
+      TRADE_RECONCILIATION_ENABLED: ${TRADE_RECONCILIATION_ENABLED:-true}
     ports:
       - "127.0.0.1:8080:8080"
       - "127.0.0.1:8443:8443"
@@ -119,6 +121,7 @@ services:
       - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus-data:/prometheus
       - ./prometheus/rate-limits.rules.yml:/etc/prometheus/rate-limits.rules.yml:ro
+      - ./prometheus/trades.rules.yml:/etc/prometheus/trades.rules.yml:ro
     ports:
       - "127.0.0.1:9090:9090"
     depends_on:

@@ -21,7 +21,7 @@ docker compose --env-file .env up --build
 Copy `deploy/.env.example` → `deploy/.env` to override secrets.
 
 The existing deployment includes ARQA UAT adapter seeds. For an isolated simulator
-environment with a separate database and both interfaces, use
+environment with a separate database and the admin interface, use
 [Local testing](docs/local-testing.md).
 
 - Admin UI: http://localhost:5173 (`admin@localhost` / `admin123`)
@@ -31,12 +31,14 @@ environment with a separate database and both interfaces, use
 
 ## Docs
 
-- [Broker API guide (stage 1)](docs/broker-api-guide.md)
+- [API для брокеров: REST + gRPC](docs/broker-api-guide.md)
 - [Architecture](docs/architecture.md)
+- [Archify: интерактивные схемы проекта](docs/archify.md)
 - [Сверка неопределённых отправок](docs/reconciliation.md)
 - [Торговые ограничения](docs/trading-limits.md)
 - [Проверка торгового релиза](docs/release-verification.md)
 - [Deployment](docs/deployment.md)
+- [Анимации интерфейса](docs/ui-motion.md)
 - [gRPC-подписки брокеров и мониторинг подключений](docs/grpc-subscriptions.md)
 - [ARQA requirements checklist](docs/arqa-requirements-checklist.md)
 - [План ARQA UAT](docs/arqa-uat-plan.md)

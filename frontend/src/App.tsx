@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { lazy, Suspense, useEffect } from "react";
 import { Navigate, Outlet, Route, Routes, useParams } from "react-router-dom";
 import { clearToken, isSessionValid, watchSessionExpiry } from "./api";
 import AppShell from "./components/AppShell";
@@ -12,10 +12,11 @@ import MonitoringPage from "./pages/MonitoringPage";
 import GrpcPage from "./pages/GrpcPage";
 import BrokersPage from "./pages/BrokersPage";
 import BrokerDetailPage from "./pages/BrokerDetailPage";
-import TokensPage from "./pages/TokensPage";
+import { PageSpinner } from "./components/feedback";
 import OrdersPage from "./pages/OrdersPage";
 import OrderDetailPage from "./pages/OrderDetailPage";
 import TradesPage from "./pages/TradesPage";
+import TradeDetailPage from "./pages/TradeDetailPage";
 import MarketDataPage from "./pages/MarketDataPage";
 import QuotesPage from "./pages/QuotesPage";
 import PositionsPage from "./pages/PositionsPage";
@@ -24,6 +25,8 @@ import ReferencePage from "./pages/ReferencePage";
 import LogsPage from "./pages/LogsPage";
 import NotificationsPage from "./pages/NotificationsPage";
 import RateLimitsPage from "./pages/RateLimitsPage";
+
+const TokensPage = lazy(() => import("./pages/TokensPage"));
 
 function Private() {
   const valid = isSessionValid();
@@ -67,10 +70,11 @@ export default function App() {
         <Route path="/brokers" element={<BrokersPage />} />
         <Route path="/brokers/:id" element={<BrokerDetailPage />} />
         <Route path="/brokers/:id/tokens" element={<BrokerTokensRedirect />} />
-        <Route path="/tokens" element={<TokensPage />} />
+        <Route path="/tokens" element={<Suspense fallback={<PageSpinner label="Загружаем токены…" />}><TokensPage /></Suspense>} />
         <Route path="/orders" element={<OrdersPage />} />
         <Route path="/orders/:id" element={<OrderDetailPage />} />
         <Route path="/trades" element={<TradesPage />} />
+        <Route path="/trades/:id" element={<TradeDetailPage />} />
         <Route path="/market-data" element={<MarketDataPage />} />
         <Route path="/quotes" element={<QuotesPage />} />
         <Route path="/positions" element={<PositionsPage />} />

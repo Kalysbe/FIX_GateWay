@@ -179,10 +179,10 @@ func TestIsInternalUIRequest(t *testing.T) {
 		t.Fatal("origin cannot suppress API logging")
 	}
 	broker := httptest.NewRequest(http.MethodGet, "/api/v1/orders", nil)
-	broker.Host = "localhost:5174"
-	broker.Header.Set("Origin", "http://localhost:5174")
+	broker.Host = "broker.example.com"
+	broker.Header.Set("Origin", "https://broker.example.com")
 	if IsInternalUIRequest(broker, skip) {
-		t.Fatal("broker-app 5174 must be logged")
+		t.Fatal("broker API requests must be logged")
 	}
 	external := httptest.NewRequest(http.MethodPost, "/api/v1/orders", nil)
 	external.Host = "localhost:8080"

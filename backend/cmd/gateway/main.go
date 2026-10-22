@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -238,6 +237,7 @@ func main() {
 		}
 	})
 	go server.RunDashboardRefresh(ctx)
+	if os.Getenv("TRADE_RECONCILIATION_ENABLED") == "true" { go server.RunTradeReconciliation(ctx) }
 	server.SetQuikExport(quikExportStore)
 	admission := ratelimit.NewAdmissionWithCapacity(int64(cfg.RateLimitMaxStates))
 	rateStore := &ratelimit.Store{Pool: pool, Admission: admission, DefaultRead: cfg.DefaultRateLimitRPS, DefaultTrade: cfg.DefaultOrderRateLimit}
@@ -331,40 +331,4 @@ func main() {
 	grpcServer.Stop()
 	manager.StopAll(shutdownCtx)
 	log.Info("gateway stopped")
-}
-
-func syncInstrumentsAfterLogon(ctx context.Context, log *slog.Logger, manager *adapters.Manager, refStore *refdata.Store) {
-	deadline := time.Now().Add(30 * time.Second)
-	for time.Now().Before(deadline) {
-		if manager.AvailableCount() > 0 {
-			break
-		}
-		select {
-		case <-ctx.Done():
-			return
-		case <-time.After(500 * time.Millisecond):
-		}
-	}
-	if manager.AvailableCount() == 0 {
-		log.Warn("skip FIX instrument sync: no online adapters yet")
-		return
-	}
-	syncCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
-	defer cancel()
-	adapterID, items, err := manager.FetchSecurities(syncCtx)
-	if err != nil {
-		log.Warn("FIX instrument sync failed", "error", err)
-		return
-	}
-	n, err := refStore.SyncFromFIX(syncCtx, items)
-	if err != nil {
-		log.Warn("FIX instrument upsert failed", "error", err)
-		return
-	}
-	log.Info("instruments synced via FIX Security Definition",
-		"adapter_id", adapterID,
-		"upserted", n.InstrumentsUpserted,
-		"removed", n.InstrumentsRemoved,
-		"inactive", n.InstrumentsInactive,
-	)
 }

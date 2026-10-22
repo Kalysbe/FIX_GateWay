@@ -3,17 +3,20 @@ import { useNavigate } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import { api, setSessionUser, setToken } from "../api";
 import { Icons } from "../components/icons";
+import "./login.css";
 
 export default function LoginPage() {
   const nav = useNavigate();
   const queryClient = useQueryClient();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
+    if (loading) return;
     setLoading(true);
     setError("");
     try {
@@ -35,36 +38,113 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="login-page">
-      <aside className="login-story">
-        <div className="flex items-center gap-3"><div className="brand-mark flex h-10 w-10 items-center justify-center text-white"><Icons.logo size={21} /></div><div><strong className="text-base">FIX Gateway</strong><div className="text-[11px] text-muted">Операционная консоль</div></div></div>
-        <div><div className="login-eyebrow mb-5">Контроль. Скорость. Прозрачность.</div><h2>Весь торговый поток.<br /><span className="text-accent">В одном пространстве.</span></h2><p>Заявки, сделки и рыночные данные. Наблюдайте за подключениями и управляйте доступом из единой консоли.</p><div className="login-route"><span>Брокер</span><Icons.chevron size={16} /><span>FIX Gateway</span><Icons.chevron size={16} /><span>QUIK</span></div></div>
-        <div className="text-[11px] text-muted">FIX / QUIK · HTTP API · gRPC Stream</div>
-      </aside>
-      <div className="login-form-area"><form onSubmit={onSubmit} className="login-form space-y-5">
-        <div><div className="login-eyebrow">FIX Gateway</div><h1>Вход в консоль</h1><p className="text-sm text-muted">Используйте вашу учётную запись</p></div>
-        <label className="block space-y-1.5 text-sm">
-          <span className="text-muted">Email</span>
-          <input className="input" name="email" type="email" autoComplete="username" value={email} onChange={(e) => setEmail(e.target.value)} required />
-        </label>
-        <label className="block space-y-1.5 text-sm">
-          <span className="text-muted">Пароль</span>
-          <input
-            className="input"
-            type="password"
-            name="password"
-            autoComplete="current-password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            required
-          />
-        </label>
-        {error && <div role="alert" className="rounded-lg border border-rose-100 bg-rose-50 p-3 text-sm text-danger">{error}</div>}
-        <button className="btn w-full py-2.5" disabled={loading}>
-          {loading ? "Вход…" : "Войти"}
-        </button>
-        <div className="flex items-center justify-center gap-1.5 pt-3 text-[11px] text-muted"><Icons.lock size={12} />Доступ для авторизованных пользователей</div>
-      </form></div>
-    </div>
+    <main className="login-page">
+      <div className="login-window">
+        <aside className="login-story" aria-label="FIX Gateway">
+          <div className="login-brand">
+            <div className="login-brand-mark"><Icons.logo size={25} /></div>
+            <div>
+              <strong>FIX Gateway</strong>
+              <span>Операционная консоль</span>
+            </div>
+          </div>
+
+          <div className="login-story-content">
+            <div className="login-eyebrow">Единая точка управления</div>
+            <h2>Торговый поток.<br /><span>Под вашим<br />контролем.</span></h2>
+            <p>Заявки, сделки и подключения —<br className="login-desktop-break" /> в одном рабочем пространстве.</p>
+
+            <div className="login-network" aria-hidden="true">
+              <div className="login-network-node">
+                <div className="login-network-icon"><Icons.brokers size={21} /></div>
+                <span>Брокеры</span>
+              </div>
+              <div className="login-network-line"><Icons.chevron size={12} /></div>
+              <div className="login-network-node login-network-gateway">
+                <div className="login-network-icon"><Icons.logo size={27} /></div>
+                <span>Gateway</span>
+              </div>
+              <div className="login-network-line"><Icons.chevron size={12} /></div>
+              <div className="login-network-node">
+                <div className="login-network-icon"><Icons.adapters size={21} /></div>
+                <span>QUIK</span>
+              </div>
+            </div>
+          </div>
+
+          <div className="login-story-footer"><span />Инфраструктура торговых операций</div>
+        </aside>
+
+        <section className="login-form-area" aria-labelledby="login-title">
+          <form onSubmit={onSubmit} className="login-form" aria-busy={loading}>
+            <div className="login-form-heading">
+              <div className="login-form-symbol"><Icons.lock size={23} /></div>
+              <h1 id="login-title">Вход в консоль</h1>
+              <p>Добро пожаловать.<br /> Войдите в свою учётную запись.</p>
+            </div>
+
+            <div className="login-fields">
+              <div className="login-field">
+                <label htmlFor="login-email">Электронная почта</label>
+                <input
+                  id="login-email"
+                  className="login-input"
+                  name="email"
+                  type="email"
+                  autoComplete="username"
+                  autoCapitalize="none"
+                  spellCheck={false}
+                  placeholder="name@company.com"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  aria-describedby={error ? "login-error" : undefined}
+                  readOnly={loading}
+                  required
+                />
+              </div>
+
+              <div className="login-field">
+                <label htmlFor="login-password">Пароль</label>
+                <div className="login-password">
+                  <input
+                    id="login-password"
+                    className="login-input"
+                    type={showPassword ? "text" : "password"}
+                    name="password"
+                    autoComplete="current-password"
+                    placeholder="Введите пароль"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    aria-describedby={error ? "login-error" : undefined}
+                    readOnly={loading}
+                    required
+                  />
+                  <button
+                    className="login-password-toggle"
+                    type="button"
+                    onClick={() => setShowPassword((visible) => !visible)}
+                    aria-label={showPassword ? "Скрыть пароль" : "Показать пароль"}
+                    aria-controls="login-password"
+                    title={showPassword ? "Скрыть пароль" : "Показать пароль"}
+                  >
+                    <Icons.eye size={19} />
+                    {showPassword && <span className="login-eye-slash" aria-hidden="true" />}
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {error && <div id="login-error" role="alert" className="login-error"><Icons.info size={17} /><span>{error}</span></div>}
+
+            <button className="login-submit" type="submit" disabled={loading} aria-live="polite">
+              <span>{loading ? "Выполняется вход…" : "Войти в консоль"}</span>
+              {loading ? <span className="login-spinner" aria-hidden="true" /> : <Icons.chevron size={18} />}
+            </button>
+
+            <div className="login-form-footer"><Icons.lock size={13} /><span>Доступ для авторизованных пользователей</span></div>
+          </form>
+        </section>
+      </div>
+    </main>
   );
 }

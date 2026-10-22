@@ -515,7 +515,7 @@ func (s *Store) ApplyExecutionReport(ctx context.Context, fixClOrdID, origClOrdI
 		if lastPx.IsNegative() || lastQty.IsNegative() || cumQty.IsNegative() || leavesQty.IsNegative() {
 			return domain.Order{}, nil, fmt.Errorf("negative execution quantities or price")
 		}
-		exec, err = insertExecution(ctx, tx, o.ID, execID, lastQty, lastPx, filled, leavesQty, adapterID)
+		exec, err = insertExecution(ctx, tx, o.ID, execID, lastQty, lastPx, filled, leavesQty, adapterID, rawFIX)
 		if err != nil {
 			return domain.Order{}, nil, err
 		}
@@ -661,7 +661,9 @@ SELECT e.id, e.order_id, e.exec_id, e.last_qty, e.last_px, e.cum_qty, e.leaves_q
        COALESCE(NULLIF(o.fix_client_id, ''), '') AS client_code,
        COALESCE(NULLIF(o.fix_firm, ''), '') AS quik_firm,
        COALESCE(NULLIF(f.firm_name, ''), NULLIF(bf.name, ''), NULLIF(b.name, ''), '') AS firm_name,
-       o.fix_cl_ord_id, o.quik_order_id
+       o.fix_cl_ord_id, o.quik_order_id,
+       COALESCE(e.execution_date, (e.created_at AT TIME ZONE 'UTC')::date)::text,
+       e.trade_match_id, e.contra_broker, e.contra_trader
 FROM executions e
 JOIN orders o ON o.id = e.order_id
 JOIN instruments i ON i.id = o.instrument_id
@@ -677,9 +679,9 @@ func (s *Store) ListTrades(ctx context.Context, brokerID *int64, limit int) ([]d
 	var rows pgx.Rows
 	var err error
 	if brokerID != nil {
-		rows, err = s.pool.Query(ctx, tradeSelect+` WHERE o.broker_id=$1 ORDER BY e.created_at DESC LIMIT $2`, *brokerID, limit)
+		rows, err = s.pool.Query(ctx, tradeSelect+` WHERE o.broker_id=$1 ORDER BY e.created_at DESC, e.id DESC LIMIT $2`, *brokerID, limit)
 	} else {
-		rows, err = s.pool.Query(ctx, tradeSelect+` ORDER BY e.created_at DESC LIMIT $1`, limit)
+		rows, err = s.pool.Query(ctx, tradeSelect+` ORDER BY e.created_at DESC, e.id DESC LIMIT $1`, limit)
 	}
 	if err != nil {
 		return nil, err
@@ -687,12 +689,8 @@ func (s *Store) ListTrades(ctx context.Context, brokerID *int64, limit int) ([]d
 	defer rows.Close()
 	var out []domain.Trade
 	for rows.Next() {
-		var t domain.Trade
-		if err := rows.Scan(
-			&t.ID, &t.OrderID, &t.ExecID, &t.LastQty, &t.LastPx, &t.CumQty, &t.LeavesQty, &t.AdapterID, &t.CreatedAt,
-			&t.BrokerID, &t.ClientOrderID, &t.Symbol, &t.Board, &t.Side,
-			&t.ClientCode, &t.QuikFirm, &t.FirmName, &t.FixClOrdID, &t.QuikOrderID,
-		); err != nil {
+		t, err := scanTrade(rows)
+		if err != nil {
 			return nil, err
 		}
 		out = append(out, t)
@@ -708,12 +706,8 @@ func (s *Store) ListTradesByOrder(ctx context.Context, orderID uuid.UUID) ([]dom
 	defer rows.Close()
 	var out []domain.Trade
 	for rows.Next() {
-		var t domain.Trade
-		if err := rows.Scan(
-			&t.ID, &t.OrderID, &t.ExecID, &t.LastQty, &t.LastPx, &t.CumQty, &t.LeavesQty, &t.AdapterID, &t.CreatedAt,
-			&t.BrokerID, &t.ClientOrderID, &t.Symbol, &t.Board, &t.Side,
-			&t.ClientCode, &t.QuikFirm, &t.FirmName, &t.FixClOrdID, &t.QuikOrderID,
-		); err != nil {
+		t, err := scanTrade(rows)
+		if err != nil {
 			return nil, err
 		}
 		out = append(out, t)
@@ -1027,7 +1021,8 @@ func effectiveFillQty(prior, lastQty, cumQty decimal.Decimal) decimal.Decimal {
 	return prior
 }
 
-func insertExecution(ctx context.Context, tx pgx.Tx, orderID uuid.UUID, execID string, lastQty, lastPx, cumQty, leavesQty decimal.Decimal, adapterID string) (*domain.Execution, error) {
+func insertExecution(ctx context.Context, tx pgx.Tx, orderID uuid.UUID, execID string, lastQty, lastPx, cumQty, leavesQty decimal.Decimal, adapterID, rawFIX string) (*domain.Execution, error) {
+	match := executionMatchFromFIX(rawFIX)
 	executionDate, err := executionDateFromContext(ctx)
 	if err != nil {
 		return nil, err
@@ -1035,9 +1030,13 @@ func insertExecution(ctx context.Context, tx pgx.Tx, orderID uuid.UUID, execID s
 	// Legacy executions have no reliable venue date. Preserve their original
 	// per-order replay protection rather than guessing a date during migration.
 	var legacyID uuid.UUID
+	var legacyMatchID string
 	var legacyQty, legacyPx, legacyCum, legacyLeaves decimal.Decimal
-	err = tx.QueryRow(ctx, `SELECT id,last_qty,last_px,cum_qty,leaves_qty FROM executions WHERE order_id=$1 AND exec_id=$2 AND execution_date IS NULL FOR UPDATE`, orderID, execID).Scan(&legacyID, &legacyQty, &legacyPx, &legacyCum, &legacyLeaves)
+	err = tx.QueryRow(ctx, `SELECT id,last_qty,last_px,cum_qty,leaves_qty,trade_match_id FROM executions WHERE order_id=$1 AND exec_id=$2 AND execution_date IS NULL FOR UPDATE`, orderID, execID).Scan(&legacyID, &legacyQty, &legacyPx, &legacyCum, &legacyLeaves, &legacyMatchID)
 	if err == nil {
+		if legacyMatchID != "" && match.ID != "" && legacyMatchID != match.ID {
+			return nil, fmt.Errorf("conflicting legacy TradeMatchID for execution %s", execID)
+		}
 		if !legacyQty.Equal(lastQty) || !legacyPx.Equal(lastPx) || (executionDate != nil && (!legacyCum.Equal(cumQty) || !legacyLeaves.Equal(leavesQty))) {
 			return nil, fmt.Errorf("conflicting legacy execution ID %s; operator date reconciliation required", execID)
 		}
@@ -1048,25 +1047,30 @@ func insertExecution(ctx context.Context, tx pgx.Tx, orderID uuid.UUID, execID s
 	}
 	eid := uuid.New()
 	result, err := tx.Exec(ctx, `
-		INSERT INTO executions (id, order_id, exec_id, last_qty, last_px, cum_qty, leaves_qty, adapter_id,execution_date)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT(order_id,execution_date,exec_id) DO NOTHING`, eid, orderID, execID, lastQty, lastPx, cumQty, leavesQty, adapterID, executionDate)
+		INSERT INTO executions (id, order_id, exec_id, last_qty, last_px, cum_qty, leaves_qty, adapter_id,execution_date,trade_match_id,contra_broker,contra_trader)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) ON CONFLICT(order_id,execution_date,exec_id) DO NOTHING`, eid, orderID, execID, lastQty, lastPx, cumQty, leavesQty, adapterID, executionDate, match.ID, match.Broker, match.Trader)
 	if err != nil {
 		return nil, err
 	}
 	if result.RowsAffected() == 0 {
 		var previousOrder uuid.UUID
+		var previousMatchID string
 		var qty, px decimal.Decimal
-		if err := tx.QueryRow(ctx, `SELECT order_id,last_qty,last_px FROM executions WHERE order_id=$1 AND execution_date IS NOT DISTINCT FROM $2::date AND exec_id=$3`, orderID, executionDate, execID).Scan(&previousOrder, &qty, &px); err != nil {
+		if err := tx.QueryRow(ctx, `SELECT order_id,last_qty,last_px,trade_match_id FROM executions WHERE order_id=$1 AND execution_date IS NOT DISTINCT FROM $2::date AND exec_id=$3`, orderID, executionDate, execID).Scan(&previousOrder, &qty, &px, &previousMatchID); err != nil {
 			return nil, err
 		}
 		if previousOrder != orderID || !qty.Equal(lastQty) || !px.Equal(lastPx) {
 			return nil, fmt.Errorf("conflicting execution ID %s", execID)
+		}
+		if previousMatchID != "" && match.ID != "" && previousMatchID != match.ID {
+			return nil, fmt.Errorf("conflicting TradeMatchID for execution %s", execID)
 		}
 		return nil, nil
 	}
 	ad := adapterID
 	return &domain.Execution{
 		ID: eid, OrderID: orderID, ExecID: execID, LastQty: lastQty, LastPx: lastPx,
+		TradeMatchID: match.ID, ContraBroker: match.Broker, ContraTrader: match.Trader,
 		CumQty: cumQty, LeavesQty: leavesQty, AdapterID: &ad, CreatedAt: time.Now().UTC(),
 	}, nil
 }

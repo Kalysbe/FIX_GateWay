@@ -6,12 +6,15 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/fix-gateway/backend/internal/domain"
+	"github.com/fix-gateway/backend/internal/fixaudit"
+	"github.com/fix-gateway/backend/internal/metrics"
 	"github.com/quickfixgo/quickfix"
 	"github.com/quickfixgo/quickfix/store/file"
 	"github.com/shopspring/decimal"
@@ -24,6 +27,8 @@ type Adapter struct {
 	onExec    domain.ExecutionHandler
 	app       *sessionApp
 	initiator *quickfix.Initiator
+	auditLog  *fixaudit.Factory
+	auditMu   sync.RWMutex
 	status    atomic.Value
 	active    atomic.Int64
 	processed atomic.Int64
@@ -93,14 +98,35 @@ func (a *Adapter) Start(ctx context.Context) error {
 		return err
 	}
 	storeFactory := file.NewStoreFactory(settings)
-	logFactory := quickfix.NewNullLogFactory()
+	maxBytes := fixaudit.DefaultMaxBytes
+	if value := os.Getenv("FIX_AUDIT_MAX_BYTES"); value != "" {
+		maxBytes, err = strconv.ParseInt(value, 10, 64)
+		if err != nil || maxBytes <= 0 {
+			return fmt.Errorf("invalid FIX_AUDIT_MAX_BYTES")
+		}
+	}
+	metrics.FIXAuditCapacity.WithLabelValues(a.meta.ID).Set(float64(maxBytes))
+	logFactory, err := fixaudit.New(filepath.Join(a.storeDir, a.meta.ID, "audit"), maxBytes, func(problem error) {
+		metrics.FIXAuditFailures.WithLabelValues(a.meta.ID).Inc()
+		a.log.Error("cannot persist FIX transport audit; stopping before further processing", "adapter_id", a.meta.ID, "error", problem)
+		os.Exit(1)
+	}, func(used int64) { metrics.FIXAuditBytes.WithLabelValues(a.meta.ID).Set(float64(used)) })
+	if err != nil {
+		a.status.Store(domain.AdapterOffline)
+		return fmt.Errorf("FIX transport audit unavailable: %w", err)
+	}
+	a.auditMu.Lock()
+	a.auditLog = logFactory
+	a.auditMu.Unlock()
 	initiator, err := quickfix.NewInitiator(a.app, storeFactory, settings, logFactory)
 	if err != nil {
+		_ = logFactory.Close()
 		a.status.Store(domain.AdapterOffline)
 		return err
 	}
 	a.initiator = initiator
 	if err := initiator.Start(); err != nil {
+		_ = logFactory.Close()
 		a.status.Store(domain.AdapterOffline)
 		return err
 	}
@@ -131,8 +157,27 @@ func (a *Adapter) Stop(ctx context.Context) error {
 	if a.initiator != nil {
 		a.initiator.Stop()
 	}
+	a.auditMu.Lock()
+	if a.auditLog != nil {
+		err := a.auditLog.Close()
+		a.auditLog = nil
+		if err != nil {
+			a.auditMu.Unlock()
+			return err
+		}
+	}
+	a.auditMu.Unlock()
 	a.status.Store(domain.AdapterOffline)
 	return nil
+}
+
+func (a *Adapter) AuditUsage() (int64, int64) {
+	a.auditMu.RLock()
+	defer a.auditMu.RUnlock()
+	if a.auditLog == nil {
+		return 0, 0
+	}
+	return a.auditLog.Usage()
 }
 
 func (a *Adapter) HealthCheck(ctx context.Context) (domain.HealthDetails, error) {

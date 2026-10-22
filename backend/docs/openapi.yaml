@@ -333,11 +333,16 @@ paths:
         - bearerAuth: []
       description: |
         Requires `orders:read`. REST source for gRPC `marketdata.tick`: the same
-        quote fields (book, OHLC, volume, turnover and trading status) and automatic
-        FIX subscription state. Raw FIX messages are omitted. Decimal values are strings.
+        quote fields (book, OHLC, volume, turnover, trading status and update time).
+        Adapter IDs, FIX request IDs, raw FIX fields and internal subscription state
+        are omitted. Decimal values are strings.
         Without filters returns all subscribed instruments. Optional symbol (ticker
-        or SecurityID) and board filters affect this response only. replace=true
-        denotes a full snapshot; live=true requires an available ACTIVE or PARTIAL feed.
+        or SecurityID) and board filters affect this response only. A successful
+        GET always returns a complete selection in quotes, without source, live,
+        replace or subscription fields. An unavailable feed returns HTTP 503 with
+        Retry-After; no matching quotes in an available feed returns quotes=[].
+        updated_at is the quote's receipt time; feed connectivity alone does not
+        guarantee freshness or completeness of an individual quote.
       parameters:
         - in: query
           name: symbol
@@ -347,7 +352,7 @@ paths:
           schema: {type: string}
       responses:
         "200":
-          description: Current snapshot; quotes is empty when unavailable or no instrument matches
+          description: Current snapshot; quotes is empty when no instrument in the available feed matches
           content:
             application/json:
               schema:
@@ -359,7 +364,7 @@ paths:
         "429":
           description: Rate limited
         "503":
-          description: Authentication temporarily unavailable or processing capacity exceeded
+          description: Market data or authentication temporarily unavailable, or processing capacity exceeded
   /api/v1/orderbook:
     get:
       tags: [Broker]
@@ -732,6 +737,50 @@ paths:
                     type: array
                     items:
                       type: object
+  /api/v1/admin/tokens/search:
+    post:
+      tags: [Admin]
+      summary: Find a broker API token
+      description: |
+        Available to authenticated admin-console users, including read-only roles.
+        Accepts the full API token (optionally with Bearer), its UUID, or its exact
+        8-character display prefix. Prefixes may match multiple tokens; at most 20
+        results are returned. Full credentials match stored current or legacy hashes;
+        there is no fallback from an invalid full credential to a prefix match.
+        Expired, disabled and revoked tokens remain searchable. The operation does
+        not authenticate the supplied token or modify its last-used or stored status.
+        Send the credential only in the JSON body. It is not echoed, cached or recorded
+        in the audit payload. Responses contain safe metadata and never token hashes.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [token]
+              properties:
+                token: {type: string, minLength: 8, maxLength: 512, format: password, writeOnly: true}
+      responses:
+        "200":
+          description: Matching token metadata; an empty array means no match
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [tokens, has_more]
+                properties:
+                  tokens:
+                    type: array
+                    maxItems: 20
+                    items: {$ref: "#/components/schemas/AdminTokenMetadata"}
+                  has_more: {type: boolean}
+        "400": {description: Invalid search input}
+        "401": {description: Admin session required}
+        "403": {description: Insufficient role}
+        "500": {description: Search unavailable}
   /api/v1/admin/tokens/{id}/revoke:
     post:
       summary: Revoke token (idempotent)
@@ -840,12 +889,63 @@ paths:
           description: QUIK export database is not configured
   /api/v1/admin/trades:
     get:
-      summary: List FIX trades (ExecutionReport fills from executions table)
+      summary: List recorded QUIK trades and both persisted sides
+      description: Returns all persisted sides of the latest 500 exchange trades, ordered by trade date and numeric QUIK trade number. Uses trades/trade_sides, with immutable FIX and QUIK source evidence in trade_reports. No inferred counterparty rows. A side need not have a local Gateway order or ExecID. Coverage describes the entire ledger and the latest read-only QUIK reconciliation. Broker endpoints still return only their local order executions.
       security:
         - bearerAuth: []
       responses:
         "200":
-          description: OK
+          description: Latest 500 exchange trades with all persisted sides and global coverage
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  trades:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/RecordedTradeSide"
+                  coverage:
+                    type: object
+                    properties:
+                      trades: {type: integer}
+                      sides: {type: integer}
+                      complete: {type: integer}
+                      incomplete: {type: integer}
+                      report_errors: {type: integer}
+                      last_sync_at: {type: string, format: date-time, nullable: true}
+                      last_sync_records: {type: integer, nullable: true}
+                      last_sync_error: {type: string, nullable: true}
+                      sync_running: {type: boolean}
+  /api/v1/admin/trades/{id}:
+    get:
+      summary: Get a trade and its recorded counterpart for the printable admin detail page
+      description: Accepts a ledger trade UUID, persisted side UUID, or linked legacy execution UUID. Returns the actual saved BUY and SELL records, including sides restored from QUIK without a local Gateway order. Works outside the latest list window.
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: {type: string, format: uuid}
+      responses:
+        "200":
+          description: Persisted sides belonging to this exchange trade
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  trades:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/RecordedTradeSide"
+        "400":
+          description: Invalid UUID
+        "401":
+          description: Admin authentication required
+        "404":
+          description: Trade not found
   /api/v1/admin/monitoring:
     get:
       tags: [Admin]
@@ -1063,6 +1163,51 @@ paths:
         "200":
           description: OK
   /api/v1/admin/tokens/{id}:
+    get:
+      tags: [Admin]
+      summary: Token overview with broker and access restrictions
+      description: |
+        Read-only metadata inspection. Includes broker identity/status, token rights,
+        firm, creation/expiry/revocation dates, last recorded use and IP, rotation
+        reference, broker request/order limits and IP whitelist. ACTIVE tokens whose
+        expiry has passed are presented as EXPIRED without updating the stored row.
+        Token hashes and full credentials are never returned. Cache-Control is no-store.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/TokenID"
+      responses:
+        "200":
+          description: Token overview
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [token, broker, ip_whitelist]
+                properties:
+                  token: {$ref: "#/components/schemas/AdminTokenMetadata"}
+                  broker:
+                    type: object
+                    properties:
+                      id: {type: integer}
+                      code: {type: string}
+                      name: {type: string}
+                      status: {type: string}
+                      ip_whitelist_enabled: {type: boolean}
+                      rate_limit_rps: {type: integer}
+                      rate_limit_orders_per_sec: {type: integer}
+                  ip_whitelist:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: {type: integer}
+                        ip_cidr: {type: string}
+                        note: {type: string}
+        "400": {description: Invalid token UUID}
+        "401": {description: Admin session required}
+        "403": {description: Insufficient role}
+        "404": {description: Token not found}
     delete:
       tags: [Admin]
       summary: Revoke token
@@ -1896,8 +2041,6 @@ components:
       type: object
       description: Строка текущих торгов; пустая строка цены или статуса означает, что значение ещё не получено
       properties:
-        adapter_id: {type: string}
-        md_req_id: {type: string}
         symbol: {type: string}
         security_id: {type: string}
         board: {type: string}
@@ -1932,38 +2075,86 @@ components:
         official_price: {type: string}
         volume: {type: string}
         value: {type: string, description: Оборот}
-        entries:
-          type: object
-          additionalProperties: {type: string}
         updated_at: {type: string, format: date-time}
-    MarketDataSubscription:
+    AdminTokenMetadata:
       type: object
-      required: [status, expected, confirmed]
+      description: API token metadata; full credentials and storage hashes are excluded
+      required: [id, broker_id, name, token_prefix, status, permissions, created_at]
       properties:
-        adapter_id: {type: string}
-        status: {type: string, enum: [WAITING, STARTING, ACTIVE, PARTIAL, RETRYING, OFFLINE]}
-        expected: {type: integer, description: Количество подписанных инструментов всего шлюза}
-        confirmed: {type: integer, description: Количество подтверждённых инструментов всего шлюза}
-        error: {type: string}
-        next_retry_at: {type: string, format: date-time}
-        last_received_at: {type: string, format: date-time}
+        id: {type: string, format: uuid}
+        broker_id: {type: integer}
+        broker_code: {type: string}
+        broker_name: {type: string}
+        name: {type: string}
+        description: {type: string}
+        token_prefix: {type: string}
+        status: {type: string, enum: [ACTIVE, EXPIRED, REVOKED, DISABLED]}
+        permissions: {type: array, items: {type: string}}
+        quik_firm: {type: string}
+        created_at: {type: string, format: date-time}
+        expires_at: {type: string, format: date-time, nullable: true}
+        revoked_at: {type: string, format: date-time, nullable: true}
+        last_used_at: {type: string, format: date-time, nullable: true}
+        last_used_ip: {type: string, nullable: true}
+        rotated_from: {type: string, format: uuid, nullable: true}
     MarketDataResponse:
       type: object
-      required: [source, live, quotes, subscription, replace]
+      required: [quotes]
       properties:
-        source: {type: string, enum: [live]}
-        live: {type: boolean}
-        replace: {type: boolean, enum: [true]}
         quotes:
           type: array
           items:
             $ref: "#/components/schemas/MarketQuote"
-        subscription:
-          $ref: "#/components/schemas/MarketDataSubscription"
-        note: {type: string}
+    RecordedTradeSide:
+      type: object
+      properties:
+        id: {type: string, format: uuid, description: Persisted side UUID}
+        ledger_trade_id: {type: string, format: uuid}
+        quik_trade_num: {type: string, description: "Exact decimal QUIK trade number, without float conversion"}
+        trade_match_id: {type: string}
+        execution_date: {type: string, format: date}
+        side: {type: string, enum: [BUY, SELL]}
+        order_id: {type: string, format: uuid, nullable: true}
+        execution_id: {type: string, format: uuid, nullable: true}
+        exec_id: {type: string, description: Empty when no FIX execution report was received}
+        quik_order_num: {type: string}
+        quik_order_id: {type: string, nullable: true}
+        client_order_id: {type: string, nullable: true}
+        broker_id: {type: integer, nullable: true}
+        fix_cl_ord_id: {type: string, nullable: true}
+        symbol: {type: string}
+        board: {type: string}
+        client_code: {type: string}
+        quik_firm: {type: string}
+        firm_name: {type: string}
+        account: {type: string}
+        contra_broker: {type: string}
+        last_qty: {type: string}
+        last_px: {type: string}
+        cum_qty: {type: string, nullable: true}
+        leaves_qty: {type: string, nullable: true}
+        adapter_id: {type: string, nullable: true}
+        has_fix_report: {type: boolean}
+        has_quik_record: {type: boolean}
+        created_at: {type: string, format: date-time}
+        received_at: {type: string, format: date-time}
+        trade_time_known: {type: boolean}
     Trade:
       type: object
       properties:
+        trade_match_id:
+          type: string
+          description: Exchange matched trade identifier (FIX 880). Distinct from per-order exec_id.
+        contra_broker:
+          type: string
+          description: Counterparty broker from FIX 375, when disclosed.
+        contra_trader:
+          type: string
+          description: Counterparty trader from FIX 337, not a client identifier.
+        execution_date:
+          type: string
+          format: date
+          description: FIX trade date, or UTC receipt date for legacy executions.
         id:
           type: string
           format: uuid

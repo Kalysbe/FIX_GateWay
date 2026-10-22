@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "receiptId": "b57dd16b-226b-49a4-9b7b-c26f98938910",
+  "status": "current",
+  "command": "deliver",
+  "type": "architecture",
+  "input": "C:\\Users\\krahmanberdiev\\Desktop\\Проекты\\FIX_GateWay\\.archify\\architecture-fix-gateway-explained-20261014-161645\\candidate.json",
+  "output": "C:\\Users\\krahmanberdiev\\Desktop\\Проекты\\FIX_GateWay\\.archify\\architecture-fix-gateway-explained-20261014-161645\\fix-gateway-diagram.html",
+  "specification": {
+    "sha256": "8044a46bfdd060727d99b23ced4b1b6e77b143257da10b9656e456c12411fbc3",
+    "bytes": 70906
+  },
+  "artifact": {
+    "sha256": "00cfcc86f81d21d1059a647f62c575af1e6355e2cc51ceab4b2a67684cd0162c",
+    "bytes": 878797
+  }
+}

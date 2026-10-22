@@ -55,6 +55,7 @@ export function AdminStreamProvider({ children }: { children: ReactNode }) {
           refresh.add([["order"]]);
           refresh.add([["order-trace"]]);
           refresh.add([["admin-trades"]]);
+          refresh.add([["admin-trade"]]);
           refresh.add([["dashboard"]]);
           break;
         case "positions.updated":

@@ -34,6 +34,7 @@ import (
 	"github.com/fix-gateway/backend/internal/ratelimit"
 	"github.com/fix-gateway/backend/internal/realtime"
 	"github.com/fix-gateway/backend/internal/refdata"
+	"github.com/fix-gateway/backend/internal/tradeledger"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -50,6 +51,7 @@ type Server struct {
 	brokers            *brokers.Store
 	orders             *orders.Service
 	orderStore         *orders.Store
+	tradeLedger        *tradeledger.Store
 	adapters           *adapters.Store
 	manager            *adapters.Manager
 	outbox             *outbox.Store
@@ -86,6 +88,7 @@ func NewServer(
 		refdata:         refdata.NewStore(pool),
 		positions:       positions.NewStore(pool),
 		marketdata:      marketdata.NewStore(pool),
+		tradeLedger:     tradeledger.NewStore(pool),
 		quikAPI:         quikapi.NewClient(quikapi.NewStore(pool, cfg.QuikAPIBaseURL), nil),
 		obs:             obs,
 		trusted:         observability.ParseTrustedProxies(cfg.TrustedProxies),
@@ -195,6 +198,8 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("PATCH /api/v1/admin/brokers/{id}", s.adminWrite(s.patchBroker))
 	mux.Handle("POST /api/v1/admin/brokers/{id}/tokens", s.adminWrite(s.createToken))
 	mux.Handle("GET /api/v1/admin/tokens", s.adminRO(s.listAllTokens))
+	mux.Handle("POST /api/v1/admin/tokens/search", s.adminRO(s.searchTokens))
+	mux.Handle("GET /api/v1/admin/tokens/{id}", s.adminRO(s.getTokenOverview))
 	mux.Handle("GET /api/v1/admin/brokers/{id}/tokens", s.adminRO(s.listTokens))
 	mux.Handle("GET /api/v1/admin/brokers/{id}/security", s.adminRO(s.brokerSecurity))
 	mux.Handle("GET /api/v1/admin/brokers/{id}/stats", s.adminRO(s.brokerStats))
@@ -219,6 +224,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/v1/admin/orders/{id}", s.adminRO(s.getAdminOrder))
 	mux.Handle("GET /api/v1/admin/emitents/{symbol}/orders", s.adminRO(s.listEmitentOrders))
 	mux.Handle("GET /api/v1/admin/trades", s.adminRO(s.listAdminTrades))
+	mux.Handle("GET /api/v1/admin/trades/{id}", s.adminRO(s.getAdminTrade))
 	mux.Handle("GET /api/v1/admin/positions", s.adminRO(s.listAdminPositions))
 	mux.Handle("PUT /api/v1/admin/positions", s.adminWrite(s.setAdminPositions))
 	mux.Handle("PUT /api/v1/admin/positions/cash", s.adminWrite(s.setAdminCash))
@@ -1242,12 +1248,17 @@ func (s *Server) listEmitentOrders(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) listAdminTrades(w http.ResponseWriter, r *http.Request) {
-	list, err := s.orderStore.ListTrades(r.Context(), nil, 500)
+	list, err := s.tradeLedger.List(r.Context(), 500)
 	if err != nil {
 		s.writeInternal(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"trades": mapTrades(list)})
+	coverage, err := s.tradeLedger.Coverage(r.Context())
+	if err != nil {
+		s.writeInternal(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"trades": list, "coverage": coverage})
 }
 
 func (s *Server) listAdminPositions(w http.ResponseWriter, r *http.Request) {
@@ -1579,6 +1590,8 @@ func tradeDTO(t domain.Trade) map[string]any {
 		"id": t.ID, "order_id": t.OrderID, "exec_id": t.ExecID,
 		"last_qty": t.LastQty, "last_px": t.LastPx, "cum_qty": t.CumQty, "leaves_qty": t.LeavesQty,
 		"adapter_id": t.AdapterID, "created_at": t.CreatedAt,
+		"execution_date": t.ExecutionDate,
+		"trade_match_id": t.TradeMatchID, "contra_broker": t.ContraBroker, "contra_trader": t.ContraTrader,
 		"broker_id": t.BrokerID, "client_order_id": t.ClientOrderID,
 		"symbol": t.Symbol, "board": t.Board, "side": t.Side,
 		"client_code": t.ClientCode, "quik_firm": t.QuikFirm, "firm_name": t.FirmName,
@@ -1621,6 +1634,14 @@ func mapEvents(list []domain.OrderEvent) []map[string]any {
 
 // OnExecution is invoked by the durable inbox worker, never by the FIX callback.
 func (s *Server) OnExecution(ctx context.Context, report adapters.ExecutionReport) error {
+	ledgerSaved := false
+	if s.tradeLedger != nil && s.tradeLedger.Pool != nil {
+		var err error
+		ledgerSaved, err = s.tradeLedger.RecordFIX(ctx, report)
+		if err != nil {
+			return err
+		}
+	}
 	if report.ProtocolReject {
 		return fmt.Errorf("FIX protocol reject requires venue reconciliation (message %s sequence %s); report retained", report.RefMessageType, report.RefSeqNum)
 	}
@@ -1651,6 +1672,9 @@ func (s *Server) OnExecution(ctx context.Context, report adapters.ExecutionRepor
 		order, err := s.orderStore.ApplyCancelReject(ctx, report.ClOrdID, report.OrigClOrdID, report.OrderID, report.AdapterID,
 			strings.TrimSpace(report.Text+" "+report.CxlRejReason), report.RawFIX)
 		if err != nil {
+			if errors.Is(err, orders.ErrNotFound) && s.tradeLedger != nil && s.tradeLedger.Pool != nil && report.RawFIX != "" {
+				return nil
+			}
 			s.log.Error("apply cancel reject failed", "error", err, "cl_ord_id", report.ClOrdID, "orig_cl_ord_id", report.OrigClOrdID)
 			return err
 		}
@@ -1676,6 +1700,14 @@ func (s *Server) OnExecution(ctx context.Context, report adapters.ExecutionRepor
 	order, exec, err := s.orderStore.ApplyExecutionReport(ctx, report.ClOrdID, report.OrigClOrdID, report.ExecID, report.ExecType, report.OrdStatus,
 		report.OrderID, lastQty, lastPx, cumQty, leaves, report.AdapterID, report.Text, report.OrdRejReason, report.RawFIX)
 	if err != nil {
+		if errors.Is(err, orders.ErrNotFound) && s.tradeLedger != nil && s.tradeLedger.Pool != nil && report.RawFIX != "" {
+			// Raw evidence has been committed even for external orders. A real fill
+			// has also been recorded without manufacturing a local order.
+			if ledgerSaved && s.hub != nil {
+				s.hub.Broadcast("trade.created", map[string]any{"source": "fix"})
+			}
+			return nil
+		}
 		s.log.Error("apply execution report failed", "error", err, "cl_ord_id", report.ClOrdID,
 			"text", report.Text, "ord_rej_reason", report.OrdRejReason)
 		return err
@@ -1692,6 +1724,11 @@ func (s *Server) OnExecution(ctx context.Context, report adapters.ExecutionRepor
 	}
 	s.hub.BroadcastForBroker("order.updated", orderDTO(order), order.BrokerID)
 	if exec != nil {
+		if ledgerSaved {
+			if err := s.tradeLedger.LinkExecution(ctx, exec.ID, order.ID, exec.ExecID, exec.TradeMatchID); err != nil {
+				return err
+			}
+		}
 		s.hub.BroadcastForBroker("trade.created", exec, order.BrokerID)
 	}
 	s.emitOrderLifecycle(order, report)

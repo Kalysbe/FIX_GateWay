@@ -103,6 +103,7 @@ function NavLink({ item, active, path, onNavigate }: { item: NavItem; active: bo
 
 function NotificationBell() {
   const [open, setOpen] = useState(false);
+  const [instant, setInstant] = useState(false);
   const wrapRef = useRef<HTMLDivElement>(null);
   const { connected } = useAdminStream();
   const q = useQuery({
@@ -136,7 +137,7 @@ function NotificationBell() {
         title="Уведомления"
         aria-label="Уведомления"
         aria-expanded={open}
-        onClick={() => setOpen((v) => !v)}
+        onClick={(event) => { setInstant(event.detail === 0); setOpen((v) => !v); }}
       >
         <Icons.bell size={18} />
         {unread > 0 && (
@@ -146,7 +147,7 @@ function NotificationBell() {
         )}
       </button>
       {open && (
-        <div className="absolute right-0 z-30 mt-2 w-80 rounded-lg border border-line bg-panel p-2 shadow-lg">
+        <div className="notification-popover absolute right-0 z-30 mt-2 w-80 rounded-lg border border-line bg-panel p-2 shadow-lg" data-motion={instant ? "instant" : undefined}>
           <div className="mb-1 flex items-center justify-between px-2 py-1">
             <span className="text-sm font-medium">Уведомления</span>
             <Link to="/notifications" className="text-xs text-accent" onClick={() => setOpen(false)}>
@@ -187,6 +188,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   const crumbs = override?.length ? override : breadcrumbs(loc.pathname);
   const user = getSessionUser();
   const [menuOpen, setMenuOpen] = useState(false);
+  const [menuInstant, setMenuInstant] = useState(false);
   const sidebarRef = useRef<HTMLElement>(null);
   const [desktop, setDesktop] = useState(() => window.matchMedia("(min-width: 768px)").matches);
   useEffect(() => {
@@ -217,7 +219,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     function key(e: KeyboardEvent) {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") { e.preventDefault(); setCommandOpen(v => !v); }
-      if (e.key === "Escape") setMenuOpen(false);
+      if (e.key === "Escape") { setMenuInstant(true); setMenuOpen(false); }
     }
     document.addEventListener("keydown", key);
     return () => document.removeEventListener("keydown", key);
@@ -231,7 +233,8 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
       {menuOpen && (
         <button
           type="button"
-          className="fixed inset-0 z-30 bg-slate-900/40 md:hidden"
+          className="navigation-backdrop fixed inset-0 z-30 bg-slate-900/40 md:hidden"
+          data-motion={menuInstant ? "instant" : undefined}
           aria-label="Закрыть меню"
           onClick={closeMenu}
         />
@@ -240,7 +243,8 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
         ref={sidebarRef}
         inert={!desktop && !menuOpen}
         id="main-navigation"
-        className={`app-sidebar fixed inset-y-0 left-0 z-40 flex w-[224px] shrink-0 flex-col border-r border-line bg-white text-ink transition-transform md:sticky md:top-0 md:h-screen md:translate-x-0 ${
+        data-motion={menuInstant ? "instant" : undefined}
+        className={`app-sidebar fixed inset-y-0 left-0 z-40 flex w-[224px] shrink-0 flex-col border-r border-line bg-white text-ink md:sticky md:top-0 md:h-screen md:translate-x-0 ${
           menuOpen ? "translate-x-0" : "-translate-x-full"
         }`}
       >
@@ -284,7 +288,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
       <div className="flex min-w-0 flex-1 flex-col" inert={menuOpen && !desktop}>
         <header className="app-header sticky top-0 z-20 flex h-14 items-center justify-between gap-3 border-b border-line bg-white/95 px-4 backdrop-blur md:px-6">
           <div className="flex min-w-0 items-center gap-2 text-sm text-muted">
-            <button type="button" className="icon-btn md:hidden" aria-label="Меню" aria-expanded={menuOpen} aria-controls="main-navigation" onClick={() => setMenuOpen(true)}>
+            <button type="button" className="icon-btn md:hidden" aria-label="Меню" aria-expanded={menuOpen} aria-controls="main-navigation" onClick={(event) => { setMenuInstant(event.detail === 0); setMenuOpen(true); }}>
               <Icons.menu size={18} />
             </button>
             {crumbs.map((c, i) => (
@@ -330,6 +334,7 @@ function breadcrumbs(pathname: string): Array<{ label: string; to?: string }> {
   if (pathname === "/monitoring") return [{ label: "Мониторинг" }];
   if (pathname === "/rate-limits") return [{ label: "Rate Limits" }];
   if (pathname === "/") return [{ label: "Дашборд" }];
+  if (pathname.startsWith("/trades/")) return [{ label: "Сделки", to: "/trades" }, { label: "Карточка сделки" }];
   if (pathname.startsWith("/brokers/")) {
     return [{ label: "Брокеры", to: "/brokers" }, { label: "Карточка брокера" }];
   }

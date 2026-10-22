@@ -215,15 +215,18 @@ type OrderEvent struct {
 }
 
 type Execution struct {
-	ID        uuid.UUID       `json:"id"`
-	OrderID   uuid.UUID       `json:"order_id"`
-	ExecID    string          `json:"exec_id"`
-	LastQty   decimal.Decimal `json:"last_qty"`
-	LastPx    decimal.Decimal `json:"last_px"`
-	CumQty    decimal.Decimal `json:"cum_qty"`
-	LeavesQty decimal.Decimal `json:"leaves_qty"`
-	AdapterID *string         `json:"adapter_id,omitempty"`
-	CreatedAt time.Time       `json:"created_at"`
+	ID           uuid.UUID       `json:"id"`
+	OrderID      uuid.UUID       `json:"order_id"`
+	ExecID       string          `json:"exec_id"`
+	TradeMatchID string          `json:"trade_match_id,omitempty"`
+	ContraBroker string          `json:"contra_broker,omitempty"`
+	ContraTrader string          `json:"contra_trader,omitempty"`
+	LastQty      decimal.Decimal `json:"last_qty"`
+	LastPx       decimal.Decimal `json:"last_px"`
+	CumQty       decimal.Decimal `json:"cum_qty"`
+	LeavesQty    decimal.Decimal `json:"leaves_qty"`
+	AdapterID    *string         `json:"adapter_id,omitempty"`
+	CreatedAt    time.Time       `json:"created_at"`
 }
 
 // Trade is an execution enriched with order/FIX context for list APIs.
@@ -237,6 +240,10 @@ type Trade struct {
 	LeavesQty     decimal.Decimal `json:"leaves_qty"`
 	AdapterID     *string         `json:"adapter_id,omitempty"`
 	CreatedAt     time.Time       `json:"created_at"`
+	ExecutionDate string          `json:"execution_date"`
+	TradeMatchID  string          `json:"trade_match_id"`
+	ContraBroker  string          `json:"contra_broker"`
+	ContraTrader  string          `json:"contra_trader"`
 	BrokerID      int64           `json:"broker_id"`
 	ClientOrderID string          `json:"client_order_id"`
 	Symbol        string          `json:"symbol"`

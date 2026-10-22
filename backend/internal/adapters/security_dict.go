@@ -3,6 +3,7 @@ package adapters
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/fix-gateway/backend/internal/domain"
@@ -13,9 +14,26 @@ type SecurityDictionary interface {
 	FetchSecurities(ctx context.Context) ([]domain.SecurityRef, error)
 }
 
+// Keep reference data aligned with the feed consuming it. Map iteration could
+// otherwise select a different QUIK instance, with a different class list.
+func (m *Manager) securityAdapters() []Adapter {
+	list := m.snapshotAdapters()
+	owner := m.marketDataOwner()
+	sort.SliceStable(list, func(i, j int) bool {
+		if list[i].ID() == owner || list[j].ID() == owner {
+			return list[i].ID() == owner
+		}
+		if list[i].Meta().Priority != list[j].Meta().Priority {
+			return list[i].Meta().Priority < list[j].Meta().Priority
+		}
+		return list[i].ID() < list[j].ID()
+	})
+	return list
+}
+
 func (m *Manager) FetchSecurities(ctx context.Context) (adapterID string, items []domain.SecurityRef, err error) {
 	var firstErr error
-	for _, ad := range m.snapshotAdapters() {
+	for _, ad := range m.securityAdapters() {
 		if ad.Status() != domain.AdapterOnline && ad.Status() != domain.AdapterDegraded {
 			continue
 		}
@@ -49,7 +67,7 @@ func (m *Manager) FetchSecuritiesByBoard(ctx context.Context, board string) (ada
 		return m.FetchSecurities(ctx)
 	}
 	var firstErr error
-	for _, ad := range m.snapshotAdapters() {
+	for _, ad := range m.securityAdapters() {
 		if ad.Status() != domain.AdapterOnline && ad.Status() != domain.AdapterDegraded {
 			continue
 		}

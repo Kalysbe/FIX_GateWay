@@ -31,7 +31,7 @@ func parseSecurityDefinitionMessage(msg *quickfix.Message) (reqID string, totalH
 		if err != nil {
 			return ""
 		}
-		return v
+		return decodeFIXText(v)
 	}
 	reqID = get(tag.SecurityReqID)
 	if n := get(tag.TotalNumSecurities); n != "" {
@@ -63,6 +63,7 @@ func parseRelatedSymFromRaw(raw string) []domain.SecurityRef {
 	var out []domain.SecurityRef
 	var cur *domain.SecurityRef
 	inGroup := false
+	delimiter := ""
 
 	flush := func() {
 		if cur == nil {
@@ -95,11 +96,12 @@ func parseRelatedSymFromRaw(raw string) []domain.SecurityRef {
 		if eq <= 0 {
 			continue
 		}
-		t, v := p[:eq], p[eq+1:]
+		t, v := p[:eq], decodeFIXText(p[eq+1:])
 		switch t {
 		case "146": // NoRelatedSym
 			inGroup = true
 			flush()
+			delimiter = ""
 		case "311": // UnderlyingSymbol — group delimiter
 			if !inGroup {
 				inGroup = true
@@ -108,12 +110,19 @@ func parseRelatedSymFromRaw(raw string) []domain.SecurityRef {
 				flush()
 			}
 			ensure().Symbol = v
+			delimiter = "311"
 		case "55": // Symbol
 			if inGroup {
-				if cur != nil && cur.Symbol != "" && cur.SecurityID != "" {
+				// ARQA includes both 311 and 55 in the same underlying group.
+				// Only 311 starts the next group in that format; splitting at 55
+				// invented a second instrument with its name as SecurityID.
+				if delimiter != "311" && cur != nil && cur.Symbol != "" {
 					flush()
 				}
 				ensure().Symbol = v
+				if delimiter != "311" {
+					delimiter = "55"
+				}
 			}
 		case "309": // UnderlyingSecurityID
 			if inGroup {

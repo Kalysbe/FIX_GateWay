@@ -11,7 +11,7 @@ export function CommandPalette({ items, onClose }: { items: { to?: string; label
   const matches = items.filter(item => item.to && searchText(`${item.label} ${item.group ?? ""}`).includes(searchText(query)));
   const active = Math.min(index, Math.max(0, matches.length - 1));
   function open(to?: string) { if (to) { navigate(to); onClose(); } }
-  return <Modal title="Перейти к разделу" onClose={onClose}>
+  return <Modal title="Перейти к разделу" onClose={onClose} motion={false}>
     <div className="command-search"><Icons.search size={18} /><input data-autofocus className="input" aria-label="Поиск раздела" role="combobox" aria-autocomplete="list" aria-expanded="true" aria-controls="command-results" aria-activedescendant={matches.length ? `command-option-${active}` : undefined} placeholder="Заявки, подключения, брокеры…" value={query} onChange={e => { setQuery(e.target.value); setIndex(0); }} onKeyDown={e => {
       if (e.key === "ArrowDown" || e.key === "ArrowUp") { e.preventDefault(); setIndex((active + (e.key === "ArrowDown" ? 1 : -1) + matches.length) % Math.max(1, matches.length)); }
       if (e.key === "Enter") { e.preventDefault(); open(matches[active]?.to); }

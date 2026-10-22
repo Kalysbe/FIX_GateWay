@@ -1,6 +1,7 @@
 global:
   scrape_interval: 15s
 rule_files:
+  - /etc/prometheus/trades.rules.yml
   - /etc/prometheus/rate-limits.rules.yml
   - /etc/prometheus/gateway.rules.yml
 alerting:

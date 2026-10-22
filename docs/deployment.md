@@ -60,13 +60,14 @@ password: admin123
 | `DATABASE_URL` | PostgreSQL DSN (local default: `postgres://postgres:123@localhost:5432/fix_gateway?sslmode=disable`) |
 | `JWT_SECRET` | Admin JWT HMAC secret |
 | `API_TOKEN_PEPPER` | Pepper for API token hashing |
-| `APP_ENV` | `development` or `production`; production validates secrets, database TLS, HTTPS and HMAC settings |
+| `APP_ENV` | `development` or `production`; production validates strong secrets, verified database TLS and HTTPS |
 | `REQUIRE_HTTPS` | Reject non-HTTPS broker/admin traffic when `true`. In `APP_ENV=production` this is mandatory unless `ALLOW_INSECURE_HTTP=true` |
-| `HMAC_REQUIRED` | Require `X-Timestamp` / `X-Nonce` / `X-Signature` when `true`. Mandatory in production unless `ALLOW_INSECURE_HMAC=true` |
+| `HMAC_REQUIRED` | Require `X-Timestamp` / `X-Nonce` / `X-Signature` when `true`. Default `false`, including production; supplied signatures are always checked |
+| `GRPC_MTLS_REQUIRED` | Require client certificates when `true`. Default `false`; server TLS and token authorization remain required |
+| `GRPC_CLIENT_CERT` / `GRPC_CLIENT_KEY` | Internal HTTP-to-gRPC adapter client credentials. Empty by default; with mTLS enabled, default to `bridge.crt` / `bridge.key` beside `GRPC_TLS_CERT` |
 | `TRUSTED_PROXIES` | CIDRs of reverse proxies. `X-Forwarded-For` / `X-Forwarded-Proto` are trusted only from these peers. Leave empty if the gateway is reached directly |
 | `ALLOW_INSECURE_DB` | Production override for a connection without TLS or with a plaintext fallback |
 | `ALLOW_INSECURE_HTTP` | Production override to boot without `REQUIRE_HTTPS` |
-| `ALLOW_INSECURE_HMAC` | Production override to boot without `HMAC_REQUIRED` |
 | `DOCS_PUBLIC` | Serve Swagger/OpenAPI. Defaults to off in production |
 | `DEFAULT_RATE_LIMIT_RPS` / `DEFAULT_ORDER_RATE_LIMIT` | Per-token request and order rate limits |
 | `AUTH_FAIL_MAX_PER_MINUTE` | Brute-force threshold for failed Bearer auth per IP |
@@ -80,17 +81,29 @@ Adapter secrets (username/password) are referenced by env var **names** stored i
 ## Local (without Docker for gateway)
 
 1. Start a separate development PostgreSQL database and set `DATABASE_URL` to it.
-2. From `backend/`, run `go run ./cmd/devcerts -out certs` to generate the development mTLS certificates.
+2. From `backend/`, run `go run ./cmd/devcerts -out certs` to generate the development TLS certificates.
 3. Gateway applies migrations automatically (`MIGRATIONS_PATH=migrations`). The historical UAT migrations enable real ARQA adapters and disable simulators. For a simulator-only environment, use [Local testing](local-testing.md), which prepares the database before gateway startup.
 4. For a manually prepared simulator-only database, set the simulator adapter hosts to `127.0.0.1`, disable all ARQA adapters, then run `go run ./cmd/fixsimulator` and `go run ./cmd/gateway` in separate terminals from `backend/`.
-5. Run admin frontend: `cd frontend && npm ci && npm run dev`. Run the broker desk from `broker-app/` using the same commands.
+5. Run admin frontend: `cd frontend && npm ci && npm run dev`. Broker clients connect through the [REST + gRPC API](broker-api-guide.md).
 
 The supplied Compose stack is a development configuration. Production requires
-an operator-managed database connection with TLS, HTTPS termination, explicitly
-passed `HMAC_REQUIRED=true`, strong secrets, and production certificates. Setting
+an operator-managed database connection with verified TLS, HTTPS termination,
+VPN-only broker access, strong secrets, and production certificates. Setting
 `APP_ENV=production` alone does not configure these dependencies.
 
 ## Applying updates and Windows recovery
+
+### Сервер 172.23.10.96 и production QUIK
+
+Для существующего стенда на `172.23.10.96` используется пара `deploy/docker-compose.yml` + `deploy/docker-compose.override.yml`. Override задаёт `ADAPTER_HOST_OVERRIDE=172.23.10.84` для всех FIX-сессий, включая резервную, и `QUIK_API_BASE_URL=http://172.23.10.84:5000`. Админка остаётся на `5173`, API — на `8081`. Локальный тестовый стенд без этого override использует `192.168.0.89`.
+
+При переключении существующей БД также задать `adapters.host=172.23.10.84` для QUIK-адаптеров и `gateway_settings.quik_api_base_url=http://172.23.10.84:5000`: сохранённый origin API имеет приоритет над env. Если подключён опциональный read-only QUIK export, его `QUIK_EXPORT_DATABASE_URL` тоже должен указывать на `172.23.10.84`; credentials и настройки TLS сохранить. Основная БД самого gateway остаётся отдельной.
+
+```bash
+docker compose -p deploy -f deploy/docker-compose.yml -f deploy/docker-compose.override.yml up -d --build
+```
+
+Эта пара сохраняет настройки существующего стенда и не включает сама по себе строгий production-режим. Для него использовать отдельный `deploy/docker-compose.production.yml` и [production runbook](production-operations.md).
 
 After source changes, run `docker compose up -d --build` from the repository root
 to rebuild and deploy, then verify `/health`, `/ready`, and both interface flows.
@@ -125,4 +138,4 @@ alone does not establish safe FIX sequence recovery against ARQA.
 
 ## Native realtime certificates
 
-gRPC realtime requires TLS certificates before gateway startup. Development Compose provisions mTLS PKI; production must replace it with operator-provisioned certificates. See [realtime-grpc.md](realtime-grpc.md) for migration, ports, browser adapter and certificate settings.
+gRPC realtime requires server TLS certificates before gateway startup. Broker access defaults to VPN + TLS + Bearer token; mTLS and HMAC are optional. Development Compose provisions TLS PKI; production must replace it with operator-provisioned certificates. See [realtime-grpc.md](realtime-grpc.md) for ports, browser adapter and certificate settings.

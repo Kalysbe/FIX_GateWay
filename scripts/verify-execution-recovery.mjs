@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import {execFileSync} from 'node:child_process';
 import {randomUUID} from 'node:crypto';
+import {createHash} from 'node:crypto';
 import {setTimeout as delay} from 'node:timers/promises';
 
 // Runs only against the disposable verification project. Never parameterize this
@@ -41,3 +42,22 @@ for(const restart of [false,true]){
  assert.equal((await call(`/api/v1/orders/${order.id}`,token)).trades.length,1,'restart must not duplicate the fill');
  console.log(`PASS: execution survived DB outage${restart?' and SIGKILL':''}; exactly one trade after restart.`);
 }
+
+// Check real persisted UI notifications, rather than just a metrics/log line.
+await until(async()=>{
+ const {notifications=[]}=await call('/api/v1/admin/notifications',admin);
+ return notifications.some(n=>n.subtype==='TRADE_SYNC_FAILED');
+});
+console.log('PASS: unavailable QUIK history produced a persistent Gateway notification.');
+
+const audit=command(['exec','-T','gateway','sh','-ec','find /app/fix-sessions -name "*.audit.jsonl" -type f -exec cat {} \\;']);
+const records=audit.trim().split('\n').filter(Boolean).map(line=>JSON.parse(line));
+const fills=records.filter(r=>r.direction==='IN'&&r.message_type==='8'&&Buffer.from(r.raw_base64,'base64').includes(Buffer.from('\x0132=1\x01')));
+assert.ok(fills.length>=2,'both fills must retain original incoming wire across process restarts');
+for(const r of fills){
+ const raw=Buffer.from(r.raw_base64,'base64');
+ assert.equal(createHash('sha256').update(raw).digest('hex'),r.raw_sha256);
+ assert.ok(r.session&&r.sequence,'audit must identify the exact FIX session and sequence');
+ assert.ok(raw.includes(Buffer.from('\x01880=')),'exchange identity must be present');
+}
+console.log('PASS: FIX transport evidence and fingerprints survived database outage and SIGKILL.');

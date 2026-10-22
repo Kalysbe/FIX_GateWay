@@ -40,7 +40,7 @@ async function watchEvents(token) {
     headers: { Authorization: `Bearer ${token}`, Accept: 'text/event-stream' },
     signal: controller.signal,
   });
-  assert.equal(response.status, 200, 'SSE adapter must connect through native mTLS gRPC');
+  assert.equal(response.status, 200, 'SSE adapter must connect through native TLS gRPC');
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let received = '';
@@ -119,7 +119,7 @@ async function main() {
   assert.equal(filled.trades.length, 1);
   await events.waitFor('order.updated');
   console.log('PASS create / idempotency / fill / trade / broker isolation');
-  console.log('PASS realtime SSE over native mTLS gRPC');
+  console.log('PASS realtime SSE over native TLS gRPC');
 
   const cancel = await request('/api/v1/orders', first.token, 'POST', {
     ...order, client_order_id: `SMOKE-${run}-cancel`,

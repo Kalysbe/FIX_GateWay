@@ -12,6 +12,7 @@ import (
 
 	"github.com/fix-gateway/backend/internal/audit"
 	"github.com/fix-gateway/backend/internal/auth"
+	"github.com/fix-gateway/backend/internal/brokerdata"
 	"github.com/fix-gateway/backend/internal/brokers"
 	"github.com/fix-gateway/backend/internal/domain"
 	"github.com/fix-gateway/backend/internal/ratelimit"
@@ -49,9 +50,9 @@ func brokerDataTestServer(t *testing.T) *Server {
 func TestBrokerMarketDataSnapshot(t *testing.T) {
 	source := &testMarketDataReader{
 		available: true,
-		state:     domain.MarketDataSubscription{AdapterID: "a1", Status: "ACTIVE", Expected: 3, Confirmed: 3},
+		state:     domain.MarketDataSubscription{AdapterID: "a1", Status: "ACTIVE", Expected: 3, Confirmed: 3, Error: "private adapter error"},
 		quotes: []domain.MarketQuote{
-			{Symbol: "TEST", SecurityID: "ISIN1", Board: "A", Last: "123.4567890123456789", Open: "120", High: "125", Low: "119", Close: "122", WAPR: "123", Volume: "1000", Value: "123456.7890123456789", TradingStatus: "17", Bids: []domain.BookLevel{{Price: "123", Size: "10"}}, Offers: []domain.BookLevel{{Price: "124", Size: "11"}}, RawFIX: "private wire message"},
+			{AdapterID: "private-adapter", MDReqID: "private-request", Symbol: "TEST", SecurityID: "ISIN1", Board: "A", Currency: "KGS", Name: "Test instrument", Last: "123.4567890123456789", Open: "120", High: "125", Low: "119", Close: "122", WAPR: "123", Volume: "1000", Value: "123456.7890123456789", TradingStatus: "17", TradingSessionID: "MAIN", Bids: []domain.BookLevel{{Price: "123", Size: "10"}}, Offers: []domain.BookLevel{{Price: "124", Size: "11"}}, Entries: map[string]string{"private-tag": "private-value"}, RawFIX: "private wire message", UpdatedAt: time.Date(2026, 10, 21, 9, 0, 0, 0, time.UTC)},
 			{Symbol: "TEST", SecurityID: "ISIN1", Board: "B"},
 			{Symbol: "OTHER", SecurityID: "ISIN2", Board: "A"},
 		},
@@ -64,19 +65,25 @@ func TestBrokerMarketDataSnapshot(t *testing.T) {
 		{"security_id_and_board", "A", "ISIN1", 1}, {"unknown", "A", "MISSING", 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			response := brokerMarketDataSnapshot(source, tc.board, tc.symbol)
-			if !response.Live || !response.Replace || response.Quotes == nil || len(response.Quotes) != tc.count {
+			response, available := brokerMarketDataSnapshot(source, tc.board, tc.symbol)
+			if !available || response.Quotes == nil || len(response.Quotes) != tc.count {
 				t.Fatal("incorrect snapshot", response)
 			}
-			if response.Subscription.Expected != 3 {
+			if source.state.Expected != 3 {
 				t.Fatal("REST filter changed the global subscription")
 			}
 			encoded, err := json.Marshal(response)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if strings.Contains(string(encoded), "raw_fix") {
-				t.Fatal("wire messages exposed")
+			var envelope map[string]json.RawMessage
+			if err := json.Unmarshal(encoded, &envelope); err != nil || len(envelope) != 1 || envelope["quotes"] == nil {
+				t.Fatalf("REST must contain only quotes: %s", encoded)
+			}
+			for _, internal := range []string{"adapter_id", "md_req_id", "raw_fix", "entries", "subscription", "private"} {
+				if strings.Contains(string(encoded), internal) {
+					t.Fatalf("internal market data exposed: %s", encoded)
+				}
 			}
 			if tc.count > 0 && response.Quotes[0].Last != source.quotes[0].Last {
 				t.Fatal("decimal precision lost")
@@ -86,17 +93,24 @@ func TestBrokerMarketDataSnapshot(t *testing.T) {
 	if source.quotes[0].RawFIX == "" {
 		t.Fatal("adapter snapshot mutated")
 	}
+	snapshot, _ := brokerMarketDataSnapshot(source, "A", "TEST")
+	quote := snapshot.Quotes[0]
+	if quote.Currency != "KGS" || quote.Name != "Test instrument" || quote.TradingSessionID != "MAIN" ||
+		quote.UpdatedAt != source.quotes[0].UpdatedAt || len(quote.Bids) != 1 || quote.Offers[0].Price != "124" {
+		t.Fatal("business market data lost", quote)
+	}
 	for _, state := range []string{"STARTING", "RETRYING", "OFFLINE", "PARTIAL"} {
 		source.state.Status = state
-		if response := brokerMarketDataSnapshot(source, "", ""); response.Live != (state == "PARTIAL") {
-			t.Fatal("incorrect live flag", response)
+		response, available := brokerMarketDataSnapshot(source, "", "")
+		if available != (state == "PARTIAL") || !available && len(response.Quotes) != 0 {
+			t.Fatal("unavailable feed exposed as a successful snapshot", response, available)
 		}
 	}
 	source.available = false
-	if response := brokerMarketDataSnapshot(source, "", ""); response.Live || len(response.Quotes) != 0 {
+	if response, available := brokerMarketDataSnapshot(source, "", ""); available || len(response.Quotes) != 0 {
 		t.Fatal("unavailable feed exposed stale quotes", response)
 	}
-	if response := brokerMarketDataSnapshot(nil, "", ""); response.Live || response.Quotes == nil || response.Subscription.Status != "WAITING" {
+	if response, available := brokerMarketDataSnapshot(nil, "", ""); available || response.Quotes == nil || len(response.Quotes) != 0 {
 		t.Fatal(response)
 	}
 }
@@ -108,7 +122,7 @@ func TestBrokerMarketDataRequiresOrdersRead(t *testing.T) {
 		permissions []string
 		status      int
 	}{
-		{nil, 403}, {[]string{auth.PermTradesRead}, 403}, {[]string{auth.PermOrdersRead}, 200},
+		{nil, 403}, {[]string{auth.PermTradesRead}, 403}, {[]string{auth.PermOrdersRead}, 503},
 	} {
 		r := httptest.NewRequest("GET", "/api/v1/market-data", nil)
 		r = r.WithContext(context.WithValue(r.Context(), ctxPermissions, tc.permissions))
@@ -117,8 +131,8 @@ func TestBrokerMarketDataRequiresOrdersRead(t *testing.T) {
 		if w.Code != tc.status {
 			t.Fatalf("permissions %v: %d", tc.permissions, w.Code)
 		}
-		if w.Code == 200 && !strings.Contains(w.Body.String(), `"quotes":[]`) {
-			t.Fatal("missing empty snapshot", w.Body.String())
+		if w.Code == 503 && (w.Header().Get("Retry-After") == "" || !strings.Contains(w.Body.String(), `"error":"market data unavailable"`)) {
+			t.Fatal("missing unavailable response or retry header", w.Body.String())
 		}
 	}
 }
@@ -197,18 +211,29 @@ func TestBrokerGRPCChannelsHaveRESTAndSwagger(t *testing.T) {
 		}
 	}
 	for name, value := range map[string]any{
-		"MarketQuote": domain.MarketQuote{}, "MarketDataSubscription": domain.MarketDataSubscription{},
-		"Position": domain.FIXPosition{}, "MarketDataResponse": brokerMarketDataResponse{},
+		"MarketQuote": brokerdata.MarketQuote{},
+		"Position":    domain.FIXPosition{}, "MarketDataResponse": brokerMarketDataResponse{},
 	} {
 		typeOf := reflect.TypeOf(value)
 		for i := 0; i < typeOf.NumField(); i++ {
 			field := strings.Split(typeOf.Field(i).Tag.Get("json"), ",")[0]
-			if field == "" || field == "-" || name == "MarketQuote" && field == "raw_fix" {
+			if field == "" || field == "-" {
 				continue
 			}
 			if doc.Components.Schemas[name].Value.Properties[field] == nil {
 				t.Errorf("%s.%s missing from broker-swagger", name, field)
 			}
+		}
+	}
+	for _, contract := range []*openapi3.T{doc, general} {
+		for _, field := range []string{"adapter_id", "md_req_id", "raw_fix", "entries"} {
+			if contract.Components.Schemas["MarketQuote"].Value.Properties[field] != nil {
+				t.Errorf("internal MarketQuote.%s documented for brokers", field)
+			}
+		}
+		properties := contract.Components.Schemas["MarketDataResponse"].Value.Properties
+		if len(properties) != 1 || properties["quotes"] == nil {
+			t.Error("REST market data schema must contain only quotes")
 		}
 	}
 }

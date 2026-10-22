@@ -183,7 +183,9 @@ func handleNewOrder(session *simSession, conn net.Conn, sender, target string, s
 	if qty == "" {
 		qty = "1"
 	}
-	orderID := fmt.Sprintf("Q%d", time.Now().UnixNano())
+	board := firstNonEmptySim(f["100"], f["207"], "TQBR")
+	orderNumber := strconv.FormatInt(time.Now().UnixNano(), 10)
+	orderID := time.Now().UTC().Format("060102") + "-" + board + "-" + orderNumber
 	execID := fmt.Sprintf("E%d", time.Now().UnixNano())
 	order := &simOrder{id: orderID, symbol: symbol, side: side, qty: qty}
 	session.orders[clOrdID] = order
@@ -225,6 +227,13 @@ func handleNewOrder(session *simSession, conn net.Conn, sender, target string, s
 			"55": symbol, "54": side, "38": qty, "14": qty, "151": "0", "6": px,
 			"32": qty, "31": px,
 		}
+		// The disposable simulator supplies exchange identity too, so recovery
+		// tests exercise the same durable ledger path as ARQA reports.
+		tradeNumber := strconv.FormatInt(time.Now().UnixNano(), 10)
+		fill["880"] = time.Now().UTC().Format("060102") + "-" + board + "-" + tradeNumber
+		fill["5001"], fill["5002"] = tradeNumber, orderNumber
+		fill["75"], fill["100"], fill["48"] = time.Now().UTC().Format("20060102"), board, symbol
+		fill["5018"], fill["109"], fill["1"] = f["5018"], f["109"], f["1"]
 		_, _ = conn.Write([]byte(buildMsg("8", sender, target, seq, fill)))
 	})
 }

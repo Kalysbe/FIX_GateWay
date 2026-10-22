@@ -56,6 +56,12 @@ func TestSecurityAuditHMAC(t *testing.T) {
 			t.Fatal(err)
 		}
 	})
+	t.Run("unsigned_request_allowed_when_optional", func(t *testing.T) {
+		optional := &Server{}
+		if err := optional.verifyOptionalHMAC(httptest.NewRequest("GET", "/api/v1/orders", nil), "secret"); err != nil {
+			t.Fatal(err)
+		}
+	})
 }
 
 func TestSecurityAuditHTTPSAndRoles(t *testing.T) {

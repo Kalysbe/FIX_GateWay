@@ -1,0 +1,34 @@
+groups:
+  - name: gateway-trade-integrity
+    rules:
+      - alert: TradePairIncomplete
+        expr: gateway_trade_incomplete_total > 0
+        for: 15s
+        labels: {severity: critical}
+        annotations: {summary: "A trade is missing an actual side for more than two minutes"}
+      - alert: TradeSourceConflict
+        expr: gateway_trade_report_errors > 0
+        labels: {severity: critical}
+        annotations: {summary: "Persisted trade evidence requires reconciliation"}
+      - alert: TradeReconciliationFailed
+        expr: gateway_trade_sync_failed > 0 and gateway_trade_reconciliation_enabled == 1
+        labels: {severity: critical}
+        annotations: {summary: "QUIK trade snapshot verification failed; see Gateway notifications"}
+      - alert: TradeReconciliationStale
+        expr: (time() - gateway_trade_last_success_timestamp_seconds > 300) and gateway_trade_reconciliation_enabled == 1
+        for: 1m
+        labels: {severity: critical}
+        annotations: {summary: "No fresh verified full QUIK trade history"}
+      - alert: TradeIntegrityMonitorUnavailable
+        expr: gateway_trade_monitor_failed > 0
+        for: 30s
+        labels: {severity: critical}
+        annotations: {summary: "Trade integrity monitor cannot read its state"}
+      - alert: FIXAuditNearCapacity
+        expr: gateway_fix_audit_bytes / gateway_fix_audit_capacity_bytes >= 0.7
+        labels: {severity: critical}
+        annotations: {summary: "FIX transport audit reached 70 percent of capacity"}
+      - alert: FIXAuditPersistenceFailed
+        expr: increase(gateway_fix_audit_failures_total[5m]) > 0
+        labels: {severity: critical}
+        annotations: {summary: "Gateway could not durably journal FIX transport"}

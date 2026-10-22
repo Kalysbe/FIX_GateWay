@@ -63,7 +63,7 @@ The adapter registry lock protects map membership only: dictionary fetches and a
 
 ## Related docs
 
-- [Broker API guide (stage 1)](./broker-api-guide.md)
+- [API для брокеров: REST + gRPC](./broker-api-guide.md)
 - [ARQA requirements checklist](./arqa-requirements-checklist.md)
 - [ARQA FIX contract](./arqa-fix-contract.md)
 - [Deployment](./deployment.md)

@@ -1,11 +1,42 @@
 package arqa
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
 	"github.com/fix-gateway/backend/internal/domain"
+	"golang.org/x/text/encoding/charmap"
 )
+
+func TestMarketDataCyrillicSurvivesFIXToJSON(t *testing.T) {
+	name := "ГКО-2 выпуск (GBA02270915)"
+	legacy, err := charmap.Windows1251.NewEncoder().String(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, wireName := range []string{name, legacy} {
+		raw := strings.Join([]string{
+			"35=X", "262=MD-text", "268=1", "279=0", "269=5", "270=93.1300",
+			"22=8", "48=GBA02270915", "55=" + wireName, "100=LIST_GBA",
+		}, "\x01") + "\x01"
+		_, rows := parseMarketDataFromRaw(raw, "a1", true)
+		if len(rows) != 1 {
+			t.Fatal(rows)
+		}
+		data, err := json.Marshal(rows[0])
+		if err != nil {
+			t.Fatal(err)
+		}
+		var response domain.MarketQuote
+		if err := json.Unmarshal(data, &response); err != nil {
+			t.Fatal(err)
+		}
+		if response.Symbol != name || response.SecurityID != "GBA02270915" || response.Board != "LIST_GBA" || response.Close != "93.1300" {
+			t.Fatalf("corrupted FIX/API text or instrument fields: %+v", response)
+		}
+	}
+}
 
 func TestParseMarketDataSnapshot_ArqaUnderlyingTags(t *testing.T) {
 	raw := strings.Join([]string{

@@ -211,10 +211,12 @@ func (a *Adapter) ensureMarketDataSubscriptions(ctx context.Context, q domain.Ma
 	if a.app.mdBook == nil {
 		a.app.mdBook = map[string]domain.MarketQuote{}
 	}
-	var cancelIDs []string
+	var cancellations []mdCancellation
 	for key, sub := range a.app.mdSubscriptions {
 		if next, ok := desired[key]; !ok || firstInst(next).SecurityType != firstInst(sub.query).SecurityType {
-			cancelIDs = append(cancelIDs, sub.reqID)
+			if sub.reqID != "" {
+				cancellations = append(cancellations, mdCancellation{id: sub.reqID, query: sub.query})
+			}
 			delete(a.app.mdSubIDs, sub.reqID)
 			delete(a.app.mdSubscriptions, key)
 			delete(a.app.mdBook, key)
@@ -245,7 +247,7 @@ func (a *Adapter) ensureMarketDataSubscriptions(ctx context.Context, q domain.Ma
 			continue
 		}
 		if sub.reqID != "" {
-			cancelIDs = append(cancelIDs, sub.reqID)
+			cancellations = append(cancellations, mdCancellation{id: sub.reqID, query: sub.query})
 			delete(a.app.mdSubIDs, sub.reqID)
 		}
 		sub.reqID, sub.sentAt, sub.waiting = newMDReqID(), now, true
@@ -256,11 +258,11 @@ func (a *Adapter) ensureMarketDataSubscriptions(ctx context.Context, q domain.Ma
 		lastID = sub.reqID
 	}
 	a.app.mdMu.Unlock()
-	for _, id := range cancelIDs {
+	for _, req := range cancellations {
 		if err := ctx.Err(); err != nil {
 			return lastID, a.app.liveQuotes(), err
 		}
-		if err := a.sendMarketData(buildMDUnsubscribe(id)); err != nil {
+		if err := a.sendMarketData(buildMDUnsubscribe(req.id, req.query)); err != nil {
 			a.log.Warn("market data unsubscribe failed", "adapter_id", a.meta.ID, "error", err)
 		}
 	}

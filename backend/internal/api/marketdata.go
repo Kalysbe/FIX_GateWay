@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/fix-gateway/backend/internal/brokerdata"
 	"github.com/fix-gateway/backend/internal/domain"
 )
 
@@ -13,35 +14,28 @@ type marketDataReader interface {
 }
 
 type brokerMarketDataResponse struct {
-	Source       string                        `json:"source"`
-	Live         bool                          `json:"live"`
-	Quotes       []domain.MarketQuote          `json:"quotes"`
-	Subscription domain.MarketDataSubscription `json:"subscription"`
-	Replace      bool                          `json:"replace"`
-	Note         string                        `json:"note,omitempty"`
+	Quotes []brokerdata.MarketQuote `json:"quotes"`
 }
 
-func brokerMarketDataSnapshot(source marketDataReader, board, symbol string) brokerMarketDataResponse {
-	response := brokerMarketDataResponse{
-		Source: "live", Quotes: []domain.MarketQuote{}, Replace: true,
-		Subscription: domain.MarketDataSubscription{Status: "WAITING"},
+// Availability is used to choose the HTTP status, not exposed as quote data.
+// An available feed with no matches is a successful empty selection.
+func brokerMarketDataSnapshot(source marketDataReader, board, symbol string) (brokerMarketDataResponse, bool) {
+	response := brokerMarketDataResponse{Quotes: []brokerdata.MarketQuote{}}
+	if source == nil {
+		return response, false
 	}
-	if source != nil {
-		response.Subscription = source.MarketDataSubscription()
-		if _, quotes, available := source.LiveQuotes(); available {
-			response.Live = response.Subscription.Status == "ACTIVE" || response.Subscription.Status == "PARTIAL"
-			for _, quote := range filterQuotes(quotes, board, symbol) {
-				// Match the gRPC quote DTO without exposing wire messages or
-				// modifying the shared adapter snapshot.
-				quote.RawFIX = ""
-				response.Quotes = append(response.Quotes, quote)
-			}
-		}
+	subscription := source.MarketDataSubscription()
+	if subscription.Status != "ACTIVE" && subscription.Status != "PARTIAL" {
+		return response, false
 	}
-	if !response.Live {
-		response.Note = "Шлюз автоматически получает рыночные данные по FIX и восстанавливает поток после разрыва связи."
+	_, quotes, available := source.LiveQuotes()
+	if !available {
+		return response, false
 	}
-	return response
+	for _, quote := range filterQuotes(quotes, board, symbol) {
+		response.Quotes = append(response.Quotes, brokerdata.Quote(quote))
+	}
+	return response, true
 }
 
 func (s *Server) listBrokerMarketData(w http.ResponseWriter, r *http.Request) {
@@ -49,7 +43,12 @@ func (s *Server) listBrokerMarketData(w http.ResponseWriter, r *http.Request) {
 	if s.manager != nil {
 		source = s.manager
 	}
-	writeJSON(w, http.StatusOK, brokerMarketDataSnapshot(source,
+	response, available := brokerMarketDataSnapshot(source,
 		strings.TrimSpace(r.URL.Query().Get("board")),
-		strings.TrimSpace(r.URL.Query().Get("symbol"))))
+		strings.TrimSpace(r.URL.Query().Get("symbol")))
+	if !available {
+		writeErr(w, http.StatusServiceUnavailable, "market data unavailable")
+		return
+	}
+	writeJSON(w, http.StatusOK, response)
 }

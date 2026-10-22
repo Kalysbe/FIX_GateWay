@@ -254,7 +254,7 @@ func skipHTTPHosts(origins []string) map[string]bool {
 }
 
 // IsInternalUIRequest is true for the admin console (Vite :5173), including
-// same-origin requests proxied to the gateway. Broker-app (:5174) is not skipped.
+// same-origin non-API requests proxied to the gateway. API requests are always logged.
 func IsInternalUIRequest(r *http.Request, skipHosts map[string]bool) bool {
 	// API logging must never depend on caller-controlled browser/proxy headers.
 	if strings.HasPrefix(r.URL.Path, "/api/") {

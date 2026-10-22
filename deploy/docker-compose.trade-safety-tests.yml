@@ -1,0 +1,39 @@
+name: fix-gateway-trade-safety-tests
+services:
+  db:
+    image: postgres:16.15-alpine3.24@sha256:721873c34ceb9f8d8fc265984940dc982404c105f19ad51be9fdc5970a6080ea
+    environment:
+      POSTGRES_USER: gateway
+      POSTGRES_PASSWORD: disposable-test-only
+      POSTGRES_DB: trade_safety_test
+    tmpfs: /var/lib/postgresql/data
+    healthcheck:
+      test: [CMD-SHELL, pg_isready -U gateway -d trade_safety_test]
+      interval: 1s
+      timeout: 3s
+      retries: 30
+  tests:
+    image: golang:1.26.9-alpine@sha256:3082400e369fa24d5fc60bca20edab3f6d604e0c5a690ec66b295eff4dd87ade
+    working_dir: /src
+    tmpfs: ["/fault-disk:size=64k,mode=0700"]
+    volumes:
+      - ../backend:/src
+      - modcache:/go/pkg/mod
+      - buildcache:/root/.cache/go-build
+    environment:
+      DATABASE_URL: postgres://gateway:disposable-test-only@db:5432/trade_safety_test?sslmode=disable
+      CGO_ENABLED: "0"
+      FIX_AUDIT_DISK_FAULT_DIR: /fault-disk
+    depends_on:
+      db: {condition: service_healthy}
+    entrypoint: [/bin/sh, -ec]
+    command:
+      - |
+        go test ./internal/fixaudit ./internal/executioninbox ./internal/tradeledger ./internal/adapters/arqa ./internal/adapters ./internal/api ./internal/observability ./internal/metrics ./cmd/gateway
+        go test -tags integration ./internal/tradeledger -count=1 -v
+        go test -tags integration ./internal/fixaudit -count=1 -v
+        go test -tags integration ./internal/api -run 'TestTradeLedger' -count=1 -v
+        go test -tags integration ./internal/orders -run 'Test(ExecutionIDs|InboxReceipts|ExecutionReplay)' -count=1 -v
+volumes:
+  modcache:
+  buildcache:

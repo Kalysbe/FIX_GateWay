@@ -1,10 +1,13 @@
-# Локальные порты для сервера 172.23.10.96 (5432 и 8080 заняты стеком auction-quik)
+# Настройки сервера FIX_GateWay 172.23.10.96; QUIK расположен на 172.23.10.84.
 services:
   postgres:
     # Наружу не публикуем: gateway ходит к базе внутри compose-сети
     ports: !override []
 
   gateway:
+    environment:
+      ADAPTER_HOST_OVERRIDE: "172.23.10.84"
+      QUIK_API_BASE_URL: "http://172.23.10.84:5000"
     ports: !override
       - "8081:8080"
       - "8443:8443"

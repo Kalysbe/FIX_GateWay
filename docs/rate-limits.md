@@ -2,8 +2,9 @@
 
 The trading ingress in this repository is REST, authenticated by API token and
 the broker identity loaded by `brokerAuth`. The exchange connection is FIX.
-The existing bidirectional gRPC service is admin realtime, authenticated by JWT
-and mTLS; it accepts Subscribe and Ping, not trading submissions. No protobuf
+The bidirectional gRPC service provides realtime events over verified TLS:
+admins authenticate with JWT, brokers with API tokens. Client certificates are
+optional. It accepts Subscribe and Ping, not trading submissions. No protobuf
 or trading workflow was changed.
 
 ## Implementation choice
@@ -11,8 +12,7 @@ or trading workflow was changed.
 Three options were considered: local buckets in one Gateway, local buckets with
 sticky broker routing across replicas, and a distributed Redis budget. The
 current deployment has one active Gateway, so local admission avoids introducing
-a network dependency in the trading path. Redis in the neighboring Broker_App
-deployment is not used by this Gateway.
+a network dependency in the trading path. This Gateway has no Redis dependency.
 
 **Limits are per process.** Before running multiple Gateway replicas, route all
 tokens/connections of a broker to one replica and explicitly partition global
@@ -51,7 +51,7 @@ the broker to 20/s.** Edit all relevant parent policies for the intended budget.
 Disabling an operation policy removes only that layer; parents still apply.
 
 System is independent of Queries, so polling order statuses no longer consumes
-the GetFirm category budget. Broker_App's per-order HealthCheck and interpretation
+the GetFirm category budget. External clients' per-order HealthCheck and interpretation
 of 429 as Offline are separate client behavior; this change does not remove those
 checks or silently retry failed real orders.
 

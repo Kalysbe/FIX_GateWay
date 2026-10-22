@@ -17,7 +17,7 @@
 | Каталог | Файлы / требования |
 |---|---|
 | `GATEWAY_SECRETS_DIR` | `database-url`, `jwt-secret`, `api-token-pepper`, `admin-password`; по одному значению в файле, без внутреннего перевода строки. JWT/pepper ≥32 байт; случайные независимые значения. Пароль 12–72 байта. |
-| `GATEWAY_PKI_DIR` | `database-ca.crt`, `server.crt`, `server.key`, `ca.crt`, `bridge.crt`, `bridge.key`. gRPC server SAN совпадает с `GRPC_SERVER_NAME`; bridge имеет client authentication. |
+| `GATEWAY_PKI_DIR` | `database-ca.crt`, `server.crt`, `server.key`, `ca.crt`. gRPC server SAN совпадает с `GRPC_SERVER_NAME`; `ca.crt` проверяет сервер во внутреннем bridge. При включённом mTLS также нужны `bridge.crt` / `bridge.key` с clientAuth. |
 | `EDGE_TLS_DIR` | `tls.crt`, `tls.key` для публичного HTTPS, включая нужную цепочку. |
 | `FIX_CONFIG_DIR` | `transport.json`, venue dictionary, client certificate/key, venue CA, реальное свидетельство UAT. Начать с `deploy/production/fix-transport.example.json`; ключи объекта — реальные ID адаптеров. |
 | `BACKUP_STORAGE_DIR` | Приватный постоянный каталог с репликацией на другой узел; запись UID 10001. Отдельная сохранность и мониторинг свободного места обязательны. |
@@ -26,7 +26,9 @@ Gateway и backup работают как UID/GID `10001:10001`, frontend Nginx 
 
 Новый named volume создаётся с корректным владельцем. При переносе старого root-owned FIX volume сначала остановить старый gateway, сделать согласованную копию и передать владельца **только этого volume** UID 10001. Не удалять session store и не менять sequence numbers ради успешного старта. Не использовать NFS/сетевой диск для inbox: нужны гарантии exclusive OS lock, atomic rename и fsync локальной файловой системы.
 
-`database-url` содержит PostgreSQL URL с `sslmode=verify-full&sslrootcert=/run/pki/database-ca.crt`. Имя сервера должно совпадать с SAN сертификата. Production отказывается от plaintext, непроверенного TLS, слабых/default секретов, выключенного HTTPS/HMAC и отсутствующего gRPC mTLS. Пароли в URL должны быть percent-encoded. Один database URL используется приложением и `pg_dump`; доступ ограничить БД gateway.
+`database-url` содержит PostgreSQL URL с `sslmode=verify-full&sslrootcert=/run/pki/database-ca.crt`. Имя сервера должно совпадать с SAN сертификата. Production отказывается от plaintext, непроверенного TLS, слабых/default секретов и выключенного HTTPS. Пароли в URL должны быть percent-encoded. Один database URL используется приложением и `pg_dump`; доступ ограничить БД gateway.
+
+Брокеры используют VPN + TLS + API-токен для REST и gRPC. По умолчанию `HMAC_REQUIRED=false`, `GRPC_MTLS_REQUIRED=false`. Доступ через VPN ограничивается интерфейсами хоста и firewall; приложение не проверяет наличие туннеля. mTLS и HMAC можно включить отдельно.
 
 `FIX_CREDENTIAL_ENV_FILE` — операторский env-файл с именами credentials, например `ARQA_USERNAME_FILE=/run/fix/username` и `ARQA_PASSWORD_FILE=/run/fix/password`. `UsernameEnv`/`PasswordEnv` конкретного адаптера должны ссылаться на `ARQA_USERNAME`/`ARQA_PASSWORD`. Содержимое credentials не помещается в env-файл. При необходимости отдельный QUIK API указывается явно через `QUIK_API_BASE_URL`; другие проекты не должны обнаруживаться автоматически.
 
@@ -47,8 +49,11 @@ ALERTMANAGER_CONFIG_FILE=/srv/fix-gateway/alertmanager.yml
 BACKUP_STORAGE_DIR=/srv/fix-gateway/backups
 BACKUP_AGE_RECIPIENT=age1...replace-with-operator-public-recipient
 HTTPS_PORT=443
+HTTPS_BIND_IP=127.0.0.1
 GRPC_BIND_IP=127.0.0.1
 GRPC_PORT=8443
+HMAC_REQUIRED=false
+GRPC_MTLS_REQUIRED=false
 QUIK_FIX_HOST=172.23.10.84
 QUIK_API_BASE_URL=http://172.23.10.84:5000
 ```
@@ -57,7 +62,7 @@ QUIK_API_BASE_URL=http://172.23.10.84:5000
 
 После миграций и до запуска production gateway применить `deploy/production/quik-endpoint.sql` **только к production БД FIX_GateWay**. Он задаёт production host, выключает simulator-адаптеры, отключает ResetOnLogon и сохраняет production origin QUIK API. Это необходимо и для БД, перенесённой с тестового стенда: сохранённый `gateway_settings.quik_api_base_url` имеет приоритет над `QUIK_API_BASE_URL`. Если production API использует другой порт/HTTPS origin, изменить этот origin в SQL и env согласованно до применения. Скрипт не меняет порты, CompID и credentials и не заменяет подготовку PKI/UAT.
 
-Заменить примеры реальными значениями. Проверить отсутствие конфликта `GATEWAY_SUBNET` (по умолчанию `10.89.0.0/24`); `EDGE_IPV4` должен находиться в этой сети. Gateway доверяет forwarded headers только точному IP edge. Edge сам завершает TLS и перезаписывает X-Forwarded-*; публичные `/health`, `/ready`, `/metrics`, Swagger/OpenAPI закрыты.
+Заменить примеры реальными значениями. Для удалённых брокеров задать `HTTPS_BIND_IP` и `GRPC_BIND_IP` адресом интерфейса хоста, доступным через VPN; loopback из примера допускает только локальные подключения. Firewall разрешает эти порты только VPN-адресам брокеров. Проверить отсутствие конфликта `GATEWAY_SUBNET` (по умолчанию `10.89.0.0/24`); `EDGE_IPV4` должен находиться в этой сети. Gateway доверяет forwarded headers только точному IP edge. Edge сам завершает TLS и перезаписывает X-Forwarded-*; публичные `/health`, `/ready`, `/metrics`, Swagger/OpenAPI закрыты.
 
 ```bash
 docker compose --env-file /srv/fix-gateway/production.env -p fix-gateway-production -f deploy/docker-compose.production.yml config --quiet
@@ -119,7 +124,7 @@ node scripts/backup-production.mjs --env-file /srv/fix-gateway/production.env
 2. Выбрать последний **завершённый полный checkpoint**, проверить оба SHA256; скопировать с независимого узла. Расшифровать в приватном recovery окружении (age identity не передавать приложению).
 3. На отдельной БД применить `pg_restore --exit-on-error --no-owner`, восстановить соответствующий FIX tar в новый приватный volume с UID 10001. Не смешивать БД и session store из разных checkpoints.
 4. Проверить schema/version, orders/trades/outbox/receipts, inbox checksum и FIX sequences. При остановленном gateway согласовать replay и сверку событий после checkpoint с площадкой. Не менять sequences/выполнять reset самостоятельно.
-5. Обновить операторские PKI/secrets/URL при необходимости, запустить один gateway, проверить readiness, обработку inbox, mTLS и настоящий alert channel. Сверить позиции, исполнения, отмены и лимиты перед разрешением новых заявок.
+5. Обновить операторские PKI/secrets/URL при необходимости, запустить один gateway, проверить readiness, обработку inbox, TLS и Bearer-доступ через VPN, настоящий alert channel. Сверить позиции, исполнения, отмены и лимиты перед разрешением новых заявок.
 6. Зафиксировать реально измеренные RPO/RTO. Если восстановлена только DB sidecar-копия, восстановление FIX state и replay требуют отдельного плана; такую копию не объявлять автоматически полноценным recovery.
 
 Изолированный тест подтвердил расшифрование и restore БД с 27 миграциями, а также создание полного checkpoint и возобновление gateway. Потеря реального узла, восстановление с внешнего хранилища, venue replay и целевые RPO/RTO ещё требуют эксплуатационной приёмки.
