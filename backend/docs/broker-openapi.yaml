@@ -349,6 +349,37 @@ paths:
           description: Unauthorized
         "503":
           description: Источник QUIK Orders недоступен; данные не подменяются
+  /api/v1/orders/active:
+    get:
+      tags: [Заявки]
+      summary: Активные заявки брокера
+      security:
+        - bearerAuth: []
+      description: |
+        Требует `orders:read`. То же, что `GET /api/v1/orders`, но только строки QUIK `Orders`
+        с `State` = `Активна`. Фильтр применяется в БД до пагинации; формат строк не меняется.
+        Страницы: заголовки `X-Has-More` и `X-Next-Offset`.
+      parameters:
+        - {in: query, name: limit, schema: {type: integer, minimum: 1, maximum: 1000, default: 200}}
+        - {in: query, name: offset, schema: {type: integer, minimum: 0, maximum: 10000000, default: 0}}
+      responses:
+        "200":
+          description: Исходные строки QUIK Orders в состоянии «Активна»
+          headers:
+            X-Has-More: {schema: {type: boolean}, description: Есть ли следующая страница}
+            X-Next-Offset: {schema: {type: integer}, description: offset следующей страницы}
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/QuikOrderRow"
+        "400":
+          description: Неверный limit или offset
+        "401":
+          description: Unauthorized
+        "503":
+          description: Источник QUIK Orders недоступен; данные не подменяются
   /api/v1/orders/{id}:
     get:
       tags: [Заявки]

@@ -179,7 +179,8 @@ func (s *Server) Handler() http.Handler {
 
 	mux.Handle("POST /api/v1/orders", s.brokerAuth(s.requirePermission(auth.PermOrdersCreate)(http.HandlerFunc(s.createOrder))))
 	mux.Handle("GET /api/v1/orders", s.brokerAuth(s.requirePermission(auth.PermOrdersRead)(http.HandlerFunc(s.listBrokerOrders))))
-	mux.Handle("GET /api/v1/orders/{id}", s.brokerAuth(s.requirePermission(auth.PermOrdersRead)(http.HandlerFunc(s.getBrokerOrder))))
+	mux.Handle("GET /api/v1/orders/active", s.brokerAuth(s.requirePermission(auth.PermOrdersRead)(http.HandlerFunc(s.listBrokerActiveOrders))))
+	mux.Handle("GET /api/v1/orders/{id}",s.brokerAuth(s.requirePermission(auth.PermOrdersRead)(http.HandlerFunc(s.getBrokerOrder))))
 	mux.Handle("POST /api/v1/orders/{id}/cancel", s.brokerAuth(s.requirePermission(auth.PermOrdersCancel)(http.HandlerFunc(s.cancelBrokerOrder))))
 	mux.Handle("GET /api/v1/accounts", s.brokerAuth(s.requirePermission(auth.PermOrdersRead)(http.HandlerFunc(s.listBrokerAccounts))))
 	mux.Handle("GET /api/v1/firm", s.brokerAuth(s.requirePermission(auth.PermOrdersRead)(http.HandlerFunc(s.getBrokerFirm))))
@@ -373,6 +374,10 @@ func (s *Server) createOrder(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) listBrokerOrders(w http.ResponseWriter, r *http.Request) {
 	s.listQuikOrders(w, r, false)
+}
+
+func (s *Server) listBrokerActiveOrders(w http.ResponseWriter, r *http.Request) {
+	s.listQuikOrdersInState(w, r, false, quikActiveState)
 }
 
 func (s *Server) getBrokerOrder(w http.ResponseWriter, r *http.Request) {

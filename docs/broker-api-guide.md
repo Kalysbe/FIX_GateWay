@@ -40,6 +40,7 @@ REST создаёт и отменяет заявки, изменяет пози�
 |---|---|---|---|
 | `POST /api/v1/orders` | Создать заявку | `{order, idempotent}`; `201` — новая, `200` — ранее созданная | `orders:create` |
 | `GET /api/v1/orders` | Строки Orders своей фирмы | Массив исходных строк БД | `orders:read` |
+| `GET /api/v1/orders/active` | Строки Orders своей фирмы с `State` = `Активна` | Массив исходных строк БД | `orders:read` |
 | `GET /api/v1/orders/{id}` | Одна текущая строка Orders | Исходная строка БД без обёрток | `orders:read` |
 | `POST /api/v1/orders/{id}/cancel` | Запросить отмену; тело не требуется | `200`, `{order: Order}` | `orders:cancel` |
 | gRPC `order.updated` | Изменения строк Orders своей фирмы | `event.data_json` — исходный JSON строки; `event.removed=true` удаляет её из текущего набора | `orders:read` |

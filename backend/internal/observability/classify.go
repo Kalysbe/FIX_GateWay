@@ -41,6 +41,8 @@ func classifyBrokerAPI(method, path string) RouteClass {
 		return RouteClass{TypeAPI, SubOrderCreate, "/api/v1/orders"}
 	case method == http.MethodGet && path == "/api/v1/orders":
 		return RouteClass{TypeAPI, SubOrdersList, "/api/v1/orders"}
+	case method == http.MethodGet && path == "/api/v1/orders/active":
+		return RouteClass{TypeAPI, SubOrdersList, "/api/v1/orders/active"}
 	case method == http.MethodGet && orderIDPath.MatchString(path):
 		return RouteClass{TypeAPI, SubOrderRead, "/api/v1/orders/{id}"}
 	case method == http.MethodPost && strings.HasSuffix(path, "/cancel") && strings.HasPrefix(path, "/api/v1/orders/"):

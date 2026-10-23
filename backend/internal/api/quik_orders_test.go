@@ -70,6 +70,17 @@ func TestBrokerOrdersUseAuthenticatedFirmBeforePagination(t *testing.T) {
 	if strings.TrimSpace(w.Body.String()) != "["+raw+"]" {
 		t.Fatal("list added or changed fields", w.Body.String())
 	}
+	if source.filter.State != "" {
+		t.Fatal("full list must not filter by state", source.filter.State)
+	}
+	w = httptest.NewRecorder()
+	s.listBrokerActiveOrders(w, brokerOrderRequest("/api/v1/orders/active?firm_id=9999&limit=5"))
+	if w.Code != 200 || source.filter.State != "Активна" || source.filter.Firm == nil || *source.filter.Firm != "2040" || source.filter.Limit != 5 {
+		t.Fatal(w.Code, w.Body.String(), source.filter)
+	}
+	if strings.TrimSpace(w.Body.String()) != "["+raw+"]" {
+		t.Fatal("active list added or changed fields", w.Body.String())
+	}
 	r.SetPathValue("id", "quik-20261022-LIST_GBA-1")
 	w = httptest.NewRecorder()
 	s.getBrokerOrder(w, r)

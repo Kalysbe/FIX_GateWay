@@ -77,7 +77,9 @@ func (o Order) Side() string {
 
 type OrderFilter struct {
 	// nil is admin/all firms. A non-nil empty string matches no firm.
-	Firm   *string
+	Firm *string
+	// State matches the raw "State" column; empty means any state.
+	State  string
 	Limit  int
 	Offset int
 }
@@ -108,8 +110,9 @@ func (s *Store) ListOrders(ctx context.Context, f OrderFilter) (OrderPage, error
 	}
 	rows, err := s.pool.Query(ctx, `SELECT row_to_json(o) FROM public."Orders" o
 WHERE ($1::text IS NULL OR (btrim(o."FirmId")=$1 AND $1<>''))
+AND ($4::text='' OR btrim(o."State"::text)=$4)
 ORDER BY o."TradeDate" DESC, o."OrderNum" DESC, o."ClassCode"
-LIMIT NULLIF($2,0) OFFSET $3`, f.Firm, limit, f.Offset)
+LIMIT NULLIF($2,0) OFFSET $3`, f.Firm, limit, f.Offset, f.State)
 	if err != nil {
 		return out, err
 	}

@@ -91,7 +91,14 @@ func (s *Server) writeOrderReadError(w http.ResponseWriter, err error) {
 	}
 }
 
+// quikActiveState is the raw QUIK "State" value of an order still in the book.
+const quikActiveState = "Активна"
+
 func (s *Server) listQuikOrders(w http.ResponseWriter, r *http.Request, admin bool) {
+	s.listQuikOrdersInState(w, r, admin, "")
+}
+
+func (s *Server) listQuikOrdersInState(w http.ResponseWriter, r *http.Request, admin bool, state string) {
 	firm, _, err := s.orderReadScope(r, admin)
 	if err != nil {
 		s.writeOrderReadError(w, err)
@@ -116,7 +123,7 @@ func (s *Server) listQuikOrders(w http.ResponseWriter, r *http.Request, admin bo
 		s.writeOrderReadError(w, quikexport.ErrNotConfigured)
 		return
 	}
-	page, err := s.quikOrders.ListOrders(r.Context(), quikexport.OrderFilter{Firm: firm, Limit: limit, Offset: offset})
+	page, err := s.quikOrders.ListOrders(r.Context(), quikexport.OrderFilter{Firm: firm, State: state, Limit: limit, Offset: offset})
 	if err != nil {
 		s.writeOrderReadError(w, err)
 		return
