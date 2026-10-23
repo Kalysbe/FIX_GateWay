@@ -16,6 +16,7 @@ import (
 	"github.com/fix-gateway/backend/internal/admin"
 	"github.com/fix-gateway/backend/internal/api"
 	"github.com/fix-gateway/backend/internal/audit"
+	"github.com/fix-gateway/backend/internal/auth"
 	"github.com/fix-gateway/backend/internal/brokers"
 	"github.com/fix-gateway/backend/internal/config"
 	"github.com/fix-gateway/backend/internal/orders"
@@ -75,7 +76,7 @@ func TestOrderIdempotencyIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 	tok, err := brokerStore.CreateTokenExt(ctx, brokers.CreateTokenInput{
-		BrokerID: b.ID, Name: "t1", QuikFirm: "FIRM1",
+		BrokerID: b.ID, Name: "t1", QuikFirm: "FIRM1", Permissions: []string{auth.PermOrdersCreate, auth.PermOrdersRead, auth.PermOrdersCancel},
 	})
 	if err != nil {
 		t.Fatal(err)
