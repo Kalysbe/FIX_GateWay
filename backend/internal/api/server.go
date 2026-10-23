@@ -68,6 +68,7 @@ type Server struct {
 	realtimeClient     pb.RealtimeServiceClient
 	ratePolicies       *ratelimit.Store
 	executionInbox     *executioninbox.Inbox
+	inboxCases         *executioninbox.CaseStore
 
 	trusted             []*net.IPNet
 	hmacNonces          auth.NonceStore
@@ -114,7 +115,9 @@ func (s *Server) SetQuikExport(store *quikexport.Store) {
 	s.quikOrders = store
 }
 
-func (s *Server) SetExecutionInbox(in *executioninbox.Inbox) { s.executionInbox = in }
+func (s *Server) SetExecutionInbox(in *executioninbox.Inbox, cases *executioninbox.CaseStore) {
+	s.executionInbox, s.inboxCases = in, cases
+}
 
 func (s *Server) SetNonceStore(store auth.NonceStore) { s.hmacNonces = store }
 
@@ -224,6 +227,9 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/v1/admin/orders", s.adminRO(s.listAdminOrders))
 	mux.Handle("GET /api/v1/admin/reconciliation", s.adminRO(s.listReconciliation))
 	mux.Handle("POST /api/v1/admin/reconciliation/{id}/resolve", s.adminOps(s.resolveReconciliation))
+	mux.Handle("GET /api/v1/admin/execution-inbox", s.adminRO(s.getExecutionInbox))
+	mux.Handle("POST /api/v1/admin/execution-inbox/{id}/quarantine", s.adminOps(s.quarantineExecutionInboxEntry))
+	mux.Handle("POST /api/v1/admin/execution-inbox/cases/{id}/resolve", s.adminOps(s.resolveExecutionInboxCase))
 	mux.Handle("GET /api/v1/admin/rate-limits", s.adminRO(s.listRateLimits))
 	mux.Handle("GET /api/v1/admin/trading-limits", s.adminRO(s.listTradingLimits))
 	mux.Handle("GET /api/v1/admin/trading-limits/history", s.adminAudit(s.tradingLimitHistory))

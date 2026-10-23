@@ -25,6 +25,7 @@ import ReferencePage from "./pages/ReferencePage";
 import LogsPage from "./pages/LogsPage";
 import NotificationsPage from "./pages/NotificationsPage";
 import RateLimitsPage from "./pages/RateLimitsPage";
+import ExecutionInboxPage from "./pages/ExecutionInboxPage";
 
 const TokensPage = lazy(() => import("./pages/TokensPage"));
 
@@ -83,6 +84,7 @@ export default function App() {
         <Route path="/logs" element={<LogsPage />} />
         <Route path="/logs/:kind" element={<LogsPage />} />
         <Route path="/notifications" element={<NotificationsPage />} />
+        <Route path="/execution-inbox" element={<ExecutionInboxPage />} />
       </Route>
     </Routes>
   );

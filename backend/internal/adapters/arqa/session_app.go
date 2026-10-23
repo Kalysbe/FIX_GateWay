@@ -3,6 +3,7 @@ package arqa
 import (
 	"fmt"
 	"log/slog"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -31,6 +32,10 @@ type sessionApp struct {
 	msgRecv    atomic.Int64
 	errCount   atomic.Int64
 	pendingRaw map[string]string // ClOrdID → outbound wire (captured in ToApp)
+
+	sentMu   sync.Mutex
+	sent     map[int]sentMessage // outbound MsgSeqNum → type, for 35=3 without 372
+	sentRing []int
 
 	secDefMu   sync.Mutex
 	secDefWait *secDefWaiter
@@ -63,6 +68,7 @@ func newSessionApp(adapterID string, log *slog.Logger, onExec domain.ExecutionHa
 		log:             log,
 		onExec:          onExec,
 		pendingRaw:      map[string]string{},
+		sent:            map[int]sentMessage{},
 		mdBook:          map[string]domain.MarketQuote{},
 		mdSubIDs:        map[string]struct{}{},
 		mdSubscriptions: map[string]*mdSubscription{},
@@ -105,7 +111,48 @@ func (a *sessionApp) OnLogout(sessionID quickfix.SessionID) {
 	a.emitFIX("FIX_SESSION_DISCONNECTED", sessionID.String(), "5", "IN", "", "logout", 0)
 }
 
+// sentMessage identifies an outbound message a session Reject may refer to.
+type sentMessage struct {
+	msgType string
+	clOrdID string
+}
+
+const sentHistory = 8192
+
+// rememberSent records the type of an outbound message by sequence number.
+// quickfixgo assigns MsgSeqNum before ToAdmin/ToApp.
+func (a *sessionApp) rememberSent(msg *quickfix.Message) {
+	seq, err := msg.Header.GetInt(tag.MsgSeqNum)
+	if err != nil {
+		return
+	}
+	msgType, _ := msg.MsgType()
+	clOrdID, _ := msg.Body.GetString(tag.ClOrdID)
+	a.sentMu.Lock()
+	defer a.sentMu.Unlock()
+	if _, ok := a.sent[seq]; !ok {
+		a.sentRing = append(a.sentRing, seq)
+		if len(a.sentRing) > sentHistory {
+			delete(a.sent, a.sentRing[0])
+			a.sentRing = a.sentRing[1:]
+		}
+	}
+	a.sent[seq] = sentMessage{msgType: msgType, clOrdID: clOrdID}
+}
+
+func (a *sessionApp) sentBySeq(raw string) (sentMessage, bool) {
+	seq, err := strconv.Atoi(strings.TrimSpace(raw))
+	if err != nil {
+		return sentMessage{}, false
+	}
+	a.sentMu.Lock()
+	defer a.sentMu.Unlock()
+	m, ok := a.sent[seq]
+	return m, ok
+}
+
 func (a *sessionApp) ToAdmin(msg *quickfix.Message, sessionID quickfix.SessionID) {
+	a.rememberSent(msg)
 	if kind, _ := msg.MsgType(); kind == "A" {
 		if a.username != "" {
 			msg.Body.SetString(tag.Username, a.username)
@@ -116,6 +163,7 @@ func (a *sessionApp) ToAdmin(msg *quickfix.Message, sessionID quickfix.SessionID
 	}
 }
 func (a *sessionApp) ToApp(msg *quickfix.Message, sessionID quickfix.SessionID) error {
+	a.rememberSent(msg)
 	clOrdID, err := msg.Body.GetString(tag.ClOrdID)
 	if err == nil && clOrdID != "" {
 		a.mu.Lock()

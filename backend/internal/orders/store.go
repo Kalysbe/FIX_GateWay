@@ -413,6 +413,21 @@ func clOrdLookupKeys(clOrdID, origClOrdID string) []string {
 	return keys
 }
 
+// OrderIDForFIX finds the local order a FIX report refers to, without locking.
+func (s *Store) OrderIDForFIX(ctx context.Context, clOrdID, origClOrdID, quikOrderID string) (*uuid.UUID, error) {
+	var id uuid.UUID
+	err := s.pool.QueryRow(ctx, `SELECT id FROM orders WHERE fix_cl_ord_id = ANY($1)
+ OR (btrim($2) <> '' AND quik_order_id = $2) ORDER BY COALESCE(fix_cl_ord_id = ANY($1), false) DESC LIMIT 1`,
+		clOrdLookupKeys(clOrdID, origClOrdID), quikOrderID).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &id, nil
+}
+
 func lockOrderForFIX(ctx context.Context, tx pgx.Tx, clOrdID, origClOrdID, quikOrderID string) (domain.Order, error) {
 	for _, k := range clOrdLookupKeys(clOrdID, origClOrdID) {
 		o, err := scanLockedOrder(tx.QueryRow(ctx, orderLockSelect+` WHERE fix_cl_ord_id=$1 FOR UPDATE`, k))

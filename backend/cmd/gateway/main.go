@@ -223,7 +223,9 @@ func main() {
 	})
 
 	server = api.NewServer(cfg, log, pool, brokerStore, orderSvc, orderStore, adapterStore, manager, outboxStore, auditStore, users, hub, obs)
-	server.SetExecutionInbox(inbox)
+	inboxCases := executioninbox.NewCaseStore(pool)
+	inbox.SetQuarantineCheck(inboxCases.Exists)
+	server.SetExecutionInbox(inbox, inboxCases)
 	nonces := auth.NewPersistentNonceStore(pool, 10*time.Minute)
 	server.SetNonceStore(nonces)
 	go nonces.RunCleanup(ctx)

@@ -84,7 +84,11 @@ func (s *Server) runTradeSafetyMonitor(ctx context.Context) {
 		}
 		if s.executionInbox != nil {
 			state := s.executionInbox.Status()
-			publish(tradeProblem{"EXECUTION_INBOX_BLOCKED", "Задержана обработка входящих FIX-отчётов", fmt.Sprintf("Ожидает обработки: %d; возраст старейшего: %.0f с. Новые заявки приостановлены.", state.Pending, state.OldestAge.Seconds()), !state.Healthy()})
+			detail := fmt.Sprintf("Ожидает обработки: %d; возраст старейшего: %.0f с. Новые заявки приостановлены.", state.Pending, state.OldestAge.Seconds())
+			if b, ok := s.executionInbox.Blocked(); ok {
+				detail += fmt.Sprintf(" Отчёт не применяется: %s. Если ошибка не временная, отложите отчёт в карантин на странице «Входящие FIX».", b.Error)
+			}
+			publish(tradeProblem{"EXECUTION_INBOX_BLOCKED", "Задержана обработка входящих FIX-отчётов", detail, !state.Healthy()})
 		}
 		if s.manager != nil {
 			resetting := map[string]bool{}

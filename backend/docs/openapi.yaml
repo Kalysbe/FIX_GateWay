@@ -118,6 +118,73 @@ paths:
           description: Role cannot resolve cases
         "409":
           description: Case is already closed or conclusive evidence is absent
+  /api/v1/admin/execution-inbox:
+    get:
+      summary: Incoming FIX report queue, the blocking report and quarantine cases
+      description: The blocking report is the failed head of the durable inbox; it pauses new trading. Open cases are listed first. Use open=true for open cases only.
+      security:
+        - bearerAuth: []
+      parameters:
+        - {in: query, name: open, schema: {type: boolean}}
+      responses:
+        "200":
+          description: status, blocked (or null) and cases
+        "503":
+          description: Execution inbox is not configured
+  /api/v1/admin/execution-inbox/{id}/quarantine:
+    post:
+      summary: Set the blocking incoming report aside for manual reconciliation
+      description: OPERATOR, ADMIN or SUPER_ADMIN only. Records a case with the reason, the report and its error; the inbox then moves the file to quarantine/ without applying it and continues with the next report. Never changes orders or trades.
+      security:
+        - bearerAuth: []
+      parameters:
+        - {in: path, name: id, required: true, description: Inbox entry ID, schema: {type: string, format: uuid}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [reason]
+              properties:
+                reason: {type: string, minLength: 1, maxLength: 2000}
+      responses:
+        "202":
+          description: Case recorded; the entry is moved aside by the inbox worker
+        "400":
+          description: Invalid ID or reason
+        "403":
+          description: Role cannot quarantine
+        "409":
+          description: Entry is not the report currently blocking the inbox
+  /api/v1/admin/execution-inbox/cases/{id}/resolve:
+    post:
+      summary: Close a quarantine case after manual reconciliation
+      description: OPERATOR, ADMIN or SUPER_ADMIN only. Records the outcome; does not replay the report.
+      security:
+        - bearerAuth: []
+      parameters:
+        - {in: path, name: id, required: true, description: Inbox entry ID, schema: {type: string, format: uuid}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [note]
+              properties:
+                note: {type: string, minLength: 1, maxLength: 2000}
+      responses:
+        "200":
+          description: Case closed
+        "400":
+          description: Invalid ID or note
+        "404":
+          description: Case not found
+        "409":
+          description: Case already closed
   /api/v1/admin/rate-limits:
     get:
       summary: Effective rate limits and per-instance usage

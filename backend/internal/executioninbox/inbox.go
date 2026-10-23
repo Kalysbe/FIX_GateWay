@@ -24,6 +24,16 @@ import (
 
 const maxReportBytes = 1 << 20
 
+// QuarantineDir holds entries an operator set aside. They are never replayed.
+const QuarantineDir = "quarantine"
+
+// ErrQuarantined is returned by an apply callback for an entry that has an
+// operator quarantine case. The entry is moved aside instead of being deleted.
+var ErrQuarantined = errors.New("execution inbox entry quarantined by operator")
+
+// ErrNotBlocked means the entry is not the failed head of the queue.
+var ErrNotBlocked = errors.New("execution inbox entry is not the blocked head")
+
 type Entry struct {
 	Checksum   string                 `json:"checksum,omitempty"`
 	ID         uuid.UUID              `json:"id"`
@@ -32,9 +42,10 @@ type Entry struct {
 }
 
 type pending struct {
-	name     string
-	size     int64
-	received time.Time
+	name      string
+	size      int64
+	received  time.Time
+	recovered bool // present on disk at Open
 }
 
 type Status struct {
@@ -42,6 +53,16 @@ type Status struct {
 	Bytes     int64
 	OldestAge time.Duration
 	Failed    bool
+}
+
+// Blocked describes the head entry that pauses trading.
+type Blocked struct {
+	Name      string
+	Entry     Entry
+	Error     string
+	FailedAt  time.Time
+	Attempts  int
+	ReadError bool // the file itself is unreadable; Entry is empty
 }
 
 func (s Status) Healthy() bool { return !s.Failed && s.OldestAge < 30*time.Second }
@@ -58,6 +79,20 @@ type Inbox struct {
 	lastStamp  int64
 	failed     bool
 	wake       chan struct{}
+
+	// applyMu serialises the worker with operator actions on the head entry.
+	applyMu   sync.Mutex
+	failName  string
+	failErr   string
+	failAt    time.Time
+	failCount int
+	held      func(context.Context, uuid.UUID) (bool, error)
+}
+
+// SetQuarantineCheck installs the lookup of operator quarantine cases. It must
+// be called before Run. An entry with a case is moved aside, never applied.
+func (in *Inbox) SetQuarantineCheck(held func(context.Context, uuid.UUID) (bool, error)) {
+	in.held = held
 }
 
 // Open acquires an OS lock for the lifetime of the process. The directory must
@@ -131,7 +166,7 @@ func (in *Inbox) load() error {
 		if err != nil {
 			return err
 		}
-		in.queue = append(in.queue, pending{f.Name(), size, e.ReceivedAt})
+		in.queue = append(in.queue, pending{f.Name(), size, e.ReceivedAt, true})
 		in.bytes += size
 		if len(in.queue) > in.maxEntries || in.bytes > in.maxBytes {
 			return errors.New("existing execution inbox exceeds configured capacity; reconcile before restart")
@@ -222,12 +257,9 @@ func (in *Inbox) Append(report domain.ExecutionReport) error {
 		return err
 	}
 	in.lastStamp = stamp
-	in.queue = append(in.queue, pending{name, int64(len(raw)), e.ReceivedAt})
+	in.queue = append(in.queue, pending{name, int64(len(raw)), e.ReceivedAt, false})
 	in.bytes += int64(len(raw))
-	select {
-	case in.wake <- struct{}{}:
-	default:
-	}
+	in.Wake()
 	return nil
 }
 
@@ -267,12 +299,96 @@ func (in *Inbox) acknowledge(p pending) error {
 	if len(in.queue) == 0 {
 		in.failed = false
 	}
+	if in.failName == p.name {
+		in.failName, in.failErr, in.failAt, in.failCount = "", "", time.Time{}, 0
+	}
 	return nil
+}
+
+// moveToQuarantine durably moves the head entry aside and removes it from the
+// queue. The next entry is retried before trading is considered healthy.
+func (in *Inbox) moveToQuarantine(p pending) error {
+	in.mu.Lock()
+	defer in.mu.Unlock()
+	qdir := filepath.Join(in.dir, QuarantineDir)
+	if err := os.MkdirAll(qdir, 0700); err != nil {
+		return err
+	}
+	dst := filepath.Join(qdir, p.name)
+	if err := os.Rename(filepath.Join(in.dir, p.name), dst); err != nil {
+		// A previous attempt may have moved the file and failed to sync.
+		if _, statErr := os.Stat(dst); !os.IsNotExist(err) || statErr != nil {
+			return err
+		}
+	}
+	if err := errors.Join(syncDirectory(qdir), syncDirectory(in.dir)); err != nil {
+		return err
+	}
+	in.queue = in.queue[1:]
+	in.bytes -= p.size
+	in.failed = false
+	in.failName, in.failErr, in.failAt, in.failCount = "", "", time.Time{}, 0
+	return nil
+}
+
+// Blocked returns the head entry that failed to apply, if trading is paused.
+// When the file itself is unreadable, Entry is empty and ReadError is set.
+func (in *Inbox) Blocked() (Blocked, bool) {
+	in.mu.Lock()
+	if !in.failed || len(in.queue) == 0 || in.queue[0].name != in.failName {
+		in.mu.Unlock()
+		return Blocked{}, false
+	}
+	b := Blocked{Name: in.failName, Error: in.failErr, FailedAt: in.failAt, Attempts: in.failCount}
+	in.mu.Unlock()
+	e, _, err := in.read(b.Name)
+	if err != nil {
+		b.ReadError = true
+		b.Error = err.Error()
+	}
+	b.Entry = e
+	return b, true
+}
+
+// WithBlocked runs fn while the worker is paused, but only if id is still the
+// failed head entry. fn typically records an operator quarantine case; after
+// it succeeds the worker is woken to move the entry aside.
+func (in *Inbox) WithBlocked(id uuid.UUID, fn func(Blocked) error) error {
+	in.applyMu.Lock()
+	defer in.applyMu.Unlock()
+	b, ok := in.Blocked()
+	if !ok || !strings.HasSuffix(b.Name, "_"+id.String()+".json") {
+		return ErrNotBlocked
+	}
+	if err := fn(b); err != nil {
+		return err
+	}
+	in.Wake()
+	return nil
+}
+
+// Wake makes the worker retry the head entry without waiting for its ticker.
+func (in *Inbox) Wake() {
+	select {
+	case in.wake <- struct{}{}:
+	default:
+	}
+}
+
+// EntryID extracts the entry UUID from an inbox file name, also when the
+// file content is unreadable.
+func EntryID(name string) (uuid.UUID, error) {
+	_, rest, ok := strings.Cut(strings.TrimSuffix(name, ".json"), "_")
+	if !ok {
+		return uuid.Nil, fmt.Errorf("invalid inbox filename %s", name)
+	}
+	return uuid.Parse(rest)
 }
 
 // Run applies reports in durable reception order. The application must commit
 // the entry ID in the same DB transaction as the order/trade changes. A failed
-// entry remains on disk and pauses new trading until it can be applied safely.
+// entry remains on disk and pauses new trading until it can be applied safely
+// or an operator quarantines it (see SetQuarantineCheck and WithBlocked).
 func (in *Inbox) Run(ctx context.Context, apply func(context.Context, Entry) error, observe func(Status, error)) {
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
@@ -282,28 +398,7 @@ func (in *Inbox) Run(ctx context.Context, apply func(context.Context, Entry) err
 			if ctx.Err() != nil {
 				return
 			}
-			p, ok := in.head()
-			if !ok {
-				break
-			}
-			e, _, err := in.read(p.name)
-			if err == nil {
-				work, cancel := context.WithTimeout(ctx, 5*time.Second)
-				err = apply(work, e)
-				cancel()
-			}
-			if err == nil {
-				err = in.acknowledge(p)
-			}
-			if err != nil {
-				in.mu.Lock()
-				firstFailure := !in.failed
-				in.failed = true
-				in.mu.Unlock()
-				if firstFailure {
-					in.log.Error("execution inbox apply failed; report retained and new trading paused", "entry", p.name, "error", err)
-				}
-				failure = err
+			if failure = in.step(ctx, apply); failure != nil || in.Status().Pending == 0 {
 				break
 			}
 		}
@@ -320,4 +415,61 @@ func (in *Inbox) Run(ctx context.Context, apply func(context.Context, Entry) err
 		case <-ticker.C:
 		}
 	}
+}
+
+func (in *Inbox) step(ctx context.Context, apply func(context.Context, Entry) error) error {
+	in.applyMu.Lock()
+	defer in.applyMu.Unlock()
+	p, ok := in.head()
+	if !ok {
+		return nil
+	}
+	in.mu.Lock()
+	retry := p.recovered || in.failName == p.name
+	in.mu.Unlock()
+	work, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	var err error
+	// Only an entry that already failed, or survived a restart, can have an
+	// operator case; ordinary deliveries skip the lookup.
+	if retry && in.held != nil {
+		var id uuid.UUID
+		if id, err = EntryID(p.name); err == nil {
+			var held bool
+			if held, err = in.held(work, id); err == nil && held {
+				err = ErrQuarantined
+			}
+		}
+	}
+	if err == nil {
+		var e Entry
+		if e, _, err = in.read(p.name); err == nil {
+			err = apply(work, e)
+		}
+	}
+	switch {
+	case err == nil:
+		err = in.acknowledge(p)
+	case errors.Is(err, ErrQuarantined):
+		if err = in.moveToQuarantine(p); err == nil {
+			in.log.Warn("execution inbox entry moved to quarantine by operator case", "entry", p.name)
+			return nil
+		}
+	}
+	if err != nil {
+		in.mu.Lock()
+		firstFailure := !in.failed || in.failName != p.name
+		in.failed = true
+		if in.failName != p.name {
+			in.failName, in.failAt, in.failCount = p.name, time.Now().UTC(), 0
+		}
+		in.failErr = err.Error()
+		in.failCount++
+		in.mu.Unlock()
+		if firstFailure {
+			in.log.Error("execution inbox apply failed; report retained and new trading paused", "entry", p.name, "error", err)
+		}
+		return err
+	}
+	return nil
 }

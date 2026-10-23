@@ -45,6 +45,7 @@ const MAIN_NAV: NavItem[] = [
   { group: "Управление", to: "/tokens", label: "Токены", icon: Icons.tokens, match: (p) => p.startsWith("/tokens") },
   { group: "Управление", to: "/rate-limits", label: "Rate Limits", icon: Icons.roles, match: (p) => p === "/rate-limits" },
   { group: "Инфраструктура", to: "/adapters", label: "Подключения FIX", icon: Icons.adapters, match: (p) => p.startsWith("/adapters") },
+  { group: "Инфраструктура", to: "/execution-inbox", label: "Входящие FIX", icon: Icons.adapters, match: (p) => p === "/execution-inbox" },
   { group: "Инфраструктура", to: "/grpc", label: "gRPC · Подписки", icon: Icons.users, match: (p) => p === "/grpc" },
   { group: "Инфраструктура", to: "/logs", label: "Логи и аудит", icon: Icons.audit, match: (p) => p.startsWith("/logs"), children: LOG_CHILDREN },
   { group: "Инфраструктура", to: "/notifications", label: "Уведомления", icon: Icons.bell, match: (p) => p.startsWith("/notifications") },
@@ -333,6 +334,7 @@ function breadcrumbs(pathname: string): Array<{ label: string; to?: string }> {
   if (pathname === "/grpc") return [{ label: "gRPC · Подписки" }];
   if (pathname === "/monitoring") return [{ label: "Мониторинг" }];
   if (pathname === "/rate-limits") return [{ label: "Rate Limits" }];
+  if (pathname === "/execution-inbox") return [{ label: "Входящие FIX" }];
   if (pathname === "/") return [{ label: "Дашборд" }];
   if (pathname.startsWith("/trades/")) return [{ label: "Сделки", to: "/trades" }, { label: "Карточка сделки" }];
   if (pathname.startsWith("/brokers/")) {
