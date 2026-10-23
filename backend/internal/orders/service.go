@@ -155,6 +155,11 @@ func (s *Service) Create(ctx context.Context, broker domain.Broker, ip string, r
 		TimeInForce: req.TimeInForce, Quantity: req.Quantity, Price: req.Price,
 		RequestID: observability.RequestIDFrom(ctx), TraceID: observability.TraceIDFrom(ctx),
 	})
+	if errors.Is(err, ErrIdempotencyConflict) {
+		s.emit(ctx, observability.Event{Type: observability.TypeError, Subtype: observability.ErrValidation, BrokerID: &broker.ID,
+			ClientOrderID: req.ClientOrderID, ErrorCode: "IDEMPOTENCY_CONFLICT", ErrorMessage: err.Error(), FailureStage: "validation", Message: err.Error()})
+		return order, false, err
+	}
 	if err != nil {
 		var risk *RiskRejected
 		if errors.As(err, &risk) {

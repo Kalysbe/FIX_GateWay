@@ -161,6 +161,8 @@ func (m *Manager) healthLoop(ctx context.Context) {
 	}
 }
 
+const healthCheckTimeout = 5 * time.Second
+
 func (m *Manager) checkAll(ctx context.Context) {
 	m.mu.RLock()
 	ids := make([]string, 0, len(m.adapters))
@@ -169,6 +171,11 @@ func (m *Manager) checkAll(ctx context.Context) {
 	}
 	m.mu.RUnlock()
 
+	// The in-memory counter misses orders finished outside an execution
+	// report (reconciliation, expiry, restart); resync it from the orders.
+	countCtx, cancel := context.WithTimeout(ctx, healthCheckTimeout)
+	active, err := m.store.ActiveCounts(countCtx)
+	cancel()
 	for _, id := range ids {
 		m.mu.RLock()
 		ad := m.adapters[id]
@@ -176,27 +183,38 @@ func (m *Manager) checkAll(ctx context.Context) {
 		if ad == nil {
 			continue
 		}
-		prev := ad.Status()
-		h, err := ad.HealthCheck(ctx)
-		status := ad.Status()
-		if err != nil && status != domain.AdapterStarting {
-			status = domain.AdapterOffline
+		if err == nil {
+			ad.IncActive(active[id] - ad.ActiveOrders())
 		}
-		if h.SessionLoggedOn {
-			status = domain.AdapterOnline
-		}
-		_ = m.store.UpdateStatus(ctx, id, status, h.SessionLoggedOn)
-		_ = m.store.UpdateRuntime(ctx, id, ad.ActiveOrders(), ad.Meta().ProcessedOrders, ad.Meta().ErrorCount)
-		if prev != status && m.onStatus != nil {
-			m.onStatus(id, status)
-			_ = m.store.AddEvent(ctx, id, "STATUS_CHANGED", string(status))
-			if m.onObs != nil {
-				sub := "ADAPTER_CONNECTED"
-				if status == domain.AdapterOffline {
-					sub = "ADAPTER_DISCONNECTED"
-				}
-				m.onObs("ADAPTER", sub, id, string(status))
+		m.checkOne(ctx, id, ad)
+	}
+}
+
+// checkOne bounds one adapter's health check and status writes, so a stalled
+// session or database cannot stop health checks of the other adapters.
+func (m *Manager) checkOne(parent context.Context, id string, ad Adapter) {
+	ctx, cancel := context.WithTimeout(parent, healthCheckTimeout)
+	defer cancel()
+	prev := ad.Status()
+	h, err := ad.HealthCheck(ctx)
+	status := ad.Status()
+	if err != nil && status != domain.AdapterStarting {
+		status = domain.AdapterOffline
+	}
+	if h.SessionLoggedOn {
+		status = domain.AdapterOnline
+	}
+	_ = m.store.UpdateStatus(ctx, id, status, h.SessionLoggedOn)
+	_ = m.store.UpdateRuntime(ctx, id, ad.ActiveOrders(), ad.Meta().ProcessedOrders, ad.Meta().ErrorCount)
+	if prev != status && m.onStatus != nil {
+		m.onStatus(id, status)
+		_ = m.store.AddEvent(ctx, id, "STATUS_CHANGED", string(status))
+		if m.onObs != nil {
+			sub := "ADAPTER_CONNECTED"
+			if status == domain.AdapterOffline {
+				sub = "ADAPTER_DISCONNECTED"
 			}
+			m.onObs("ADAPTER", sub, id, string(status))
 		}
 	}
 }

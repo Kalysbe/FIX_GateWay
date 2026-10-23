@@ -352,6 +352,11 @@ func (s *Server) createOrder(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusUnprocessableEntity, map[string]any{"error": risk.Message, "code": risk.Code})
 			return
 		}
+		if errors.Is(err, orders.ErrIdempotencyConflict) {
+			observability.AnnotateError(r, "IDEMPOTENCY_CONFLICT", err.Error(), "validation")
+			writeJSON(w, http.StatusConflict, map[string]any{"error": err.Error(), "code": "IDEMPOTENCY_CONFLICT"})
+			return
+		}
 		if errors.Is(err, orders.ErrPersistenceUnavailable) {
 			writeErr(w, http.StatusServiceUnavailable, "order storage unavailable; verify result and retry with the same client_order_id")
 			return

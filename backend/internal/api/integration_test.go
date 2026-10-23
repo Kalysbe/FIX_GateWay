@@ -110,6 +110,22 @@ func TestOrderIdempotencyIntegration(t *testing.T) {
 		t.Fatalf("expected idempotent true: %#v", resp)
 	}
 	orderID := resp["order"].(map[string]any)["id"].(string)
+	for field, value := range map[string]any{"quantity": "11", "price": "251", "side": "SELL", "client_code": "007"} {
+		changed := map[string]any{}
+		for k, v := range body {
+			changed[k] = v
+		}
+		changed[field] = value
+		payload, _ := json.Marshal(changed)
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/orders", bytes.NewReader(payload))
+		req.Header.Set("Authorization", "Bearer "+tok.Raw)
+		req.Header.Set("Content-Type", "application/json")
+		rr := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(rr, req)
+		if rr.Code != http.StatusConflict {
+			t.Fatalf("reused client_order_id with different %s: status %d body %s", field, rr.Code, rr.Body.String())
+		}
+	}
 	var queued int
 	if err := pool.QueryRow(ctx, `SELECT count(*) FROM outbox_events WHERE aggregate_id=$1 AND event_type='ORDER_SEND' AND status='PENDING'`, orderID).Scan(&queued); err != nil || queued != 1 {
 		t.Fatalf("accepted/idempotent order must have exactly one durable queue entry: count=%d err=%v", queued, err)

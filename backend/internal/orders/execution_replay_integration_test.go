@@ -86,3 +86,57 @@ func TestExecutionReplayDoesNotChangeOrderTotals(t *testing.T) {
 		t.Fatalf("terminal replay re-applied: %+v %v", replayed, err)
 	}
 }
+
+func TestAveragePriceUsesRecordedFillsWhenCumQtyJumps(t *testing.T) {
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		t.Skip("disposable DATABASE_URL required")
+	}
+	if err := migrate.Up(dsn, "../../migrations"); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	var broker, instrument int64
+	if err = pool.QueryRow(ctx, `INSERT INTO brokers(code,name) VALUES($1,'Avg test') RETURNING id`, uuid.NewString()).Scan(&broker); err != nil {
+		t.Fatal(err)
+	}
+	if err = pool.QueryRow(ctx, `INSERT INTO instruments(internal_symbol,quik_symbol,board) VALUES($1,$1,'AVG') RETURNING id`, uuid.NewString()).Scan(&instrument); err != nil {
+		t.Fatal(err)
+	}
+	store := NewStore(pool)
+	order, _, err := store.CreateWithOutbox(ctx, CreateInput{BrokerID: broker, InstrumentID: instrument, ClientOrderID: uuid.NewString(), Quantity: decimal.NewFromInt(10), Side: domain.SideBuy, OrderType: domain.OrderTypeMarket, TimeInForce: "DAY"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = pool.Exec(ctx, `UPDATE orders SET status='SENT' WHERE id=$1`, order.ID); err != nil {
+		t.Fatal(err)
+	}
+	apply := func(qty, px, cum int64) domain.Order {
+		t.Helper()
+		o, _, err := store.ApplyExecutionReport(ctx, *order.FixClOrdID, "", uuid.NewString(), "1", "1", "", decimal.NewFromInt(qty), decimal.NewFromInt(px), decimal.NewFromInt(cum), decimal.NewFromInt(10-cum), "", "", "", "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return o
+	}
+	apply(2, 100, 2)
+	// A report with CumQty=4 (2 lots) was not applied; this one has CumQty=7.
+	o := apply(3, 200, 7)
+	if !o.FilledQuantity.Equal(decimal.NewFromInt(7)) {
+		t.Fatalf("filled %s", o.FilledQuantity)
+	}
+	if !o.AvgPrice.Equal(decimal.NewFromInt(160)) { // (2*100+3*200)/5
+		t.Fatalf("avg %s, want 160 over recorded fills", o.AvgPrice)
+	}
+	// The next fill must not weight the old average by the jumped CumQty.
+	o = apply(1, 300, 8)
+	want := decimal.NewFromInt(1100).Div(decimal.NewFromInt(6)) // (200+600+300)/6
+	if !o.AvgPrice.Sub(want).Abs().LessThan(decimal.New(1, -6)) {
+		t.Fatalf("avg %s, want %s", o.AvgPrice, want)
+	}
+}

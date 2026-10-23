@@ -165,7 +165,9 @@ func (a *sessionApp) ToAdmin(msg *quickfix.Message, sessionID quickfix.SessionID
 func (a *sessionApp) ToApp(msg *quickfix.Message, sessionID quickfix.SessionID) error {
 	a.rememberSent(msg)
 	clOrdID, err := msg.Body.GetString(tag.ClOrdID)
-	if err == nil && clOrdID != "" {
+	// Resends (PossDup) are not taken by send(); keep only first transmissions.
+	possDup, _ := msg.Header.GetBool(tag.PossDupFlag)
+	if err == nil && clOrdID != "" && !possDup {
 		a.mu.Lock()
 		a.pendingRaw[clOrdID] = formatWireFIX(msg)
 		a.mu.Unlock()
@@ -325,6 +327,7 @@ func (a *sessionApp) send(msg *quickfix.Message) (string, error) {
 	sid := a.sessionID
 	a.mu.RUnlock()
 	if err := quickfix.SendToTarget(msg, sid); err != nil {
+		a.takeSentRaw(clOrdID)
 		a.errCount.Add(1)
 		a.lastError.Store(err.Error())
 		return "", err

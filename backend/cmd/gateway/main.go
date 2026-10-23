@@ -316,11 +316,13 @@ func main() {
 	orderSvc.SetQueueNotifier(worker.Notify)
 	go worker.Run(ctx)
 
+	// Streams and export downloads set their own write deadlines.
 	httpServer := &http.Server{
 		Addr:              cfg.HTTPAddr,
 		Handler:           server.Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      cfg.HTTPWriteTimeout,
 		IdleTimeout:       120 * time.Second,
 		MaxHeaderBytes:    1 << 16,
 	}

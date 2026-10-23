@@ -25,6 +25,7 @@ type Config struct {
 	APIReadConcurrency       int
 	APITradeConcurrency      int
 	APIRequestTimeout        time.Duration
+	HTTPWriteTimeout         time.Duration
 	RateLimitMaxStates       int
 	GRPCAddr                 string
 	GRPCCertFile             string
@@ -109,6 +110,7 @@ func Load() Config {
 		APIReadConcurrency:       getInt("API_READ_CONCURRENCY", 32),
 		APITradeConcurrency:      getInt("API_TRADE_CONCURRENCY", 16),
 		APIRequestTimeout:        getDuration("API_REQUEST_TIMEOUT", 15*time.Second),
+		HTTPWriteTimeout:         getDuration("HTTP_WRITE_TIMEOUT", 60*time.Second),
 		GRPCAddr:                 getEnv("GRPC_ADDR", ":8443"),
 		GRPCCertFile:             getEnv("GRPC_TLS_CERT", "certs/server.crt"),
 		GRPCKeyFile:              getEnv("GRPC_TLS_KEY", "certs/server.key"),

@@ -79,6 +79,28 @@ func (s *Store) UpdateStatus(ctx context.Context, id string, status domain.Adapt
 	return err
 }
 
+// ActiveCounts returns, per adapter, orders sent within the last 24 hours that
+// are not terminal. Orders without a final report (DAY expiry) age out.
+func (s *Store) ActiveCounts(ctx context.Context) (map[string]int64, error) {
+	rows, err := s.pool.Query(ctx, `SELECT adapter_id, count(*) FROM orders
+ WHERE created_at > now() - interval '24 hours' AND adapter_id IS NOT NULL AND fix_send_attempted_at IS NOT NULL
+ AND status NOT IN ('FILLED','CANCELLED','REJECTED','EXPIRED','FAILED') GROUP BY adapter_id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]int64{}
+	for rows.Next() {
+		var id string
+		var n int64
+		if err := rows.Scan(&id, &n); err != nil {
+			return nil, err
+		}
+		out[id] = n
+	}
+	return out, rows.Err()
+}
+
 func (s *Store) UpdateRuntime(ctx context.Context, id string, active, processed, errors int64) error {
 	_, err := s.pool.Exec(ctx, `
 		UPDATE adapters SET active_orders=$2, processed_orders=$3, error_count=$4, updated_at=now() WHERE id=$1`,

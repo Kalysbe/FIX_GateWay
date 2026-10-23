@@ -108,21 +108,32 @@ func (w *Worker) Notify() {
 	}
 }
 
+const queueQueryTimeout = 10 * time.Second
+
 func (w *Worker) tick(ctx context.Context) {
 	if w.dispatchGuard != nil && !w.dispatchGuard() {
 		return
 	}
+	// Queue bookkeeping must not hang the worker on a stalled database.
+	bounded := func() (context.Context, context.CancelFunc) { return context.WithTimeout(ctx, queueQueryTimeout) }
 	defer func() {
-		if count, err := w.store.PendingCount(ctx); err == nil {
+		qctx, cancel := bounded()
+		defer cancel()
+		if count, err := w.store.PendingCount(qctx); err == nil {
 			metrics.OutboxQueueSize.Set(float64(count))
 		}
 	}()
-	if n, err := w.store.ReclaimStale(ctx, DefaultStaleAfter); err != nil {
+	qctx, cancel := bounded()
+	n, err := w.store.ReclaimStale(qctx, DefaultStaleAfter)
+	cancel()
+	if err != nil {
 		w.log.Error("outbox reclaim failed", "error", err)
 	} else if n > 0 {
 		w.log.Warn("reclaimed stale outbox events", "count", n)
 	}
-	events, err := w.store.ClaimBatch(ctx, w.workerID, w.batch)
+	qctx, cancel = bounded()
+	events, err := w.store.ClaimBatch(qctx, w.workerID, w.batch)
+	cancel()
 	if err != nil {
 		w.log.Error("outbox claim failed", "error", err)
 		return

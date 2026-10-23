@@ -146,3 +146,17 @@ func TestSessionRejectWithoutRefMsgTypeResolvesBySequence(t *testing.T) {
 		t.Fatalf("unknown reject = %+v", got)
 	}
 }
+
+func TestResentOrdersDoNotAccumulateOutboundCopies(t *testing.T) {
+	a := newSessionApp("t", slog.Default(), nil)
+	msg := quickfix.NewMessage()
+	msg.Header.SetField(tag.MsgType, field.NewMsgType(enum.MsgType_ORDER_SINGLE))
+	msg.Header.SetBool(tag.PossDupFlag, true)
+	msg.Body.SetString(tag.ClOrdID, "RESENT-1")
+	if err := a.ToApp(msg, quickfix.SessionID{}); err != nil {
+		t.Fatal(err)
+	}
+	if len(a.pendingRaw) != 0 {
+		t.Fatalf("resend kept %d outbound copies", len(a.pendingRaw))
+	}
+}

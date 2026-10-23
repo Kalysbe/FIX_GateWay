@@ -372,8 +372,13 @@ func (s *Server) downloadExportJob(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "export not ready")
 		return
 	}
+	// Exports are bounded in size but may exceed the server write timeout on
+	// a slow link; allow a longer, still finite, transfer.
+	_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(exportDownloadTimeout))
 	http.ServeFile(w, r, job.FilePath)
 }
+
+const exportDownloadTimeout = 15 * time.Minute
 
 func (s *Server) orderTrace(w http.ResponseWriter, r *http.Request) {
 	if s.obs == nil {

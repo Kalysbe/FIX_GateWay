@@ -304,6 +304,8 @@ paths:
           description: Idempotent existing order
         "201":
           description: Created
+        "409":
+          description: client_order_id already used with different order parameters (code IDEMPOTENCY_CONFLICT)
         "401":
           description: Unauthorized
         "403":

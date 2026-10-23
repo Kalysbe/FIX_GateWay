@@ -293,6 +293,16 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/CreateOrderResponse"
+        "409":
+          description: client_order_id уже использован заявкой с другими параметрами (инструмент, board, сторона, тип, срок, количество, цена, счёт, код клиента, фирма). Заявка не создаётся; для новой заявки нужен новый client_order_id.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [error, code]
+                properties:
+                  error: {type: string}
+                  code: {type: string, enum: [IDEMPOTENCY_CONFLICT]}
         "422":
           description: Торговая пауза или превышение quantity/open-order лимита. Отказ не создаёт заявку; идемпотентный повтор принятой заявки сохраняет доступность.
           content:

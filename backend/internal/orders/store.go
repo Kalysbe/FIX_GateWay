@@ -23,6 +23,10 @@ var ErrNotFound = errors.New("order not found")
 var ErrInvalidCancel = errors.New("invalid cancel")
 var ErrInstrumentNotFound = errors.New("instrument not found")
 
+// ErrIdempotencyConflict means client_order_id is already used by an order
+// with different parameters. The existing order is not returned as a replay.
+var ErrIdempotencyConflict = errors.New("client_order_id already used with different order parameters")
+
 type Store struct {
 	pool *pgxpool.Pool
 }
@@ -121,11 +125,13 @@ func (s *Store) CreateWithOutbox(ctx context.Context, in CreateInput) (domain.Or
 		return domain.Order{}, false, err
 	}
 
-	var existingID uuid.UUID
-	err = tx.QueryRow(ctx, `SELECT id FROM orders WHERE broker_id=$1 AND client_order_id=$2`, in.BrokerID, in.ClientOrderID).Scan(&existingID)
+	existingID, same, err := findReplay(ctx, tx, in)
 	if err == nil {
 		if err := tx.Commit(ctx); err != nil {
 			return domain.Order{}, false, err
+		}
+		if !same {
+			return domain.Order{}, false, ErrIdempotencyConflict
 		}
 		o, err := s.Get(ctx, existingID)
 		return o, true, err
@@ -152,7 +158,14 @@ func (s *Store) CreateWithOutbox(ctx context.Context, in CreateInput) (domain.Or
 	if err != nil {
 		_ = tx.Rollback(ctx)
 		if isUniqueViolation(err) {
-			o, gerr := s.FindByClientOrderID(ctx, in.BrokerID, in.ClientOrderID)
+			existingID, same, gerr := findReplay(ctx, s.pool, in)
+			if gerr != nil {
+				return domain.Order{}, false, gerr
+			}
+			if !same {
+				return domain.Order{}, false, ErrIdempotencyConflict
+			}
+			o, gerr := s.Get(ctx, existingID)
 			return o, true, gerr
 		}
 		return domain.Order{}, false, err
@@ -189,6 +202,22 @@ func (s *Store) CreateWithOutbox(ctx context.Context, in CreateInput) (domain.Or
 	}
 	o, err := s.Get(ctx, id)
 	return o, false, err
+}
+
+// findReplay looks up an order with the same client_order_id and reports
+// whether its parameters match the request (a retry rather than a new order).
+func findReplay(ctx context.Context, q interface {
+	QueryRow(context.Context, string, ...any) pgx.Row
+}, in CreateInput) (uuid.UUID, bool, error) {
+	var id uuid.UUID
+	var same bool
+	err := q.QueryRow(ctx, `SELECT id, instrument_id=$3 AND COALESCE(board,'')=$4 AND side=$5 AND order_type=$6
+ AND COALESCE(time_in_force,'')=$7 AND quantity=$8 AND price IS NOT DISTINCT FROM $9::numeric
+ AND COALESCE(fix_account,'')=$10 AND COALESCE(fix_client_id,'')=$11 AND COALESCE(fix_firm,'')=$12
+ FROM orders WHERE broker_id=$1 AND client_order_id=$2`,
+		in.BrokerID, in.ClientOrderID, in.InstrumentID, in.Board, in.Side, in.OrderType, in.TimeInForce,
+		in.Quantity, in.Price, in.FixAccount, in.ClientCode, in.QuikFirm).Scan(&id, &same)
+	return id, same, err
 }
 
 func (s *Store) Transition(ctx context.Context, id uuid.UUID, to domain.OrderStatus, eventType, message string, adapterID *string) (domain.Order, error) {
@@ -545,12 +574,12 @@ func (s *Store) ApplyExecutionReport(ctx context.Context, fixClOrdID, origClOrdI
 	}
 
 	avg := o.AvgPrice
-	if lastQty.GreaterThan(decimal.Zero) {
-		prevNotional := o.FilledQuantity.Mul(o.AvgPrice)
-		newNotional := lastQty.Mul(lastPx)
-		totalQty := o.FilledQuantity.Add(lastQty)
-		if totalQty.GreaterThan(decimal.Zero) {
-			avg = prevNotional.Add(newNotional).Div(totalQty)
+	if exec != nil {
+		// Weighted over the recorded fills, so a jump in CumQty (a missed or
+		// quarantined report) cannot skew the price of the fills we know.
+		if err := tx.QueryRow(ctx, `SELECT COALESCE(sum(last_qty*last_px)/NULLIF(sum(last_qty),0),0)
+ FROM executions WHERE order_id=$1`, o.ID).Scan(&avg); err != nil {
+			return domain.Order{}, nil, err
 		}
 	}
 
@@ -565,10 +594,12 @@ func (s *Store) ApplyExecutionReport(ctx context.Context, fixClOrdID, origClOrdI
 				return domain.Order{}, nil, err
 			}
 		}
-		_, _ = tx.Exec(ctx, `
+		if _, err := tx.Exec(ctx, `
 			INSERT INTO order_events (order_id, event_type, from_status, to_status, adapter_id, message, payload)
 			VALUES ($1,'EXECUTION_REPORT',$2,$3,$4,$5,$6)`,
-			o.ID, string(o.Status), string(to), adapterID, "ignored illegal ER transition; "+erMsg, payload)
+			o.ID, string(o.Status), string(to), adapterID, "ignored illegal ER transition; "+erMsg, payload); err != nil {
+			return domain.Order{}, nil, err
+		}
 		if err := tx.Commit(ctx); err != nil {
 			return domain.Order{}, nil, err
 		}
