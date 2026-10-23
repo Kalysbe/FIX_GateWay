@@ -98,7 +98,7 @@ export default function DashboardPage() {
           <div className="mb-3 flex items-baseline justify-between gap-3">
             <h2 className="text-[15px] font-semibold tracking-tight">Подключённые брокеры</h2>
             <div className="text-xs text-muted">
-              {d.connected_brokers?.length || 0} из {d.brokers} · запросы за 2 мин
+              {d.connected_brokers?.length || 0} из {d.brokers} · активность за 2 мин
             </div>
           </div>
           <div className="space-y-2">
@@ -120,7 +120,8 @@ export default function DashboardPage() {
                 </div>
                 <div className="text-right text-xs text-muted">
                   <div>{formatRelative(b.last_activity)}</div>
-                  <div>{formatNumber(b.requests)} запр.</div>
+                  {/* Only write requests are logged; read-only brokers have none. */}
+                  {b.requests > 0 && <div>{formatNumber(b.requests)} запр.</div>}
                 </div>
               </Link>
             ))}

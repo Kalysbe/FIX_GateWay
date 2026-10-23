@@ -129,18 +129,36 @@ func (s *Store) ConnectedBrokers(ctx context.Context, window time.Duration) ([]C
 		window = ConnectedWindow
 	}
 	from := time.Now().Add(-window)
+	// keepEvent does not persist successful GETs, so a broker that only reads
+	// (market data, positions, trades) never has API_REQUEST rows. Every
+	// authenticated REST or gRPC call refreshes api_tokens.last_used_at (at most
+	// every 45s), which is therefore the presence signal; API rows add counts.
 	rows, err := s.pool.Query(ctx, `
-		SELECT e.broker_id,
-		       COALESCE(MAX(b.code), MAX(e.broker_code), ''),
-		       COALESCE(MAX(b.name), MAX(e.broker_name), CAST(e.broker_id AS TEXT)),
-		       MAX(e.ts),
-		       (ARRAY_AGG(e.client_ip ORDER BY e.ts DESC) FILTER (WHERE e.client_ip IS NOT NULL AND e.client_ip <> ''))[1],
-		       COUNT(*)
-		FROM obs_events e
-		LEFT JOIN brokers b ON b.id = e.broker_id
-		WHERE e.ts >= $1 AND e.broker_id IS NOT NULL AND e.event_type = 'API_REQUEST'
-		GROUP BY e.broker_id
-		ORDER BY MAX(e.ts) DESC`, from)
+		WITH api AS (
+			SELECT e.broker_id, MAX(e.ts) AS last_activity,
+			       (ARRAY_AGG(e.client_ip ORDER BY e.ts DESC) FILTER (WHERE e.client_ip IS NOT NULL AND e.client_ip <> ''))[1] AS last_ip,
+			       COUNT(*) AS requests, MAX(e.broker_code) AS broker_code, MAX(e.broker_name) AS broker_name
+			FROM obs_events e
+			WHERE e.ts >= $1 AND e.broker_id IS NOT NULL AND e.event_type = 'API_REQUEST'
+			GROUP BY e.broker_id
+		), tok AS (
+			SELECT t.broker_id, MAX(t.last_used_at) AS last_activity,
+			       (ARRAY_AGG(t.last_used_ip ORDER BY t.last_used_at DESC) FILTER (WHERE t.last_used_ip IS NOT NULL AND t.last_used_ip <> ''))[1] AS last_ip
+			FROM api_tokens t
+			WHERE t.last_used_at >= $1 AND t.status = 'ACTIVE'
+			GROUP BY t.broker_id
+		)
+		SELECT COALESCE(a.broker_id, k.broker_id) AS broker_id,
+		       COALESCE(b.code, a.broker_code, ''),
+		       COALESCE(b.name, a.broker_name, CAST(COALESCE(a.broker_id, k.broker_id) AS TEXT)),
+		       GREATEST(a.last_activity, k.last_activity),
+		       CASE WHEN k.last_activity IS NOT NULL AND (a.last_activity IS NULL OR k.last_activity > a.last_activity)
+		            THEN COALESCE(k.last_ip, a.last_ip) ELSE COALESCE(a.last_ip, k.last_ip) END,
+		       COALESCE(a.requests, 0)
+		FROM api a
+		FULL JOIN tok k ON k.broker_id = a.broker_id
+		LEFT JOIN brokers b ON b.id = COALESCE(a.broker_id, k.broker_id)
+		ORDER BY 4 DESC, 1`, from)
 	if err != nil {
 		return nil, err
 	}

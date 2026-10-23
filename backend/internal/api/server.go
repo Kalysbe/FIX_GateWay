@@ -713,6 +713,13 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 		}
 		snapshot["adapters"] = ads
 		snapshot["adapters_available"] = s.manager.AvailableCount()
+		// The persisted snapshot only sees logged write requests; presence must
+		// match the Brokers page (token use and live gRPC streams).
+		live := s.connectedBrokers(ctx)
+		snapshot["connected_brokers"] = live
+		if o, ok := snapshot["observability"].(map[string]any); ok {
+			o["connected_now"] = len(live)
+		}
 		snapshot["system"] = map[string]any{"api": "ONLINE", "database": "ONLINE", "queue": "ONLINE"}
 		return snapshot, nil
 	})
