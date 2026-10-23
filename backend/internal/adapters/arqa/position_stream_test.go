@@ -4,12 +4,15 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/fix-gateway/backend/internal/domain"
 	"github.com/quickfixgo/quickfix"
 	"github.com/quickfixgo/tag"
+	"golang.org/x/text/encoding/charmap"
 )
 
 func TestPositionStreamSnapshotUpdatesAndDeletion(t *testing.T) {
@@ -106,6 +109,31 @@ func TestPositionParserRetainsDeleteForStream(t *testing.T) {
 	_, _, _, rows := parseARQAPositionReport(msg, "test")
 	if len(rows) != 1 || rows[0].UpdateAction != "2" {
 		t.Fatal("delete disappeared during parsing", rows)
+	}
+}
+
+// PostgreSQL rejected these rows with "invalid byte sequence for encoding UTF8"
+// (0xc8 0xe2 = "Ив" in Windows-1251) on the production QUIK.
+func TestPositionParserDecodesWindows1251ForTextColumns(t *testing.T) {
+	cp1251, _ := charmap.Windows1251.NewEncoder().String("Иванов")
+	msg := quickfix.NewMessage()
+	msg.Header.SetString(tag.MsgType, "AP")
+	msg.Body.SetString(tag.PosReqID, "stream")
+	msg.Body.SetString(tag.PosType, "ML")
+	msg.Body.SetString(quickfix.Tag(5026), "CLIENT")
+	msg.Body.SetString(quickfix.Tag(5027), cp1251)
+	_, _, _, rows := parseARQAPositionReport(msg, "test")
+	if len(rows) != 1 {
+		t.Fatal(rows)
+	}
+	p := rows[0]
+	for name, v := range map[string]string{"raw_fix": p.RawFIX, "client_code": p.ClientCode, "key": p.Keys["CLIENT"]} {
+		if !utf8.ValidString(v) {
+			t.Fatalf("%s is not UTF-8: %q", name, v)
+		}
+	}
+	if p.Keys["CLIENT"] != "Иванов" || !strings.Contains(p.RawFIX, "5027=Иванов|") {
+		t.Fatalf("decoded text lost: key=%q raw=%q", p.Keys["CLIENT"], p.RawFIX)
 	}
 }
 

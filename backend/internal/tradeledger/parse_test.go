@@ -39,3 +39,31 @@ func TestExchangeIdentityUsesTradeNumAndPreservesRealSides(t *testing.T) {
 		t.Fatal("trade number lost precision", q.Number, err)
 	}
 }
+
+// The QUIK API on 172.23.10.85 sends the local trading date as a UTC instant.
+// TradeNum 26092500000001 (YYMMDD 260925) arrived as 2026-09-24T18:00:00.000Z.
+func TestQUIKISOTradeDateIsReadInExchangeZone(t *testing.T) {
+	for in, want := range map[string]string{
+		"06-10-2026":                "2026-10-06", // DD-MM-YYYY instances
+		"2026-10-06":                "2026-10-06",
+		"2026-09-24T18:00:00.000Z":  "2026-09-25", // midnight UTC+6, not 24.09
+		"2026-10-12T18:00:00Z":      "2026-10-13",
+		"2026-10-13T00:00:00+06:00": "2026-10-13",
+		"2026-10-13T05:59:59.999Z":  "2026-10-13",
+	} {
+		raw := strings.Replace(sampleQUIK, `"06-10-2026"`, `"`+in+`"`, 1)
+		q, err := ParseQUIK(json.RawMessage(raw))
+		if err != nil || q.Date != want {
+			t.Fatalf("%s: date=%s err=%v, want %s", in, q.Date, err, want)
+		}
+		if q.Match != strings.ReplaceAll(want[2:], "-", "")+"-LIST_GBA-11094" {
+			t.Fatalf("%s: match id %s does not carry the trading date", in, q.Match)
+		}
+	}
+	for _, bad := range []string{"", "24.09.2026", "2026-09-24T18:00"} {
+		raw := strings.Replace(sampleQUIK, `"06-10-2026"`, `"`+bad+`"`, 1)
+		if _, err := ParseQUIK(json.RawMessage(raw)); err == nil {
+			t.Fatalf("%q accepted as a trading date", bad)
+		}
+	}
+}

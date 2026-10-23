@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/fix-gateway/backend/internal/domain"
 	"golang.org/x/text/encoding/charmap"
@@ -23,6 +24,10 @@ func TestMarketDataCyrillicSurvivesFIXToJSON(t *testing.T) {
 		_, rows := parseMarketDataFromRaw(raw, "a1", true)
 		if len(rows) != 1 {
 			t.Fatal(rows)
+		}
+		// json.Marshal hides invalid bytes; the TEXT column raw_fix does not.
+		if !utf8.ValidString(rows[0].RawFIX) || !strings.Contains(rows[0].RawFIX, "55="+name+"|") {
+			t.Fatalf("raw_fix is not UTF-8 text: %q", rows[0].RawFIX)
 		}
 		data, err := json.Marshal(rows[0])
 		if err != nil {

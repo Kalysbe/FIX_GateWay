@@ -323,13 +323,15 @@ func (a *Adapter) FetchPositions(ctx context.Context, q domain.PositionQuery) (s
 }
 
 func parseARQAPositionReport(msg *quickfix.Message, adapterID string) (reqID string, total int, endSnapshot bool, items []domain.FIXPosition) {
-	raw := msg.String()
+	// Parties, position keys/items and raw_fix all land in TEXT columns, so the
+	// whole report is decoded once; Windows-1251 never yields SOH or '='.
+	raw := decodeFIXText(msg.String())
 	get := func(t quickfix.Tag) string {
 		v, err := msg.Body.GetString(t)
 		if err != nil {
 			return ""
 		}
-		return v
+		return decodeFIXText(v)
 	}
 	reqID = get(tag.PosReqID)
 	if n := get(tag.TotalNumPosReports); n != "" {
@@ -344,7 +346,7 @@ func parseARQAPositionReport(msg *quickfix.Message, adapterID string) (reqID str
 	firm, client, account := parsePartiesFromRaw(raw)
 	clearing := get(tag.ClearingBusinessDate)
 	rptID := get(tag.PosMaintRptID)
-	wire := formatWireFIX(msg)
+	wire := decodeFIXText(formatWireFIX(msg))
 
 	for _, block := range parsePosBlocksFromRaw(raw) {
 		kind := kindFromPosType(block.posType)

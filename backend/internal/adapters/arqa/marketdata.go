@@ -622,7 +622,8 @@ func parseMarketDataFromRaw(raw, adapterID string, incremental bool) (reqID stri
 			}
 		}
 		finalizeBook(&b.q)
-		b.q.RawFIX = strings.ReplaceAll(strings.TrimRight(raw, "\x01"), "\x01", "|")
+		// raw_fix is a TEXT column: Windows-1251 display text must be UTF-8 here too.
+		b.q.RawFIX = decodeFIXText(strings.ReplaceAll(strings.TrimRight(raw, "\x01"), "\x01", "|"))
 		if !strings.HasSuffix(b.q.RawFIX, "|") && b.q.RawFIX != "" {
 			b.q.RawFIX += "|"
 		}

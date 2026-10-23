@@ -150,7 +150,7 @@ func ParseQUIK(raw json.RawMessage) (Input, error) {
 	case "продажа", "sell":
 		p.Side = "SELL"
 	}
-	d, err := time.Parse("02-01-2006", get("TradeDate"))
+	d, err := quikTradeDate(get("TradeDate"))
 	if err != nil {
 		return p, err
 	}
@@ -168,6 +168,30 @@ func ParseQUIK(raw json.RawMessage) (Input, error) {
 		return p, fmt.Errorf("cancelled QUIK trade requires reconciliation")
 	}
 	return p, p.validate()
+}
+
+// exchangeZone is the KSE trading-day zone (UTC+6, no DST since 2005). A fixed
+// zone avoids depending on tzdata in the container image.
+var exchangeZone = time.FixedZone("Asia/Bishkek", 6*60*60)
+
+// quikTradeDate accepts both QUIK API date forms. Some instances send
+// "DD-MM-YYYY"; others serialize the local trading date as a UTC instant, e.g.
+// 25.09 becomes "2026-09-24T18:00:00.000Z". Cutting the first ten characters
+// would book that trade on the previous day, so instants are read in the
+// exchange zone (verified against YYMMDD-prefixed TradeNum on 172.23.10.85).
+func quikTradeDate(s string) (time.Time, error) {
+	if d, err := time.Parse("02-01-2006", s); err == nil {
+		return d, nil
+	}
+	if d, err := time.Parse(time.DateOnly, s); err == nil {
+		return d, nil
+	}
+	t, err := time.Parse(time.RFC3339Nano, s)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("unsupported QUIK TradeDate %q", s)
+	}
+	local := t.In(exchangeZone)
+	return time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, time.UTC), nil
 }
 
 func (p *Input) validate() error {
