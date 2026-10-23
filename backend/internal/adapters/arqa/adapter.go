@@ -211,6 +211,10 @@ func (a *Adapter) SendOrder(ctx context.Context, order domain.Order) (string, er
 	if clOrdID == "" {
 		return "", fmt.Errorf("missing fix_cl_ord_id")
 	}
+	if err := checkOrderWireText(order); err != nil {
+		a.errors.Add(1)
+		return "", err
+	}
 	price := ""
 	if order.Price != nil {
 		price = order.Price.String()
@@ -242,14 +246,39 @@ func (a *Adapter) CancelOrder(ctx context.Context, order domain.Order) error {
 	if order.QuikOrderID != nil {
 		quik = *order.QuikOrderID
 	}
+	if err := checkOrderWireText(order); err != nil {
+		a.errors.Add(1)
+		return err
+	}
 	qty := order.Quantity.String()
 	if leaves := order.Quantity.Sub(order.FilledQuantity); leaves.GreaterThan(decimal.Zero) {
 		qty = leaves.String()
 	}
-	msg := buildCancel(orig+"-C", orig, quik, order.Symbol, order.Board, string(order.Side), order.TradingAccount, order.ClientCode, order.QuikFirm, qty)
+	msg := buildCancel(cancelClOrdID(orig, time.Now()), orig, quik, order.Symbol, order.Board, string(order.Side), order.TradingAccount, order.ClientCode, order.QuikFirm, qty)
 	if _, err := a.app.send(msg); err != nil {
 		a.errors.Add(1)
 		return err
+	}
+	return nil
+}
+
+// cancelClOrdID gives every cancel attempt its own tag 11: a retry after a
+// cancel reject must not reuse the previous ClOrdID. The "-C" marker is what
+// orders.clOrdLookupKeys strips to find the original order.
+func cancelClOrdID(orig string, now time.Time) string {
+	return orig + "-C" + strconv.FormatInt(now.Unix(), 36)
+}
+
+// checkOrderWireText is the last guard before free-form order fields are
+// copied into FIX tags; the API validates the same fields earlier.
+func checkOrderWireText(order domain.Order) error {
+	for _, f := range []struct{ name, value string }{
+		{"account", order.TradingAccount}, {"client_code", order.ClientCode}, {"firm", order.QuikFirm},
+		{"symbol", order.Symbol}, {"board", order.Board}, {"currency", order.Currency},
+	} {
+		if err := domain.CheckFIXText(f.name, f.value, domain.MaxFIXTextLen); err != nil {
+			return err
+		}
 	}
 	return nil
 }

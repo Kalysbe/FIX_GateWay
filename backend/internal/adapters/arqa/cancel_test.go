@@ -1,8 +1,11 @@
 package arqa
 
 import (
+	"strings"
 	"testing"
+	"time"
 
+	"github.com/fix-gateway/backend/internal/domain"
 	"github.com/quickfixgo/quickfix"
 	"github.com/quickfixgo/tag"
 )
@@ -47,5 +50,32 @@ func TestBuildCancelUsesARQATags(t *testing.T) {
 	}
 	if v, _ := msg.Body.GetString(tag.OrderQty); v != "1" {
 		t.Fatalf("38 OrderQty=%s", v)
+	}
+}
+
+func TestCancelClOrdIDIsUniquePerAttempt(t *testing.T) {
+	orig := "G1492c075b29a4e59b4a176b40702abcd"
+	now := time.Date(2026, 10, 23, 12, 0, 0, 0, time.UTC)
+	first := cancelClOrdID(orig, now)
+	retry := cancelClOrdID(orig, now.Add(2*time.Second))
+	if first == retry {
+		t.Fatalf("retry reused ClOrdID %s", first)
+	}
+	for _, id := range []string{first, retry} {
+		// orders.clOrdLookupKeys maps the cancel back to the order by the last "-C".
+		if i := strings.LastIndex(id, "-C"); i <= 0 || id[:i] != orig {
+			t.Fatalf("%s does not map back to %s", id, orig)
+		}
+	}
+}
+
+func TestOrderWireTextRejectsTagInjection(t *testing.T) {
+	order := domain.Order{TradingAccount: "1-3101-006", ClientCode: "006\x015018=OTHER", Symbol: "SBER", Board: "TQBR"}
+	if err := checkOrderWireText(order); err == nil {
+		t.Fatal("SOH in client_code must not reach the wire")
+	}
+	order.ClientCode = "006"
+	if err := checkOrderWireText(order); err != nil {
+		t.Fatal(err)
 	}
 }

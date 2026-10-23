@@ -250,6 +250,9 @@ func (a *Adapter) MaintainPositions(ctx context.Context, req domain.PositionMain
 	if len(req.Blocks) == 0 {
 		return "", fmt.Errorf("no position blocks")
 	}
+	if err := domain.CheckPositionMaintainText(req); err != nil {
+		return "", err
+	}
 	reqID := newPosReqID()
 	w := a.app.beginMaintWait(reqID)
 	defer a.app.clearMaintWait(reqID)

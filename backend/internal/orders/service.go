@@ -81,7 +81,15 @@ func ValidateCreateRequest(req CreateOrderRequest) error {
 	default:
 		return fmt.Errorf("time_in_force: допустимо DAY, IOC, FOK, GTC (по умолчанию DAY)")
 	}
-	return nil
+	for _, f := range []struct{ name, value string }{
+		{"account_id", req.AccountID}, {"client_code", req.ClientCode}, {"symbol", req.Symbol}, {"board", req.Board},
+	} {
+		if err := domain.CheckFIXText(f.name, f.value, domain.MaxFIXTextLen); err != nil {
+			return err
+		}
+	}
+	// client_order_id never reaches the wire (tag 11 is generated), so only control characters are rejected.
+	return domain.CheckFIXText("client_order_id", req.ClientOrderID, 0)
 }
 
 func (s *Service) Create(ctx context.Context, broker domain.Broker, ip string, req CreateOrderRequest, quikFirm string) (domain.Order, bool, error) {

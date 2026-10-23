@@ -260,6 +260,10 @@ func (a *Adapter) FetchPositions(ctx context.Context, q domain.PositionQuery) (s
 	if !a.app.isLoggedOn() {
 		return "", nil, fmt.Errorf("adapter %s not logged on", a.meta.ID)
 	}
+	if err := domain.CheckFIXTexts("firm_id", q.Firm, "client_code", q.ClientCode, "account", q.Account,
+		"subscription_type", q.SubscriptionType); err != nil {
+		return "", nil, err
+	}
 	reqID := newPosReqID()
 	w := a.app.beginPosWait(reqID)
 	defer a.app.clearPosWait(reqID)

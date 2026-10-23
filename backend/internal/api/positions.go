@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/fix-gateway/backend/internal/audit"
 	"github.com/fix-gateway/backend/internal/brokers"
 	"github.com/fix-gateway/backend/internal/domain"
 	"github.com/fix-gateway/backend/internal/positions"
@@ -215,15 +216,33 @@ func (s *Server) sendPositionMaintenance(w http.ResponseWriter, r *http.Request,
 		Firm: firm, ClientCode: client, Account: account,
 		Action: maintAction, TransType: "3", Blocks: blocks,
 	}
+	if err := domain.CheckPositionMaintainText(req); err != nil {
+		s.writePositionErr(w, invalidError(err.Error()))
+		return
+	}
 	adapterID, reqID, sn, listed, err := s.positions.SetViaFIX(r.Context(), s.manager, s.manager, req)
 	if err != nil {
 		s.writePositionErr(w, err)
 		return
 	}
+	auditAfter := map[string]any{
+		"firm_id": firm, "client_code": client, "adapter_id": adapterID, "pos_req_id": reqID,
+		"blocks": len(blocks), "action": maintAction,
+	}
 	if admin {
-		s.writeAdminAudit(r, "POSITION_SET_FIX", "position", firm, brokerID, nil, map[string]any{
-			"firm_id": firm, "client_code": client, "adapter_id": adapterID, "pos_req_id": reqID,
-			"blocks": len(blocks), "action": maintAction,
+		s.writeAdminAudit(r, "POSITION_SET_FIX", "position", firm, brokerID, nil, auditAfter)
+	} else {
+		// Broker 35=AL changes QUIK limits, so it needs a durable audit row, not only HTTP logs.
+		actorID := ""
+		if tok, ok := TokenFromContext(r.Context()); ok {
+			actorID = tok.ID.String()
+		}
+		ip, _ := s.clientIP(r)
+		auditAfter["blocks_detail"] = blocks
+		_ = s.audit.Write(r.Context(), audit.Entry{
+			ActorType: "broker", ActorID: actorID, BrokerID: brokerID,
+			Action: "POSITION_SET_FIX", EntityType: "position", EntityID: firm, IP: ip,
+			AdapterID: adapterID, RequestPayload: auditAfter, Result: "ok",
 		})
 	}
 	s.hub.Broadcast("positions.updated", map[string]any{

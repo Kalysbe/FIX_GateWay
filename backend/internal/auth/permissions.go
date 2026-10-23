@@ -32,10 +32,12 @@ func IsValidPermission(p string) bool {
 	return slices.Contains(AllPermissions, p)
 }
 
+// NormalizePermissions validates a token permission list. An omitted list
+// grants read-only access: trading and positions:write (35=AL) must be explicit.
 func NormalizePermissions(in []string) ([]string, bool) {
 	if len(in) == 0 {
-		out := make([]string, len(AllPermissions))
-		copy(out, AllPermissions)
+		out := make([]string, len(ReadOnlyPermissions))
+		copy(out, ReadOnlyPermissions)
 		return out, true
 	}
 	seen := map[string]bool{}

@@ -297,6 +297,9 @@ const mdInstrumentBatch = 30
 // FetchMarketData sends Market Data Request (35=V) and collects Snapshot (35=W)
 // / Incremental (35=X) until idle, or Reject (35=Y).
 func (a *Adapter) FetchMarketData(ctx context.Context, q domain.MarketDataQuery) (string, []domain.MarketQuote, error) {
+	if err := domain.CheckMarketDataQueryText(q); err != nil {
+		return "", nil, err
+	}
 	if len(q.Instruments) <= mdInstrumentBatch {
 		return a.fetchMarketDataOnce(ctx, q)
 	}
@@ -977,6 +980,9 @@ func buildMDUnsubscribe(reqID string, query domain.MarketDataQuery) *quickfix.Me
 
 // SubscribeMarketData sends 35=V with 263=1 (SNAPSHOT+UPDATES) and keeps the book live.
 func (a *Adapter) SubscribeMarketData(ctx context.Context, q domain.MarketDataQuery) (string, []domain.MarketQuote, error) {
+	if err := domain.CheckMarketDataQueryText(q); err != nil {
+		return "", nil, err
+	}
 	return a.ensureMarketDataSubscriptions(ctx, q)
 }
 

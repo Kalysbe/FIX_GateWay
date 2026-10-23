@@ -42,4 +42,17 @@ func TestCreateRequestValidation(t *testing.T) {
 	if err := ValidateCreateRequest(noBoard); err == nil {
 		t.Fatal("expected board required")
 	}
+	for name, mutate := range map[string]func(*CreateOrderRequest){
+		"client_code":     func(r *CreateOrderRequest) { r.ClientCode = "006\x015018=OTHER\x011=1-3101-999" },
+		"board":           func(r *CreateOrderRequest) { r.Board = "TQBR\x015018=OTHER" },
+		"account_id":      func(r *CreateOrderRequest) { r.AccountID = "1-3101-006\x01" },
+		"symbol":          func(r *CreateOrderRequest) { r.Symbol = "SBER\n" },
+		"client_order_id": func(r *CreateOrderRequest) { r.ClientOrderID = "c1\x01" },
+	} {
+		injected := ok
+		mutate(&injected)
+		if err := ValidateCreateRequest(injected); err == nil {
+			t.Fatalf("%s with control characters must be rejected", name)
+		}
+	}
 }

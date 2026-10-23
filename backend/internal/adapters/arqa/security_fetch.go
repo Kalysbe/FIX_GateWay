@@ -120,6 +120,9 @@ func (a *Adapter) fetchSecurities(ctx context.Context, board string) ([]domain.S
 	if !a.app.isLoggedOn() {
 		return nil, fmt.Errorf("adapter %s not logged on", a.meta.ID)
 	}
+	if err := domain.CheckFIXText("board", board, domain.MaxFIXTextLen); err != nil {
+		return nil, err
+	}
 	reqID := newSecurityReqID()
 	w := a.app.beginSecDefWait(reqID)
 	defer a.app.clearSecDefWait(reqID)
