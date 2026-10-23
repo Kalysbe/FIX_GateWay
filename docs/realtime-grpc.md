@@ -79,4 +79,9 @@ Missing or invalid certificate files abort startup with a nonzero exit code. Rem
 
 ## Regenerate client/server bindings
 
+Orders use `Event.data_json` for the original `Orders` row JSON, including exact
+PostgreSQL numeric values and nulls. `Event.data` is unset for `order.updated`.
+`Event.removed=true` removes that row from the current set without modifying its
+JSON or assigning a terminal trading status. Other event types retain `data`.
+
 Run `sh scripts/generate-proto.sh` inside a Go 1.26.7 Debian container with `backend` mounted as working directory. The script installs protoc and pinned Go plugins (`protoc-gen-go v1.36.11`, `protoc-gen-go-grpc v1.6.2`). Generated bindings are checked into the project so normal builds do not need protoc. Native clients in other languages can generate bindings from the same `.proto`.

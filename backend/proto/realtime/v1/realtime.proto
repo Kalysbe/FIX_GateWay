@@ -39,7 +39,12 @@ message Pong { string id = 1; }
 message Event {
   uint64 sequence = 1;
   string type = 2;
-  // Preserves the existing event DTO fields; decimals remain strings.
+  // Existing structured event DTOs. Orders use data_json instead.
   google.protobuf.Struct data = 3;
   google.protobuf.Timestamp occurred_at = 4;
+  // Orders use the original database JSON here. Struct numbers are doubles
+  // and cannot preserve PostgreSQL numeric(19,0) or decimal precision.
+  string data_json = 5;
+  // A removed export row is identified in the event envelope, never in the row.
+  bool removed = 6;
 }

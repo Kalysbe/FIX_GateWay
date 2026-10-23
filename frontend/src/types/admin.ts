@@ -78,6 +78,15 @@ export type Adapter = {
 
 export type AdminOrder = {
   id: string;
+  source?: string;
+  quik_order_num?: string;
+  gateway_order_id?: string;
+  quik_state?: string;
+  account_id?: string;
+  quik_type?: string;
+  expiry?: string;
+  balance?: string | number | null;
+  trade_date?: string;
   broker_id?: number;
   firm_name?: string;
   quik_firm?: string;
@@ -154,7 +163,9 @@ export type Dashboard = {
   stale?: boolean;
   system: { api: string; database: string; queue: string };
   adapters: Adapter[];
-  stats: { total: number; filled: number; rejected: number; active: number };
+  /** null while the QUIK Orders source is unavailable; see orders_source_error. */
+  stats: { total: number; filled: number; rejected: number; active: number } | null;
+  orders_source_error?: string;
   brokers: number;
   active_accounts: number;
   adapters_available: number;

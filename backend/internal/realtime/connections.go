@@ -8,6 +8,7 @@ import (
 
 // ConnectionInfo contains no credentials. Identity comes from authenticated claims.
 type ConnectionInfo struct {
+	OrderFirmID string    `json:"-"`
 	ID          string    `json:"id"`
 	UserID      string    `json:"user_id"`
 	BrokerID    int64     `json:"broker_id,omitempty"`

@@ -57,7 +57,7 @@ func TestSubscriptionSecurityAndBackpressure(t *testing.T) {
 	if len(s.Events) != 0 {
 		t.Fatal("restricted event leaked")
 	}
-	for i := 0; i < 65; i++ {
+	for i := 0; i < subscriptionBuffer+1; i++ {
 		h.Broadcast("marketdata.tick", map[string]any{"price": "1.23"})
 	}
 	select {

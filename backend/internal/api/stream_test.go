@@ -3,6 +3,7 @@ package api
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	pb "github.com/fix-gateway/backend/gen/realtime/v1"
 	"github.com/fix-gateway/backend/internal/auth"
 	"github.com/fix-gateway/backend/internal/grpcstream"
@@ -93,7 +94,18 @@ func TestBrowserStreamUsesAuthenticatedMutualTLS(t *testing.T) {
 			if !strings.Contains(line, "12.34") {
 				t.Fatal(line)
 			}
-			return
+			raw := json.RawMessage(`{"OrderNum":9007199254740993123,"FirmId":"2040","Price":120.00000000,"Balance":null,"FirmName":"<Фирма>"}`)
+			hub.BroadcastOrderForFirm(raw, "2040", true)
+			for scanner.Scan() {
+				rowLine := scanner.Text()
+				if strings.Contains(rowLine, "order.updated") {
+					if !strings.Contains(rowLine, string(raw)) || !strings.Contains(rowLine, `"removed":true`) {
+						t.Fatal("database row changed in browser bridge", rowLine)
+					}
+					return
+				}
+			}
+			t.Fatal("database row missing from browser bridge", scanner.Err())
 		}
 		if strings.Contains(line, "private") {
 			t.Fatal("private event leaked")

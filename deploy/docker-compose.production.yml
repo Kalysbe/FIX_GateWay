@@ -34,6 +34,8 @@ services:
       JWT_SECRET_FILE: /run/secrets/jwt-secret
       API_TOKEN_PEPPER_FILE: /run/secrets/api-token-pepper
       ADMIN_PASSWORD_FILE: /run/secrets/admin-password
+      # Current orders come only from QUIK quik_export2."Orders"; use a SELECT-only role.
+      QUIK_EXPORT_DATABASE_URL_FILE: /run/secrets/quik-export-database-url
       ADMIN_EMAIL: ${ADMIN_EMAIL:?provide the real administrator email}
       CORS_ORIGINS: ${PUBLIC_ORIGIN:?provide the HTTPS origin}
       TRUSTED_PROXIES: ${EDGE_IPV4:-10.89.0.10}/32

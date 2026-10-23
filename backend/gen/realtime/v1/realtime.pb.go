@@ -385,9 +385,14 @@ type Event struct {
 	state    protoimpl.MessageState `protogen:"open.v1"`
 	Sequence uint64                 `protobuf:"varint,1,opt,name=sequence,proto3" json:"sequence,omitempty"`
 	Type     string                 `protobuf:"bytes,2,opt,name=type,proto3" json:"type,omitempty"`
-	// Preserves the existing event DTO fields; decimals remain strings.
-	Data          *structpb.Struct       `protobuf:"bytes,3,opt,name=data,proto3" json:"data,omitempty"`
-	OccurredAt    *timestamppb.Timestamp `protobuf:"bytes,4,opt,name=occurred_at,json=occurredAt,proto3" json:"occurred_at,omitempty"`
+	// Existing structured event DTOs. Orders use data_json instead.
+	Data       *structpb.Struct       `protobuf:"bytes,3,opt,name=data,proto3" json:"data,omitempty"`
+	OccurredAt *timestamppb.Timestamp `protobuf:"bytes,4,opt,name=occurred_at,json=occurredAt,proto3" json:"occurred_at,omitempty"`
+	// Orders use the original database JSON here. Struct numbers are doubles
+	// and cannot preserve PostgreSQL numeric(19,0) or decimal precision.
+	DataJson string `protobuf:"bytes,5,opt,name=data_json,json=dataJson,proto3" json:"data_json,omitempty"`
+	// A removed export row is identified in the event envelope, never in the row.
+	Removed       bool `protobuf:"varint,6,opt,name=removed,proto3" json:"removed,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -450,6 +455,20 @@ func (x *Event) GetOccurredAt() *timestamppb.Timestamp {
 	return nil
 }
 
+func (x *Event) GetDataJson() string {
+	if x != nil {
+		return x.DataJson
+	}
+	return ""
+}
+
+func (x *Event) GetRemoved() bool {
+	if x != nil {
+		return x.Removed
+	}
+	return false
+}
+
 var File_realtime_v1_realtime_proto protoreflect.FileDescriptor
 
 const file_realtime_v1_realtime_proto_rawDesc = "" +
@@ -474,13 +493,15 @@ const file_realtime_v1_realtime_proto_rawDesc = "" +
 	"\vevent_types\x18\x01 \x03(\tR\n" +
 	"eventTypes\"\x16\n" +
 	"\x04Pong\x12\x0e\n" +
-	"\x02id\x18\x01 \x01(\tR\x02id\"\xa1\x01\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\"\xd8\x01\n" +
 	"\x05Event\x12\x1a\n" +
 	"\bsequence\x18\x01 \x01(\x04R\bsequence\x12\x12\n" +
 	"\x04type\x18\x02 \x01(\tR\x04type\x12+\n" +
 	"\x04data\x18\x03 \x01(\v2\x17.google.protobuf.StructR\x04data\x12;\n" +
 	"\voccurred_at\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
-	"occurredAt2m\n" +
+	"occurredAt\x12\x1b\n" +
+	"\tdata_json\x18\x05 \x01(\tR\bdataJson\x12\x18\n" +
+	"\aremoved\x18\x06 \x01(\bR\aremoved2m\n" +
 	"\x0fRealtimeService\x12Z\n" +
 	"\x06Stream\x12%.fixgateway.realtime.v1.ClientMessage\x1a%.fixgateway.realtime.v1.ServerMessage(\x010\x01B;Z9github.com/fix-gateway/backend/gen/realtime/v1;realtimev1b\x06proto3"
 

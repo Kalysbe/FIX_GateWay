@@ -2,6 +2,7 @@ package grpcstream
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	pb "github.com/fix-gateway/backend/gen/realtime/v1"
 	"github.com/fix-gateway/backend/internal/auth"
@@ -77,10 +78,11 @@ func TestBrokerGRPCSubscribeAndRevocation(t *testing.T) {
 	if _, err := replay.Recv(); status.Code(err) != codes.Unauthenticated {
 		t.Fatal("nonce replay accepted", err)
 	}
-	hub.BroadcastForBroker("order.updated", map[string]any{"broker_id": 8}, 8)
-	hub.BroadcastForBroker("order.updated", map[string]any{"broker_id": 7}, 7)
+	hub.BroadcastOrderForFirm(json.RawMessage(`{"FirmId":"OTHER","OrderNum":1}`), "OTHER", false)
+	raw := json.RawMessage(`{"FirmId":"TEST","OrderNum":9007199254740993123,"Price":120.00000000,"Balance":null}`)
+	hub.BroadcastOrderForFirm(raw, "TEST", false)
 	event, err := stream.Recv()
-	if err != nil || event.GetEvent().GetData().Fields["broker_id"].GetNumberValue() != 7 {
+	if err != nil || event.GetEvent().GetDataJson() != string(raw) || event.GetEvent().GetData() != nil {
 		t.Fatal("broker isolation", event, err)
 	}
 	brokers.revoked.Store(true)

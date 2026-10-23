@@ -146,7 +146,12 @@ function readErrorBody(body: Record<string, unknown>, fallback: string) {
   return typeof err === "string" && err ? err : fallback;
 }
 
-export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
+export async function api<T>(path: string, init: RequestInit = {}, parse: (text: string) => T = JSON.parse): Promise<T> {
+  return (await apiWithHeaders(path, init, parse)).data;
+}
+
+/** Same as api(), and also returns response headers (e.g. X-Has-More paging). */
+export async function apiWithHeaders<T>(path: string, init: RequestInit = {}, parse: (text: string) => T = JSON.parse): Promise<{ data: T; headers: Headers }> {
   const headers = new Headers(init.headers);
   const hasBody = init.body != null && init.body !== "";
   if (hasBody && !headers.has("Content-Type")) {
@@ -162,10 +167,10 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
     const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
     throw new ApiError(readErrorBody(body, res.statusText), res.status, typeof body.code === "string" ? body.code : undefined);
   }
-  if (res.status === 204) return undefined as T;
+  if (res.status === 204) return { data: undefined as T, headers: res.headers };
   const text = await res.text();
-  if (!text) return undefined as T;
-  return JSON.parse(text) as T;
+  if (!text) return { data: undefined as T, headers: res.headers };
+  return { data: parse(text), headers: res.headers };
 }
 
 export async function apiDownload(path: string): Promise<{ blob: Blob; filename: string; json?: { job?: { id?: string } } }> {

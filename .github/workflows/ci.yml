@@ -32,6 +32,9 @@ jobs:
       RATE_LIMIT_TEST_DATABASE_URL: postgres://gateway:ci-only@localhost:5432/rate_limit_test?sslmode=disable
       TRADE_LEDGER_TEST_DATABASE_URL: postgres://gateway:ci-only@localhost:5432/gateway_trade_ledger_test?sslmode=disable
       TRADE_LEDGER_API_TEST_DATABASE_URL: postgres://gateway:ci-only@localhost:5432/gateway_trade_ledger_api_test?sslmode=disable
+      QUIK_ORDERS_TEST_DATABASE_URL: postgres://gateway:ci-only@localhost:5432/gateway_quik_orders_api_test?sslmode=disable
+      QUIK_ORDERS_STORE_TEST_DATABASE_URL: postgres://gateway:ci-only@localhost:5432/gateway_quik_orders_store_test?sslmode=disable
+      TOKEN_LOOKUP_TEST_DATABASE_URL: postgres://gateway:ci-only@localhost:5432/gateway_token_lookup_test?sslmode=disable
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -46,6 +49,11 @@ jobs:
         run: PGPASSWORD=ci-only psql -h localhost -U gateway -d gateway_test -c 'CREATE DATABASE gateway_trade_ledger_test'
       - name: Create isolated trade ledger API test database
         run: PGPASSWORD=ci-only psql -h localhost -U gateway -d gateway_test -c 'CREATE DATABASE gateway_trade_ledger_api_test'
+      - name: Create isolated QUIK Orders and token lookup test databases
+        run: |
+          for db in gateway_quik_orders_api_test gateway_quik_orders_store_test gateway_token_lookup_test; do
+            PGPASSWORD=ci-only psql -h localhost -U gateway -d gateway_test -c "CREATE DATABASE $db"
+          done
       - name: Check reachable Go vulnerabilities
         run: |
           go install golang.org/x/vuln/cmd/govulncheck@v1.9.0

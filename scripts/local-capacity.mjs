@@ -93,7 +93,7 @@ async function main(){
   const {broker}=await expect('/api/v1/admin/brokers',admin,'POST',{code:prefix,name:'Isolated adapter capacity benchmark'},201);brokerId=broker.id;
   await expect(`/api/v1/admin/brokers/${brokerId}`,admin,'PATCH',{rate_limit_rps:20000,rate_limit_orders_per_sec:20000});
   await expect(`/api/v1/admin/brokers/${brokerId}/accounts`,admin,'POST',{code:'CAPACITY',name:'Capacity test',quik_firm:'SIM',trading_account:'CAPACITY'},201);
-  const t=await expect(`/api/v1/admin/brokers/${brokerId}/tokens`,admin,'POST',{name:'Capacity benchmark',quik_firm:'SIM',expires_in_days:30},201);token=t.token;tokenId=t.id;
+  const t=await expect(`/api/v1/admin/brokers/${brokerId}/tokens`,admin,'POST',{name:'Capacity benchmark',quik_firm:'SIM',expires_in_days:30,permissions:['orders:create','orders:read']},201);token=t.token;tokenId=t.id;
   try{
     for(const mode of modes){
       // Enable the target before disabling the other: never leave zero adapters.

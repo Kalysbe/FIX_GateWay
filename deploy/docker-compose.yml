@@ -65,6 +65,7 @@ services:
       GRPC_TARGET: localhost:8443
       GRPC_SERVER_NAME: localhost
       DATABASE_URL: postgres://gateway:gateway@postgres:5432/fix_gateway?sslmode=disable
+      QUIK_EXPORT_DATABASE_URL: ${QUIK_EXPORT_DATABASE_URL:-}
       JWT_SECRET: ${JWT_SECRET:-dev-jwt-secret-change-me}
       API_TOKEN_PEPPER: ${API_TOKEN_PEPPER:-dev-token-pepper-change-me}
       ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@localhost}

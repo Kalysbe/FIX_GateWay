@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"github.com/fix-gateway/backend/internal/auth"
 	"github.com/fix-gateway/backend/internal/domain"
+	"github.com/fix-gateway/backend/internal/quikexport"
 	"github.com/fix-gateway/backend/internal/realtime"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/peer"
@@ -83,6 +84,7 @@ func (s *Service) authenticate(ctx context.Context, md metadata.MD, raw string) 
 		p.permissions = append([]string(nil), tok.Permissions...)
 		p.firms = []string{b.Code, tok.QuikFirm}
 		p.info.BrokerID = b.ID
+		p.info.OrderFirmID = quikexport.BrokerOrderFirm(b.Code, tok.QuikFirm)
 		p.info.BrokerCode = b.Code
 		p.info.BrokerName = b.Name
 		p.expires = time.Now().Add(24 * time.Hour)

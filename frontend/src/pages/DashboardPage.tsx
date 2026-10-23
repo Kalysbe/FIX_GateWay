@@ -35,11 +35,12 @@ export default function DashboardPage() {
       <PageHeader title="Дашборд" subtitle="Здоровье шлюза и поток ордеров в реальном времени" />
       {d.generated_at && <p className="text-xs text-muted">Данные на {formatDateTime(d.generated_at)} · статистика обновляется в фоне раз в минуту</p>}
       <div className="overview-hero"><div><span className="login-eyebrow">Операционный обзор</span><h2 className="mt-1">Торговый поток и состояние шлюза</h2><p>Заявки, подключения и ключевые показатели в одном пространстве</p></div><div className="overview-links"><Link className="btn" to="/orders">Книга заявок →</Link><Link className="btn-muted" to="/monitoring">Мониторинг</Link></div></div>
+      {d.orders_source_error && <p role="status" className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">Источник заявок QUIK недоступен: счётчики заявок не показаны. Остальные данные дашборда актуальны.</p>}
       <div className="grid gap-3 md:grid-cols-4">
-        <Stat label="Ордеров сегодня" value={d.stats.total} />
-        <Stat label="Исполнено" value={d.stats.filled} />
-        <Stat label="Отклонено" value={d.stats.rejected} />
-        <Stat label="Активных" value={d.stats.active} />
+        <Stat label="Заявок в QUIK" value={d.stats?.total ?? "—"} />
+        <Stat label="Исполнено" value={d.stats?.filled ?? "—"} />
+        <Stat label="Отклонено" value={d.stats?.rejected ?? "—"} />
+        <Stat label="Активных" value={d.stats?.active ?? "—"} />
       </div>
       {d.observability && <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <Stat label="Запросов сегодня" value={d.observability.requests_today} />

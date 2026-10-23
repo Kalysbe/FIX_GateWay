@@ -26,7 +26,7 @@ const (
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 //
-// JWT authorization metadata is required in addition to TLS/mTLS.
+// Admin JWT or broker API-token authorization is required in addition to TLS/mTLS.
 type RealtimeServiceClient interface {
 	Stream(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[ClientMessage, ServerMessage], error)
 }
@@ -56,7 +56,7 @@ type RealtimeService_StreamClient = grpc.BidiStreamingClient[ClientMessage, Serv
 // All implementations must embed UnimplementedRealtimeServiceServer
 // for forward compatibility.
 //
-// JWT authorization metadata is required in addition to TLS/mTLS.
+// Admin JWT or broker API-token authorization is required in addition to TLS/mTLS.
 type RealtimeServiceServer interface {
 	Stream(grpc.BidiStreamingServer[ClientMessage, ServerMessage]) error
 	mustEmbedUnimplementedRealtimeServiceServer()

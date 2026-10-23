@@ -124,6 +124,11 @@ func (h *Hub) SubscribeBroker(types []string, info ConnectionInfo, permissions [
 	}
 	return h.subscribe("BROKER", types, info, permissions)
 }
+// subscriptionBuffer absorbs a burst of QUIK Orders changes (a trading-day
+// clear publishes one removal per row) before a consumer counts as slow.
+// Events are shared pointers, so the cost is the channel slots only.
+const subscriptionBuffer = 1024
+
 func (h *Hub) subscribe(role string, types []string, info ConnectionInfo, permissions []string) (*Subscription, error) {
 	topics, err := allowedTopics(role, types)
 	if info.BrokerID > 0 {
@@ -139,7 +144,7 @@ func (h *Hub) subscribe(role string, types []string, info ConnectionInfo, permis
 	}
 	info.ID = uuid.NewString()
 	info.ConnectedAt = time.Now().UTC()
-	s := &Subscription{Events: make(chan *pb.Event, 64), Done: make(chan struct{}), hub: h, role: role, topics: topics, info: info}
+	s := &Subscription{Events: make(chan *pb.Event, subscriptionBuffer), Done: make(chan struct{}), hub: h, role: role, topics: topics, info: info}
 	s.permissions = append([]string(nil), permissions...)
 	h.clients[s] = true
 	h.enqueueSnapshot(s)
@@ -198,8 +203,25 @@ func (h *Hub) Broadcast(eventType string, data any) {
 	h.BroadcastForBroker(eventType, data, 0)
 }
 func (h *Hub) BroadcastForBroker(eventType string, data any, brokerID int64) {
+	h.broadcast(eventType, data, brokerID, nil, false)
+}
+
+// Empty firm codes are never delivered to brokers.
+func (h *Hub) BroadcastOrderForFirm(data json.RawMessage, firm string, removed bool) {
+	h.broadcast("order.updated", data, 0, &firm, removed)
+}
+
+func (h *Hub) broadcast(eventType string, data any, brokerID int64, firm *string, removed bool) {
 	payload := &structpb.Struct{Fields: make(map[string]*structpb.Value)}
-	if data != nil {
+	rawJSON := ""
+	if firm != nil {
+		raw, ok := data.(json.RawMessage)
+		if !ok || !json.Valid(raw) {
+			return
+		}
+		rawJSON = string(raw)
+		payload = nil
+	} else if data != nil {
 		encoded, err := json.Marshal(data)
 		if err != nil {
 			return
@@ -210,14 +232,18 @@ func (h *Hub) BroadcastForBroker(eventType string, data any, brokerID int64) {
 	}
 	var slow []*Subscription
 	h.mu.Lock()
-	event := &pb.Event{Sequence: h.sequence.Add(1), Type: eventType, Data: payload, OccurredAt: timestamppb.Now()}
+	event := &pb.Event{Sequence: h.sequence.Add(1), Type: eventType, Data: payload, DataJson: rawJSON, Removed: removed, OccurredAt: timestamppb.Now()}
 	var brokerMarketEvent *pb.Event
 	for s := range h.clients {
 		if !s.topics[eventType] {
 			continue
 		}
 		if s.info.BrokerID > 0 {
-			if eventType != "marketdata.tick" && eventType != "positions.updated" && s.info.BrokerID != brokerID {
+			if firm != nil {
+				if *firm == "" || s.info.OrderFirmID != *firm {
+					continue
+				}
+			} else if eventType != "marketdata.tick" && eventType != "positions.updated" && s.info.BrokerID != brokerID {
 				continue
 			}
 		} else if !EventAllowed(s.role, eventType) {

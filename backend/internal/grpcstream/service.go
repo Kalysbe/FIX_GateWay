@@ -66,6 +66,8 @@ func (s *Service) admit(user, operation string) (func(), error) {
 	return nil, detailed.Err()
 }
 
+const orderRevalidateEvery = time.Second
+
 func (s *Service) Stream(stream grpc.BidiStreamingServer[pb.ClientMessage, pb.ServerMessage]) error {
 	ctx := stream.Context()
 	if s.Hub == nil {
@@ -195,6 +197,10 @@ func (s *Service) Stream(stream grpc.BidiStreamingServer[pb.ClientMessage, pb.Se
 	}
 	validate := time.NewTicker(5 * time.Second)
 	defer validate.Stop()
+	// order.updated is firm-scoped, so the token is rechecked before delivery,
+	// but at most once per orderRevalidateEvery: a burst of Orders changes must
+	// not turn into one database lookup per event per stream.
+	validatedAt := time.Now()
 	heartbeat := time.NewTicker(20 * time.Second)
 	defer heartbeat.Stop()
 	expiry := time.NewTimer(time.Until(principal.expires))
@@ -215,6 +221,7 @@ func (s *Service) Stream(stream grpc.BidiStreamingServer[pb.ClientMessage, pb.Se
 				}
 				return status.Error(codes.Unauthenticated, "session revoked")
 			}
+			validatedAt = time.Now()
 		case <-sub.Done:
 			return status.Error(codes.ResourceExhausted, "consumer queue full")
 		case err := <-recvErr:
@@ -260,6 +267,18 @@ func (s *Service) Stream(stream grpc.BidiStreamingServer[pb.ClientMessage, pb.Se
 		case event := <-sub.Events:
 			if !time.Now().Before(principal.expires) {
 				return status.Error(codes.Unauthenticated, "session expired")
+			}
+			if principal.info.BrokerID > 0 && event.Type == "order.updated" && time.Since(validatedAt) >= orderRevalidateEvery {
+				check, cancel := context.WithTimeout(ctx, 2*time.Second)
+				err := principal.validate(check)
+				cancel()
+				if err != nil {
+					if errors.Is(err, brokers.ErrAuthenticationUnavailable) {
+						return status.Error(codes.Unavailable, "authentication temporarily unavailable")
+					}
+					return status.Error(codes.Unauthenticated, "session revoked")
+				}
+				validatedAt = time.Now()
 			}
 			if principal.info.BrokerID > 0 && event.Type == "positions.updated" {
 				if err := positionEvent(event); err != nil {

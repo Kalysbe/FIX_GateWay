@@ -247,13 +247,17 @@ paths:
       summary: List broker orders
       security:
         - bearerAuth: []
-      description: Requires `orders:read`
+      description: Returns a JSON array of original Orders rows, with database column names, numeric JSON values, strings and nulls unchanged. FirmId is restricted by the authenticated token. No derived fields or local/FIX fallback. Pagination is in X-Has-More and X-Next-Offset headers.
+      parameters:
+        - {in: query, name: limit, schema: {type: integer, minimum: 1, maximum: 1000, default: 200}}
+        - {in: query, name: offset, schema: {type: integer, minimum: 0, maximum: 10000000, default: 0}}
       responses:
         "200":
           description: OK
   /api/v1/orders/{id}:
     get:
       summary: Get order
+      description: Returns only the original database row, without wrapper, renamed columns, derived values or history. Restricted by authenticated FirmId. URL accepts quik-YYYYMMDD-CLASS-NUMBER or a linked Gateway UUID. Missing row is 404; unavailable source is 503.
       security:
         - bearerAuth: []
       parameters:
@@ -262,7 +266,6 @@ paths:
           required: true
           schema:
             type: string
-            format: uuid
       responses:
         "200":
           description: OK
@@ -271,14 +274,13 @@ paths:
       summary: Cancel order
       security:
         - bearerAuth: []
-      description: Requires `orders:cancel`
+      description: Requires orders:cancel and an active current QUIK Orders row. Accepts a Gateway UUID or QUIK key with a matching original local request. An external order without a local request returns 409. The HTTP result acknowledges the command, not the venue outcome.
       parameters:
         - in: path
           name: id
           required: true
           schema:
             type: string
-            format: uuid
       responses:
         "200":
           description: OK
@@ -831,6 +833,12 @@ paths:
   /api/v1/admin/orders:
     get:
       summary: List all orders
+      description: JSON array of original QUIK Orders rows, with exact database field names and values. No additions or local/FIX fallback. Pagination is in X-Has-More and X-Next-Offset headers.
+      parameters:
+        - {in: query, name: broker_id, schema: {type: integer}, description: Select FirmId using the broker code}
+        - {in: query, name: firm_id, schema: {type: string}}
+        - {in: query, name: limit, schema: {type: integer, minimum: 1, maximum: 1000, default: 200}}
+        - {in: query, name: offset, schema: {type: integer, minimum: 0, maximum: 10000000, default: 0}}
       security:
         - bearerAuth: []
       responses:
@@ -1232,10 +1240,11 @@ paths:
     get:
       tags: [Admin]
       summary: Get order
+      description: Original QUIK Orders row without wrapper or additional fields. URL key contains trading date, class and order number; a linked Gateway UUID is also accepted. Missing rows return 404 and source outages 503.
       security:
         - bearerAuth: []
       parameters:
-        - $ref: "#/components/parameters/OrderID"
+        - {in: path, name: id, required: true, schema: {type: string}}
       responses:
         "200":
           description: OK

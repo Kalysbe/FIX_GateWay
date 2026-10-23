@@ -29,6 +29,9 @@ func main() {
 	if v := os.Getenv("SIM_PORTS"); v != "" {
 		ports = strings.Split(v, ",")
 	}
+	if url := os.Getenv("SIM_ORDERS_DATABASE_URL"); url != "" {
+		openOrdersExport(url)
+	}
 	var wg sync.WaitGroup
 	for _, p := range ports {
 		wg.Add(1)
@@ -173,6 +176,7 @@ type simOrder struct {
 	status                string
 	terminal              bool
 	timer                 *time.Timer
+	export                *exportRow
 }
 
 func handleNewOrder(session *simSession, conn net.Conn, sender, target string, seq *int32, f map[string]string) {
@@ -184,8 +188,9 @@ func handleNewOrder(session *simSession, conn net.Conn, sender, target string, s
 		qty = "1"
 	}
 	board := firstNonEmptySim(f["100"], f["207"], "TQBR")
-	orderNumber := strconv.FormatInt(time.Now().UnixNano(), 10)
-	orderID := time.Now().UTC().Format("060102") + "-" + board + "-" + orderNumber
+	now := time.Now()
+	orderNumber := strconv.FormatInt(now.UnixNano(), 10)
+	orderID := now.UTC().Format("060102") + "-" + board + "-" + orderNumber
 	execID := fmt.Sprintf("E%d", time.Now().UnixNano())
 	order := &simOrder{id: orderID, symbol: symbol, side: side, qty: qty}
 	session.orders[clOrdID] = order
@@ -201,6 +206,8 @@ func handleNewOrder(session *simSession, conn net.Conn, sender, target string, s
 		return
 	}
 
+	order.export = newExportRow(f, orderNumber, board, now)
+	writeExport(order.export)
 	// ACK
 	ack := map[string]string{
 		"11": clOrdID, "37": orderID, "17": execID, "150": "0", "39": "0",
@@ -234,6 +241,8 @@ func handleNewOrder(session *simSession, conn net.Conn, sender, target string, s
 		fill["5001"], fill["5002"] = tradeNumber, orderNumber
 		fill["75"], fill["100"], fill["48"] = time.Now().UTC().Format("20060102"), board, symbol
 		fill["5018"], fill["109"], fill["1"] = f["5018"], f["109"], f["1"]
+		order.export.state, order.export.balance = "Исполнена", "0"
+		writeExport(order.export)
 		_, _ = conn.Write([]byte(buildMsg("8", sender, target, seq, fill)))
 	})
 }
@@ -257,6 +266,10 @@ func handleCancel(session *simSession, conn net.Conn, sender, target string, seq
 	order.status = "4"
 	if order.timer != nil {
 		order.timer.Stop()
+	}
+	if order.export != nil {
+		order.export.state = "Снята"
+		writeExport(order.export)
 	}
 	orderID := order.id
 	execID := fmt.Sprintf("E%d", time.Now().UnixNano())

@@ -15,7 +15,7 @@ export type TableColumn<T> = {
 };
 export type TableSummary = { label: string; value: ReactNode; tone?: "success" | "danger" | "warn" };
 
-export function DataTable<T>({ rows, columns, rowKey, title, loading = false, searchPlaceholder = "Поиск по таблице…", getSearchText, filters, summary, onRefresh, refreshing, initialSort, emptyTitle = "Записей пока нет", emptyHint, resetKey = "", exportName, exportRows, renderRow, rowClassName }: {
+export function DataTable<T>({ rows, columns, rowKey, title, loading = false, searchPlaceholder = "Поиск по таблице…", getSearchText, filters, summary, onRefresh, refreshing, initialSort, emptyTitle = "Записей пока нет", emptyHint, resetKey = "", exportName, exportRows, renderRow, rowClassName, showTotals = true }: {
   rows: T[];
   columns: TableColumn<T>[];
   rowKey: (row: T) => string | number;
@@ -35,6 +35,7 @@ export function DataTable<T>({ rows, columns, rowKey, title, loading = false, se
   exportRows?: (sorted: T[]) => { headers: string[]; rows: SortValue[][] };
   renderRow?: (row: T, index: number) => ReactNode;
   rowClassName?: (row: T) => string;
+  showTotals?: boolean;
 }) {
   const id = useId();
   const [query, setQuery] = useState("");
@@ -86,7 +87,7 @@ export function DataTable<T>({ rows, columns, rowKey, title, loading = false, se
         {column.sortable === false ? column.header : <button type="button" className="table-sort" onClick={() => changeSort(column)}>{column.header}<Icons.sort size={13} className={sort?.id === column.id ? `sort-active ${sort.direction === "desc" ? "rotate-180" : ""}` : ""} /></button>}
       </th>)}</tr></thead><tbody>{slice.rows.map((row, index) => renderRow ? <Fragment key={rowKey(row)}>{renderRow(row, index)}</Fragment> : <tr key={rowKey(row)} className={rowClassName?.(row)}>{visible.map(column => <td key={column.id} className={`${column.numeric ? "numeric" : ""} ${column.className ?? ""}`}>{column.cell ? column.cell(row) : column.value(row) ?? "—"}</td>)}</tr>)}{!slice.rows.length && <tr><td colSpan={visible.length}><EmptyState title={query.trim() ? "Ничего не найдено" : emptyTitle} hint={query.trim() ? "Измените поиск или фильтры" : emptyHint} />{query.trim() && <button type="button" className="btn-muted mx-auto mb-4 flex" onClick={() => { setQuery(""); setPage(0); }}>Сбросить поиск</button>}</td></tr>}</tbody></table>
     </div>}
-    <div className="table-totals"><span className="table-totals-label">Итоги по выборке</span>{totals.map(stat => <span className={`table-total ${stat.tone ? `total-${stat.tone}` : ""}`} key={stat.label}>{stat.label}<strong>{stat.value}</strong></span>)}<span className="table-loaded">Загружено: {rows.length.toLocaleString("ru-RU")}</span></div>
+    {showTotals && <div className="table-totals"><span className="table-totals-label">Итоги по выборке</span>{totals.map(stat => <span className={`table-total ${stat.tone ? `total-${stat.tone}` : ""}`} key={stat.label}>{stat.label}<strong>{stat.value}</strong></span>)}<span className="table-loaded">Загружено: {rows.length.toLocaleString("ru-RU")}</span></div>}
     <div className="table-pagination"><span aria-live="polite">{slice.start}–{slice.end} <span className="text-muted">из {filtered.length.toLocaleString("ru-RU")}</span></span><div className="flex items-center gap-2"><label className="table-page-size">Строк<select value={pageSize} onChange={e => { setPageSize(Number(e.target.value)); setPage(0); }} aria-label="Строк на странице">{[10, 20, 50, 100].map(size => <option key={size}>{size}</option>)}</select></label><button type="button" className="icon-btn" aria-label="Первая страница" disabled={slice.page === 0} onClick={() => setPage(0)}>«</button><button type="button" className="icon-btn" aria-label="Предыдущая страница" disabled={slice.page === 0} onClick={() => setPage(slice.page - 1)}><Icons.chevron size={14} className="rotate-180" /></button><span className="table-page-number">{slice.page + 1} / {slice.pageCount}</span><button type="button" className="icon-btn" aria-label="Следующая страница" disabled={slice.page + 1 >= slice.pageCount} onClick={() => setPage(slice.page + 1)}><Icons.chevron size={14} /></button><button type="button" className="icon-btn" aria-label="Последняя страница" disabled={slice.page + 1 >= slice.pageCount} onClick={() => setPage(slice.pageCount - 1)}>»</button></div></div>
   </section>;
 }

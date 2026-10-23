@@ -1,50 +1,57 @@
 import { useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
-import { api } from "../api";
-import { formatDateTime, sideLabel, statusLabel } from "../labels";
+import { api, apiWithHeaders } from "../api";
 import { liveRefetchInterval } from "../lib/poll";
-import { compactIdentifier, dateValue, numberValue } from "../lib/table";
+import { dbSortValue, dbValue, nextOrderOffset, ORDER_PAGE_SIZE, orderKey, orderRowKey, parseDBJSON, type DBOrder } from "../lib/rawOrders";
 import { useAdminStream } from "../hooks/useAdminStream";
 import { PageHeader } from "../components/PageHeader";
 import { ErrorBanner } from "../components/feedback";
-import { StatusBadge } from "../components/StatusBadge";
 import { DataTable, type TableColumn } from "../components/DataTable";
-import { ReconciliationQueue } from "../components/ReconciliationQueue";
-import type { AdminOrder, Broker } from "../types/admin";
+import type { Broker } from "../types/admin";
 
-const format = (v: unknown) => numberValue(v)?.toLocaleString("ru-RU", { maximumFractionDigits: 8 }) ?? "—";
+// One server page at a time: the Orders table can be large, and every
+// order.updated refetches the visible page only, not the whole table.
 export default function OrdersPage() {
   const { connected } = useAdminStream();
-  const [status, setStatus] = useState("");
+  const [state, setState] = useState("");
   const [brokerId, setBrokerId] = useState("");
-  const q = useQuery({ queryKey: ["admin-orders"], queryFn: ({ signal }) => api<{ orders: AdminOrder[] }>("/api/v1/admin/orders", { signal }), refetchInterval: liveRefetchInterval(connected, 3000) });
+  const [offsets, setOffsets] = useState<number[]>([0]);
+  const offset = offsets[offsets.length - 1];
+  const q = useQuery({
+    queryKey: ["admin-orders", brokerId, offset],
+    queryFn: async ({ signal }) => {
+      const { data, headers } = await apiWithHeaders<DBOrder[]>(`/api/v1/admin/orders?limit=${ORDER_PAGE_SIZE}&offset=${offset}${brokerId ? `&broker_id=${encodeURIComponent(brokerId)}` : ""}`, { signal }, parseDBJSON);
+      return { rows: data ?? [], next: nextOrderOffset(headers) };
+    },
+    placeholderData: keepPreviousData,
+    refetchInterval: liveRefetchInterval(connected, 3000),
+  });
   const brokers = useQuery({ queryKey: ["brokers"], queryFn: ({ signal }) => api<{ brokers: Broker[] }>("/api/v1/admin/brokers", { signal }), staleTime: 60_000 });
-  const names = new Map((brokers.data?.brokers ?? []).map(b => [b.id, b.name]));
-  const orders = q.data?.orders ?? [];
-  const statuses = useMemo(() => Array.from(new Set(orders.map(o => o.status).filter(Boolean))) as string[], [orders]);
-  const filtered = orders.filter(o => (!status || o.status === status) && (!brokerId || String(o.broker_id) === brokerId));
-  const columns: TableColumn<AdminOrder>[] = [
-    { id: "id", header: "Заявка", value: o => o.client_order_id || o.id, cell: o => <Link className="font-mono text-[11px] text-accent whitespace-nowrap" to={`/orders/${o.id}`} title={o.client_order_id || o.id}>{compactIdentifier(o.client_order_id || o.id.slice(0, 8))}</Link> },
-    { id: "broker", header: "Брокер", value: o => names.get(o.broker_id ?? 0) || o.broker_id },
-    { id: "firm", header: "Фирма", value: o => o.firm_name || o.quik_firm, cell: o => <><div>{o.firm_name || "—"}</div><small className="font-mono text-muted">{o.quik_firm}</small></> },
-    { id: "client", header: "Клиент", value: o => o.client_code, className: "font-mono" },
-    { id: "symbol", header: "Инструмент", value: o => o.symbol, cell: o => <><strong className="font-medium">{o.symbol}</strong><div className="text-[10px] text-muted">{o.board}</div></> },
-    { id: "side", header: "Сторона", value: o => sideLabel(o.side), cell: o => <span className={o.side === "BUY" ? "badge-success" : o.side === "SELL" ? "badge-danger" : "badge-muted"}>{sideLabel(o.side)}</span> },
-    { id: "quantity", header: "Кол-во", value: o => numberValue(o.quantity), cell: o => format(o.quantity), numeric: true },
-    { id: "price", header: "Цена", value: o => numberValue(o.price), cell: o => format(o.price), numeric: true },
-    { id: "status", header: "Статус", value: o => statusLabel(o.status), cell: o => <StatusBadge status={o.status} /> },
-    { id: "adapter", header: "Адаптер", value: o => o.adapter_id, className: "text-[10px] font-mono" },
-    { id: "created", header: "Создано", value: o => dateValue(o.created_at), exportValue: o => o.created_at, cell: o => formatDateTime(o.created_at), className: "whitespace-nowrap text-[10px]" },
-  ];
-  return <div className="space-y-4">
-    <PageHeader title="Заявки" subtitle="Все брокеры · маршрут, исполнение и состояние каждой заявки" />
-    <ReconciliationQueue />
+  const orders = q.data?.rows ?? [];
+  const states = useMemo(() => Array.from(new Set(orders.map(o => String(o.State ?? "")).filter(Boolean))), [orders]);
+  const fields = useMemo(() => Array.from(new Set(orders.flatMap(o => Object.keys(o)))), [orders]);
+  const filtered = orders.filter(o => !state || o.State === state);
+  const columns: TableColumn<DBOrder>[] = fields.map(field => ({
+    id: field, header: field, value: o => dbSortValue(o[field]), exportValue: o => dbValue(o[field]),
+    cell: o => field === "OrderNum" && orderKey(o)
+      ? <Link className="font-mono text-[11px] text-accent whitespace-nowrap" to={`/orders/${encodeURIComponent(orderKey(o))}`}>{dbValue(o[field])}</Link>
+      : <span className="whitespace-pre-wrap">{dbValue(o[field])}</span>,
+  }));
+  const changeBroker = (value: string) => { setBrokerId(value); setOffsets([0]); };
+  const first = offset + 1, last = offset + orders.length;
+  return <div className="raw-orders space-y-4">
+    <PageHeader title="Заявки" />
     {q.error && <ErrorBanner error={q.error} onRetry={() => q.refetch()} />}
-    <DataTable title="Заявки" rows={filtered} columns={columns} rowKey={o => o.id} loading={q.isLoading} initialSort={{ id: "created", direction: "desc" }} resetKey={`${status}:${brokerId}`} exportName="orders" searchPlaceholder="Номер, инструмент, фирма, клиент…" getSearchText={o => [o.id, o.client_order_id, o.symbol, o.board, o.firm_name, o.quik_firm, o.client_code, o.adapter_id, o.broker_id, names.get(o.broker_id ?? 0), o.status, statusLabel(o.status), sideLabel(o.side)].join(" ")} onRefresh={() => void q.refetch()} refreshing={q.isFetching} emptyTitle="Заявок нет" emptyHint="Новые заявки появятся после отправки брокером" filters={<>
-      <select className="input w-auto" aria-label="Брокер" value={brokerId} onChange={e => setBrokerId(e.target.value)}><option value="">Все брокеры</option>{(brokers.data?.brokers ?? []).map(b => <option key={b.id} value={b.id}>{b.name}</option>)}</select>
-      <select className="input w-auto" aria-label="Статус заявки" value={status} onChange={e => setStatus(e.target.value)}><option value="">Все статусы</option>{statuses.map(s => <option key={s} value={s}>{statusLabel(s)}</option>)}</select>
-      {(status || brokerId) && <button className="btn-muted" onClick={() => { setStatus(""); setBrokerId(""); }}>Сбросить</button>}
-    </>} summary={rows => [{ label: "Заявок", value: rows.length }, { label: "Покупка", value: rows.filter(o => o.side === "BUY").length, tone: "success" }, { label: "Продажа", value: rows.filter(o => o.side === "SELL").length }, { label: "Исполнено", value: rows.filter(o => o.status === "FILLED").length, tone: "success" }, { label: "Отклонено", value: rows.filter(o => o.status === "REJECTED").length, tone: "danger" }]} />
+    <DataTable title="Заявки" rows={q.error ? [] : filtered} columns={columns} rowKey={orderRowKey} getSearchText={o => fields.map(f => dbValue(o[f])).join(" ")} loading={q.isLoading} resetKey={`${state}:${brokerId}:${offset}`} exportName="orders" showTotals={false} onRefresh={() => void q.refetch()} refreshing={q.isFetching} searchPlaceholder="Поиск по загруженной странице…" emptyTitle={q.error ? "Заявки временно недоступны" : "Заявок нет"} filters={<>
+      <select className="input w-auto" aria-label="Брокер" value={brokerId} onChange={e => changeBroker(e.target.value)}><option value="">Все брокеры</option>{(brokers.data?.brokers ?? []).map(b => <option key={b.id} value={b.id}>{b.name}</option>)}</select>
+      <select className="input w-auto" aria-label="Состояние (State) на странице" value={state} onChange={e => setState(e.target.value)}><option value="">Все состояния</option>{states.map(s => <option key={s} value={s}>{s}</option>)}</select>
+      {(state || brokerId) && <button className="btn-muted" onClick={() => { setState(""); changeBroker(""); }}>Сбросить</button>}
+    </>} />
+    <div className="flex items-center justify-end gap-2 text-xs text-muted">
+      <span aria-live="polite">Строки БД {orders.length ? `${first}–${last}` : "—"}</span>
+      <button type="button" className="btn-muted" disabled={offsets.length < 2 || q.isFetching} onClick={() => setOffsets(o => o.slice(0, -1))}>← Предыдущие {ORDER_PAGE_SIZE}</button>
+      <button type="button" className="btn-muted" disabled={q.data?.next == null || q.isFetching} onClick={() => { const next = q.data?.next; if (next != null) setOffsets(o => [...o, next]); }}>Следующие {ORDER_PAGE_SIZE} →</button>
+    </div>
   </div>;
 }

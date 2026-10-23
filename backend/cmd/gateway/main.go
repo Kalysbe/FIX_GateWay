@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -62,13 +63,18 @@ func main() {
 
 	var quikExportStore *quikexport.Store
 	if cfg.QuikExportDatabaseURL != "" {
-		quikPool, qerr := db.ConnectReadOnly(ctx, cfg.QuikExportDatabaseURL)
-		if qerr != nil {
-			log.Warn("quik export db connect failed", "error", qerr)
+		// The pool reconnects on demand: an outage at startup only delays Orders.
+		quikPool, qerr := db.OpenReadOnly(ctx, cfg.QuikExportDatabaseURL)
+		if quikPool == nil {
+			log.Error("quik export database url invalid; Orders disabled", "error", qerr)
 		} else {
 			defer quikPool.Close()
 			quikExportStore = quikexport.NewStore(quikPool)
-			log.Info("quik export database connected")
+			if qerr != nil {
+				log.Warn("quik export database unavailable at startup; will retry on each read", "error", qerr)
+			} else {
+				log.Info("quik export database connected")
+			}
 		}
 	}
 
@@ -237,8 +243,17 @@ func main() {
 		}
 	})
 	go server.RunDashboardRefresh(ctx)
-	if os.Getenv("TRADE_RECONCILIATION_ENABLED") == "true" { go server.RunTradeReconciliation(ctx) }
+	if os.Getenv("TRADE_RECONCILIATION_ENABLED") == "true" {
+		go server.RunTradeReconciliation(ctx)
+	}
 	server.SetQuikExport(quikExportStore)
+	if quikExportStore != nil {
+		go quikExportStore.RunOrders(ctx, func(change quikexport.OrderChange) {
+			hub.BroadcastOrderForFirm(change.Order.Raw, strings.TrimSpace(change.Order.Text("FirmId")), change.Removed)
+		}, func(err error) {
+			log.Warn("QUIK Orders change read failed; retaining previous selection", "error", err)
+		})
+	}
 	admission := ratelimit.NewAdmissionWithCapacity(int64(cfg.RateLimitMaxStates))
 	rateStore := &ratelimit.Store{Pool: pool, Admission: admission, DefaultRead: cfg.DefaultRateLimitRPS, DefaultTrade: cfg.DefaultOrderRateLimit}
 	if err := rateStore.Refresh(ctx); err != nil {

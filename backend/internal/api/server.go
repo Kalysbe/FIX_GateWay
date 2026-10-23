@@ -62,6 +62,7 @@ type Server struct {
 	positions          *positions.Store
 	marketdata         *marketdata.Store
 	quikExport         *quikexport.Store
+	quikOrders         quikOrderReader
 	quikAPI            *quikapi.Client
 	obs                *observability.Pipeline
 	realtimeClient     pb.RealtimeServiceClient
@@ -105,6 +106,12 @@ func NewServer(
 
 func (s *Server) SetQuikExport(store *quikexport.Store) {
 	s.quikExport = store
+	// A typed nil *Store in the interface would defeat the `quikOrders == nil` checks.
+	if store == nil {
+		s.quikOrders = nil
+		return
+	}
+	s.quikOrders = store
 }
 
 func (s *Server) SetExecutionInbox(in *executioninbox.Inbox) { s.executionInbox = in }
@@ -357,7 +364,6 @@ func (s *Server) createOrder(w http.ResponseWriter, r *http.Request) {
 	}
 	observability.AnnotateOrder(r, order.ID, order.ClientOrderID, req.AccountID, order.Symbol, string(order.Side), qty, price)
 	metrics.OrdersReceived.Inc()
-	s.hub.BroadcastForBroker("order.updated", orderDTO(order), order.BrokerID)
 	code := http.StatusCreated
 	if idempotent {
 		code = http.StatusOK
@@ -366,47 +372,39 @@ func (s *Server) createOrder(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) listBrokerOrders(w http.ResponseWriter, r *http.Request) {
-	b, _ := BrokerFromContext(r.Context())
-	list, err := s.orders.ListForBroker(r.Context(), b.ID, 100)
-	if err != nil {
-		s.writeInternal(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"orders": mapOrders(list)})
+	s.listQuikOrders(w, r, false)
 }
 
 func (s *Server) getBrokerOrder(w http.ResponseWriter, r *http.Request) {
-	b, _ := BrokerFromContext(r.Context())
-	id, err := uuid.Parse(r.PathValue("id"))
-	if err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid id")
-		return
-	}
-	order, err := s.orders.GetForBroker(r.Context(), b.ID, id)
-	if err != nil {
-		if !errors.Is(err, orders.ErrNotFound) {
-			s.writeInternal(w, err)
-			return
-		}
-		writeErr(w, http.StatusNotFound, "not found")
-		return
-	}
-	events, _ := s.orderStore.ListEvents(r.Context(), id)
-	trades, _ := s.orderStore.ListTradesByOrder(r.Context(), id)
-	writeJSON(w, http.StatusOK, map[string]any{
-		"order":  orderDTO(order),
-		"events": mapEvents(events),
-		"trades": mapTrades(trades),
-	})
+	s.getQuikOrder(w, r, false)
 }
 
 func (s *Server) cancelBrokerOrder(w http.ResponseWriter, r *http.Request) {
 	b, _ := BrokerFromContext(r.Context())
-	id, err := uuid.Parse(r.PathValue("id"))
+	firm, brokerID, err := s.orderReadScope(r, false)
 	if err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid id")
+		s.writeOrderReadError(w, err)
 		return
 	}
+	current, local, err := s.currentQuikOrder(r.Context(), r.PathValue("id"), firm, brokerID, true)
+	if err != nil {
+		s.writeOrderReadError(w, err)
+		return
+	}
+	state := strings.ToUpper(current.Text("State"))
+	if state == "СНЯТА" || state == "CANCELLED" || state == "CANCELED" {
+		writeJSON(w, http.StatusOK, map[string]any{"order": current})
+		return
+	}
+	if state != "АКТИВНА" && state != "ACTIVE" {
+		writeErr(w, http.StatusConflict, "QUIK order is not active")
+		return
+	}
+	if local == nil {
+		writeErr(w, http.StatusConflict, "cancellation requires an original Gateway request")
+		return
+	}
+	id := local.ID
 	ip, _ := s.clientIP(r)
 	order, err := s.orders.Cancel(r.Context(), b.ID, id, ip)
 	if err != nil {
@@ -423,7 +421,6 @@ func (s *Server) cancelBrokerOrder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	observability.AnnotateOrder(r, order.ID, order.ClientOrderID, order.TradingAccount, order.Symbol, string(order.Side), order.Quantity.String(), "")
-	s.hub.BroadcastForBroker("order.updated", orderDTO(order), order.BrokerID)
 	writeJSON(w, http.StatusOK, map[string]any{"order": orderDTO(order)})
 }
 
@@ -728,7 +725,29 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Cache-Control", "no-store")
-	writeJSON(w, http.StatusOK, data)
+	// The persisted dashboard remains an audit/operations snapshot. Current
+	// order counters must come from the same source as the order list; when
+	// that source is down only the counters are missing, never substituted.
+	response := map[string]any{}
+	for key, value := range data.(map[string]any) {
+		response[key] = value
+	}
+	response["orders_source"] = "quik_db"
+	err = quikexport.ErrNotConfigured
+	if s.quikOrders != nil {
+		var byState map[string]int
+		if byState, err = s.quikOrders.CountOrdersByState(r.Context()); err == nil {
+			response["stats"] = quikOrderStats(byState)
+		}
+	}
+	if err != nil {
+		if s.log != nil {
+			s.log.Warn("dashboard QUIK Orders counters unavailable", "error", err)
+		}
+		response["stats"] = nil
+		response["orders_source_error"] = "QUIK Orders source unavailable"
+	}
+	writeJSON(w, http.StatusOK, response)
 }
 
 var errDashboardPending = errors.New("dashboard snapshot pending")
@@ -1219,12 +1238,7 @@ func (s *Server) listAccounts(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) listAdminOrders(w http.ResponseWriter, r *http.Request) {
-	list, err := s.orderStore.List(r.Context(), nil, 200)
-	if err != nil {
-		s.writeInternal(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"orders": mapOrders(list)})
+	s.listQuikOrders(w, r, true)
 }
 
 func (s *Server) listEmitentOrders(w http.ResponseWriter, r *http.Request) {
@@ -1433,23 +1447,7 @@ func (s *Server) syncMarketDataFIX(w http.ResponseWriter, r *http.Request) {
 	})
 }
 func (s *Server) getAdminOrder(w http.ResponseWriter, r *http.Request) {
-	id, err := uuid.Parse(r.PathValue("id"))
-	if err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid id")
-		return
-	}
-	order, err := s.orderStore.Get(r.Context(), id)
-	if err != nil {
-		writeErr(w, http.StatusNotFound, "not found")
-		return
-	}
-	events, _ := s.orderStore.ListEvents(r.Context(), id)
-	trades, _ := s.orderStore.ListTradesByOrder(r.Context(), id)
-	writeJSON(w, http.StatusOK, map[string]any{
-		"order":  orderDTO(order),
-		"events": mapEvents(events),
-		"trades": mapTrades(trades),
-	})
+	s.getQuikOrder(w, r, true)
 }
 
 func (s *Server) listAdapters(w http.ResponseWriter, r *http.Request) {
@@ -1694,7 +1692,6 @@ func (s *Server) OnExecution(ctx context.Context, report adapters.ExecutionRepor
 			Instrument: order.Symbol, Side: string(order.Side), Quantity: order.Quantity.String(),
 			Message: reason, ErrorCode: "CANCEL_REJECTED", ErrorMessage: reason,
 		})
-		s.hub.BroadcastForBroker("order.updated", orderDTO(order), order.BrokerID)
 		return nil
 	}
 	order, exec, err := s.orderStore.ApplyExecutionReport(ctx, report.ClOrdID, report.OrigClOrdID, report.ExecID, report.ExecType, report.OrdStatus,
@@ -1722,7 +1719,6 @@ func (s *Server) OnExecution(ctx context.Context, report adapters.ExecutionRepor
 			}
 		}
 	}
-	s.hub.BroadcastForBroker("order.updated", orderDTO(order), order.BrokerID)
 	if exec != nil {
 		if ledgerSaved {
 			if err := s.tradeLedger.LinkExecution(ctx, exec.ID, order.ID, exec.ExecID, exec.TradeMatchID); err != nil {

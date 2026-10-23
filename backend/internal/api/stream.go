@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"time"
@@ -84,11 +85,20 @@ func (s *Server) streamAdminEvents(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if event := message.GetEvent(); event != nil {
-			data, err := protojson.Marshal(event.GetData())
-			if err != nil {
+			data := []byte(event.GetDataJson())
+			if len(data) == 0 {
+				data, err = protojson.Marshal(event.GetData())
+				if err != nil {
+					return
+				}
+			} else if !json.Valid(data) {
 				return
 			}
-			if err := write(fmt.Sprintf("id: %d\ndata: {\"type\":%q,\"data\":%s}\n\n", event.GetSequence(), event.GetType(), data)); err != nil {
+			removed := ""
+			if event.GetRemoved() {
+				removed = ",\"removed\":true"
+			}
+			if err := write(fmt.Sprintf("id: %d\ndata: {\"type\":%q,\"data\":%s%s}\n\n", event.GetSequence(), event.GetType(), data, removed)); err != nil {
 				return
 			}
 		} else if write(": heartbeat\n\n") != nil {

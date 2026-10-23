@@ -35,6 +35,7 @@ environment with a separate database and the admin interface, use
 - [Architecture](docs/architecture.md)
 - [Archify: интерактивные схемы проекта](docs/archify.md)
 - [Сверка неопределённых отправок](docs/reconciliation.md)
+- [Текущие заявки из БД QUIK](docs/orders.md)
 - [Торговые ограничения](docs/trading-limits.md)
 - [Проверка торгового релиза](docs/release-verification.md)
 - [Deployment](docs/deployment.md)

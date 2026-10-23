@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import {execFileSync} from 'node:child_process';
+import {readdirSync} from 'node:fs';
 import {randomUUID} from 'node:crypto';
 import {setTimeout as delay} from 'node:timers/promises';
 
@@ -20,14 +21,19 @@ async function call(path,token='',method='GET',body,status=200){
  const value=await response.json();assert.equal(response.status,status,`${method} ${path}: ${JSON.stringify(value)}`);return value;
 }
 async function until(fn){const deadline=Date.now()+45000;while(Date.now()<deadline){try{const value=await fn();if(value)return value;}catch{}await delay(200);}throw Error('Verification timed out');}
-assert.equal(sql('SELECT version FROM schema_migrations'),'27');
+// Every shipped migration must be applied, whichever is the latest.
+const latestMigration=Math.max(...readdirSync('backend/migrations').map(f=>/^(\d+)_.*\.up\.sql$/.exec(f)?.[1]).filter(Boolean).map(Number));
+assert.equal(sql('SELECT version FROM schema_migrations'),String(latestMigration));
+assert.equal(sql('SELECT dirty FROM schema_migrations'),'f');
+// Broker REST returns only QUIK Orders rows; the request lifecycle is the local ledger.
+const localStatus=id=>sql(`SELECT status FROM orders WHERE id='${id}'`);
 const {token:admin}=await call('/api/v1/admin/login','','POST',{email:'admin@localhost',password:'admin123'});
 const {broker}=await call('/api/v1/admin/brokers',admin,'POST',{code:`VERIFY-${randomUUID()}`,name:'Release verification'},201);
 await call(`/api/v1/admin/brokers/${broker.id}/accounts`,admin,'POST',{code:'VERIFY',name:'Test',quik_firm:'SIM',trading_account:'VERIFY'},201);
-const {token}=await call(`/api/v1/admin/brokers/${broker.id}/tokens`,admin,'POST',{name:'Verification',quik_firm:'SIM',expires_in_days:30},201);
+const {token}=await call(`/api/v1/admin/brokers/${broker.id}/tokens`,admin,'POST',{name:'Verification',quik_firm:'SIM',expires_in_days:30,permissions:['orders:create','orders:read']},201);
 const payload={account_id:'VERIFY',client_code:'VERIFY',client_order_id:randomUUID(),symbol:'SBER',board:'TQBR',side:'BUY',order_type:'LIMIT',quantity:'1',price:'100'};
 const {order}=await call('/api/v1/orders',token,'POST',payload,201);
-await until(async()=>{const value=await call(`/api/v1/orders/${order.id}`,token);return value.order.status==='ACKNOWLEDGED';});
+await until(async()=>localStatus(order.id)==='ACKNOWLEDGED');
 // Deterministic crash-window injection: venue ACK was received, but queue completion
 // was lost. This models durable PROCESSING state; it is not a socket-loss test.
 sql(`UPDATE outbox_events SET status='PROCESSING',locked_by='crashed-verification-worker',locked_at=now()-interval '5 minutes' WHERE aggregate_id='${order.id}' AND event_type='ORDER_SEND';`);

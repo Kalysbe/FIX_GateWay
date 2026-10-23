@@ -21,6 +21,7 @@ import (
 	"github.com/fix-gateway/backend/internal/config"
 	"github.com/fix-gateway/backend/internal/orders"
 	"github.com/fix-gateway/backend/internal/platform/migrate"
+	"github.com/fix-gateway/backend/internal/quikexport"
 	"github.com/fix-gateway/backend/internal/ratelimit"
 	"github.com/fix-gateway/backend/internal/realtime"
 	"github.com/google/uuid"
@@ -52,6 +53,7 @@ func TestSecurityAuditDatabase(t *testing.T) {
 	svc := orders.NewService(osStore, bs, as)
 	users := admin.NewUserStore(pool)
 	s := NewServer(config.Config{AuthFailMaxPerMinute: 100, JWTSecret: "security-test-key", CORSOrigins: []string{"https://audit.example.test"}}, slog.New(slog.NewTextHandler(io.Discard, nil)), pool, bs, svc, osStore, nil, nil, nil, as, users, realtime.NewHub(), nil)
+	s.quikOrders = &testOrderSource{err: quikexport.ErrOrderNotFound}
 	rateStore := &ratelimit.Store{Pool: pool, Admission: ratelimit.NewAdmission()}
 	if err := rateStore.Refresh(ctx); err != nil {
 		t.Fatal(err)
@@ -95,7 +97,7 @@ func TestSecurityAuditDatabase(t *testing.T) {
 		}
 	}
 	t.Run("other_broker_order_read_denied", func(t *testing.T) { request("GET", "/api/v1/orders/"+orderID.String(), token.Raw, 404) })
-	t.Run("other_broker_order_cancel_denied", func(t *testing.T) { request("POST", "/api/v1/orders/"+orderID.String()+"/cancel", token.Raw, 400) })
+	t.Run("other_broker_order_cancel_denied", func(t *testing.T) { request("POST", "/api/v1/orders/"+orderID.String()+"/cancel", token.Raw, 404) })
 	t.Run("readonly_token_cannot_create", func(t *testing.T) {
 		ro, err := bs.CreateTokenExt(ctx, brokers.CreateTokenInput{BrokerID: b.ID, Name: "read-only", QuikFirm: "AUDIT", Permissions: auth.ReadOnlyPermissions})
 		if err != nil {

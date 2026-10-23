@@ -34,7 +34,12 @@ services:
       PGPASSWORD: local-simulator-only
     volumes:
       - ./local-simulator.sql:/bootstrap.sql:ro
-    command: ["psql", "-h", "postgres", "-U", "gateway", "-d", "fix_gateway_local", "-v", "ON_ERROR_STOP=1", "-f", "/bootstrap.sql"]
+      - ./local-quik-export.sql:/quik-export.sql:ro
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        psql -h postgres -U gateway -d fix_gateway_local -v ON_ERROR_STOP=1 -f /bootstrap.sql
+        psql -h postgres -U gateway -d fix_gateway_local -v ON_ERROR_STOP=1 -f /quik-export.sql
 
   devcerts:
     build:
@@ -49,8 +54,12 @@ services:
       context: ../backend
       target: fixsimulator
     restart: unless-stopped
+    depends_on:
+      bootstrap:
+        condition: service_completed_successfully
     environment:
       SIM_FILL_DELAY: 3s
+      SIM_ORDERS_DATABASE_URL: postgres://quik_sim_writer:local-simulator-only@postgres:5432/quik_export_local?sslmode=disable
 
   gateway:
     build:
@@ -86,6 +95,8 @@ services:
       FIX_SESSION_DIR: /app/fix-sessions
       ADAPTER_HOST_OVERRIDE: fixsimulator
       QUIK_API_BASE_URL: http://127.0.0.1:1
+      # SELECT-only role on the simulator's Orders table (see local-quik-export.sql).
+      QUIK_EXPORT_DATABASE_URL: postgres://quik_reader:local-simulator-only@postgres:5432/quik_export_local?sslmode=disable
       POSITION_SYNC_INTERVAL: "0s"
       MARKET_DATA_SYNC_INTERVAL: "0s"
       CORS_ORIGINS: http://localhost:5173,http://127.0.0.1:5173

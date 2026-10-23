@@ -91,6 +91,22 @@ func TestSimulatorCancelPreventsFill(t *testing.T) {
 	}
 }
 
+func TestExportRowMatchesOrderIDAndGatewayLinkFields(t *testing.T) {
+	now := time.Date(2026, 10, 23, 23, 30, 0, 0, time.FixedZone("UTC+6", 6*3600))
+	row := newExportRow(map[string]string{"48": "SBER", "54": "2", "38": "3", "44": "101.5", "5018": "SIM", "109": "C1", "1": "ACC"}, "123", "TQBR", now)
+	// The Gateway links an Orders row to its request by firm, SecCode, ClassCode
+	// and side, and finds it by the trading date encoded in FIX tag 37.
+	if row.tradeDate != "2026-10-23" || row.firm != "SIM" || row.symbol != "SBER" || row.board != "TQBR" || row.operation != "Продажа" {
+		t.Fatalf("%+v", row)
+	}
+	if row.state != "Активна" || row.qty != "3" || row.balance != "3" || row.price != "101.5" {
+		t.Fatalf("%+v", row)
+	}
+	if buy := newExportRow(map[string]string{"54": "1"}, "1", "TQBR", now); buy.operation != "Купля" || buy.price != "0" || buy.qty != "1" {
+		t.Fatalf("%+v", buy)
+	}
+}
+
 func TestSimulatorFillThenCancelReject(t *testing.T) {
 	t.Setenv("SIM_FILL_DELAY", "1ms")
 	conn, r := simulatorClient(t)

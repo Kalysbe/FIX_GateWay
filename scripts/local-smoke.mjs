@@ -21,17 +21,40 @@ async function request(path, token, method = 'GET', body, expected = 200) {
   return result;
 }
 
-async function waitStatus(id, token, status) {
+function sql(statement) {
+  return execFileSync(docker, [...compose, 'exec', '-T', 'postgres', 'psql', '-U', 'gateway', '-d', 'fix_gateway_local',
+    '-v', 'ON_ERROR_STOP=1', '-At'], { input: statement, encoding: 'utf8', timeout: 15000 }).trim();
+}
+
+// Broker REST now returns only the current QUIK Orders row, so the Gateway's own
+// request lifecycle (status, adapter, fills) is read from its local ledger.
+function localOrder(id) {
+  assert.match(id, /^[0-9a-f-]{36}$/i);
+  const raw = sql(`SELECT json_build_object('status',status,'filled_quantity',filled_quantity,'adapter_id',adapter_id,
+    'reject_reason',reject_reason,'trades',(SELECT count(*) FROM executions e WHERE e.order_id=o.id))::text FROM orders o WHERE id='${id}'`);
+  return JSON.parse(raw);
+}
+
+async function waitStatus(id, status) {
   const deadline = Date.now() + 15000;
   while (Date.now() < deadline) {
-    const result = await request(`/api/v1/orders/${id}`, token);
-    if (result.order.status === status) return result;
-    if (['FAILED', 'REJECTED', 'CANCELLED', 'FILLED', 'EXPIRED'].includes(result.order.status)) {
-      assert.fail(`Expected ${status}, got ${result.order.status}: ${result.order.reject_reason || ''}`);
+    const order = localOrder(id);
+    if (order.status === status) return order;
+    if (['FAILED', 'REJECTED', 'CANCELLED', 'FILLED', 'EXPIRED'].includes(order.status)) {
+      assert.fail(`Expected ${status}, got ${order.status}: ${order.reject_reason || ''}`);
     }
     await delay(100);
   }
   assert.fail(`Timed out waiting for ${status}`);
+}
+
+// The simulator writes Orders before each FIX report, so the row is current by
+// the time the local status changes.
+async function quikRow(id, token, state) {
+  const row = await request(`/api/v1/orders/${id}`, token);
+  assert.equal(row.State, state, `QUIK Orders row: ${JSON.stringify(row)}`);
+  assert.equal(row.order, undefined, 'broker REST must return the raw Orders row without a wrapper');
+  return row;
 }
 
 async function watchEvents(token) {
@@ -99,7 +122,9 @@ async function main() {
       code: 'SMOKE', name: 'Simulator account', quik_firm: 'SIM', trading_account: 'SMOKE',
     }, 201);
     return request(`/api/v1/admin/brokers/${created.id}/tokens`, admin, 'POST', {
+      // An omitted list is read-only; trading rights must be explicit.
       name: 'Smoke test', quik_firm: 'SIM', expires_in_days: 30,
+      permissions: ['orders:create', 'orders:read', 'orders:cancel', 'trades:read'],
     }, 201);
   }
   const first = await broker('A');
@@ -114,39 +139,47 @@ async function main() {
   assert.equal(repeated.order.id, created.order.id);
   assert.equal(repeated.idempotent, true);
   await request(`/api/v1/orders/${created.order.id}`, second.token, 'GET', undefined, 404);
-  const filled = await waitStatus(created.order.id, first.token, 'FILLED');
-  assert.equal(Number(filled.order.filled_quantity), 1);
-  assert.equal(filled.trades.length, 1);
+  const filled = await waitStatus(created.order.id, 'FILLED');
+  assert.equal(Number(filled.filled_quantity), 1);
+  assert.equal(filled.trades, 1);
+  const filledRow = await quikRow(created.order.id, first.token, 'Исполнена');
+  assert.equal(filledRow.FirmId, 'SIM');
+  const listed = await request('/api/v1/orders?limit=1000', first.token);
+  assert.ok(Array.isArray(listed) && listed.some((row) => String(row.OrderNum) === String(filledRow.OrderNum)), 'list must contain the raw row');
   await events.waitFor('order.updated');
-  console.log('PASS create / idempotency / fill / trade / broker isolation');
+  console.log('PASS create / idempotency / fill / trade / broker isolation / raw QUIK Orders row');
   console.log('PASS realtime SSE over native TLS gRPC');
 
   const cancel = await request('/api/v1/orders', first.token, 'POST', {
     ...order, client_order_id: `SMOKE-${run}-cancel`,
   }, 201);
-  await waitStatus(cancel.order.id, first.token, 'ACKNOWLEDGED');
+  await waitStatus(cancel.order.id, 'ACKNOWLEDGED');
+  await quikRow(cancel.order.id, first.token, 'Активна');
   await request(`/api/v1/orders/${cancel.order.id}/cancel`, first.token, 'POST');
-  await waitStatus(cancel.order.id, first.token, 'CANCELLED');
+  await waitStatus(cancel.order.id, 'CANCELLED');
   await delay(3500);
-  const cancelled = await request(`/api/v1/orders/${cancel.order.id}`, first.token);
-  assert.equal(cancelled.order.status, 'CANCELLED');
-  assert.equal(cancelled.trades.length, 0);
+  const cancelled = localOrder(cancel.order.id);
+  assert.equal(cancelled.status, 'CANCELLED');
+  assert.equal(cancelled.trades, 0);
+  await quikRow(cancel.order.id, first.token, 'Снята');
   console.log('PASS cancel stays cancelled after simulator fill deadline');
 
   const rejected = await request('/api/v1/orders', first.token, 'POST', {
     ...order, symbol: 'REJECT', client_order_id: `SMOKE-${run}-reject`,
   }, 201);
-  await waitStatus(rejected.order.id, first.token, 'REJECTED');
+  await waitStatus(rejected.order.id, 'REJECTED');
+  // QUIK keeps no Orders row for a rejected transaction; nothing is substituted.
+  await request(`/api/v1/orders/${rejected.order.id}`, first.token, 'GET', undefined, 404);
   console.log('PASS FIX rejection');
 
   const batch = await Promise.all(Array.from({ length: 8 }, (_, index) =>
     request('/api/v1/orders', first.token, 'POST', {
       ...order, client_order_id: `SMOKE-${run}-parallel-${index}`,
     }, 201)));
-  const completed = await Promise.all(batch.map(({ order: item }) => waitStatus(item.id, first.token, 'FILLED')));
-  assert.equal(new Set(completed.map((item) => item.order.id)).size, 8);
-  assert.equal(new Set(completed.map((item) => item.order.adapter_id)).size, 2);
-  assert.ok(completed.every((item) => item.trades.length === 1));
+  const completed = await Promise.all(batch.map(({ order: item }) => waitStatus(item.id, 'FILLED')));
+  assert.equal(new Set(batch.map(({ order: item }) => item.id)).size, 8);
+  assert.equal(new Set(completed.map((item) => item.adapter_id)).size, 2);
+  assert.ok(completed.every((item) => item.trades === 1));
   console.log('PASS concurrent orders balanced across two FIX adapters');
 
   await request('/api/v1/admin/adapters/adapter-1/disable', admin, 'POST');
@@ -155,8 +188,8 @@ async function main() {
     const fallback = await request('/api/v1/orders', first.token, 'POST', {
       ...order, client_order_id: `SMOKE-${run}-fallback`,
     }, 201);
-    const result = await waitStatus(fallback.order.id, first.token, 'FILLED');
-    assert.equal(result.order.adapter_id, 'adapter-2');
+    const result = await waitStatus(fallback.order.id, 'FILLED');
+    assert.equal(result.adapter_id, 'adapter-2');
     console.log('PASS routing with one adapter disabled / last-adapter protection');
   } finally {
     await request('/api/v1/admin/adapters/adapter-1/enable', admin, 'POST');
