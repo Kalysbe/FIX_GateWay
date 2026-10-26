@@ -29,7 +29,6 @@ assert.equal(sql('SELECT dirty FROM schema_migrations'),'f');
 const localStatus=id=>sql(`SELECT status FROM orders WHERE id='${id}'`);
 const {token:admin}=await call('/api/v1/admin/login','','POST',{email:'admin@localhost',password:'admin123'});
 const {broker}=await call('/api/v1/admin/brokers',admin,'POST',{code:`VERIFY-${randomUUID()}`,name:'Release verification'},201);
-await call(`/api/v1/admin/brokers/${broker.id}/accounts`,admin,'POST',{code:'VERIFY',name:'Test',quik_firm:'SIM',trading_account:'VERIFY'},201);
 const {token}=await call(`/api/v1/admin/brokers/${broker.id}/tokens`,admin,'POST',{name:'Verification',quik_firm:'SIM',expires_in_days:30,permissions:['orders:create','orders:read']},201);
 const payload={account_id:'VERIFY',client_code:'VERIFY',client_order_id:randomUUID(),symbol:'SBER',board:'TQBR',side:'BUY',order_type:'LIMIT',quantity:'1',price:'100'};
 const {order}=await call('/api/v1/orders',token,'POST',payload,201);

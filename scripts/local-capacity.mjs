@@ -92,7 +92,6 @@ async function main(){
   const adapters=(await expect('/api/v1/admin/adapters')).adapters.filter(a=>a.enabled);assert.equal(adapters.length,2);assert.ok(adapters.every(a=>a.type==='simulator'&&a.host==='fixsimulator'));
   const {broker}=await expect('/api/v1/admin/brokers',admin,'POST',{code:prefix,name:'Isolated adapter capacity benchmark'},201);brokerId=broker.id;
   await expect(`/api/v1/admin/brokers/${brokerId}`,admin,'PATCH',{rate_limit_rps:20000,rate_limit_orders_per_sec:20000});
-  await expect(`/api/v1/admin/brokers/${brokerId}/accounts`,admin,'POST',{code:'CAPACITY',name:'Capacity test',quik_firm:'SIM',trading_account:'CAPACITY'},201);
   const t=await expect(`/api/v1/admin/brokers/${brokerId}/tokens`,admin,'POST',{name:'Capacity benchmark',quik_firm:'SIM',expires_in_days:30,permissions:['orders:create','orders:read']},201);token=t.token;tokenId=t.id;
   try{
     for(const mode of modes){

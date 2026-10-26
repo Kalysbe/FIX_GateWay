@@ -118,18 +118,6 @@ type APIToken struct {
 	RotatedFrom *uuid.UUID  `json:"rotated_from,omitempty"`
 }
 
-type BrokerAccount struct {
-	ID             int64     `json:"id"`
-	BrokerID       int64     `json:"broker_id"`
-	Code           string    `json:"code"`
-	Name           string    `json:"name"`
-	QuikFirm       string    `json:"quik_firm"`
-	TradingAccount string    `json:"trading_account"`
-	Status         string    `json:"status"`
-	CreatedAt      time.Time `json:"created_at"`
-	UpdatedAt      time.Time `json:"updated_at"`
-}
-
 type Instrument struct {
 	ID             int64  `json:"id"`
 	InternalSymbol string `json:"internal_symbol"`

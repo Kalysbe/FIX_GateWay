@@ -23,7 +23,6 @@ function localOrder(id){assert.match(id,/^[0-9a-f-]{36}$/i);return JSON.parse(sq
 async function until(fn,timeout=60000){const end=Date.now()+timeout;while(Date.now()<end){try{if(await fn())return;}catch{}await delay(300);}throw Error('Recovery timed out');}
 const {token:admin}=await call('/api/v1/admin/login','','POST',{email:'admin@localhost',password:'admin123'});
 const {broker}=await call('/api/v1/admin/brokers',admin,'POST',{code:`RECOVERY-${randomUUID()}`,name:'Execution journal recovery test'},201);
-await call(`/api/v1/admin/brokers/${broker.id}/accounts`,admin,'POST',{code:'RECOVERY',name:'Test',quik_firm:'SIM',trading_account:'RECOVERY'},201);
 const {token}=await call(`/api/v1/admin/brokers/${broker.id}/tokens`,admin,'POST',{name:'Recovery',quik_firm:'SIM',expires_in_days:30,permissions:['orders:create','orders:read']},201);
 for(const restart of [false,true]){
  const {order}=await call('/api/v1/orders',token,'POST',{account_id:'RECOVERY',client_code:'RECOVERY',client_order_id:randomUUID(),symbol:'SBER',board:'TQBR',side:'BUY',order_type:'LIMIT',quantity:'1',price:'100'},201);

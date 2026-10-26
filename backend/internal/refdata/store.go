@@ -157,23 +157,28 @@ func upsertInstrumentTx(ctx context.Context, tx pgx.Tx, internal, quikSymbol, bo
 	return id, nil
 }
 
-func (s *Store) ListFirms(ctx context.Context) ([]Firm, error) {
-	rows, err := s.pool.Query(ctx, `
-		SELECT firm_id, exchange, firm_name, status, status_flag
-		FROM quik_firms ORDER BY firm_id`)
+// ReplaceFirms makes the quik_firms name cache equal to QUIK "Firms". Local
+// orders and trades join it for firm_name; QUIK remains the source.
+func (s *Store) ReplaceFirms(ctx context.Context, firms []Firm) error {
+	tx, err := s.pool.Begin(ctx)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	defer rows.Close()
-	var out []Firm
-	for rows.Next() {
-		var f Firm
-		if err := rows.Scan(&f.FirmID, &f.Exchange, &f.FirmName, &f.Status, &f.StatusFlag); err != nil {
-			return nil, err
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, `DELETE FROM quik_firms`); err != nil {
+		return err
+	}
+	for _, f := range firms {
+		if f.FirmID == "" {
+			continue
 		}
-		out = append(out, f)
+		if _, err := tx.Exec(ctx, `INSERT INTO quik_firms(firm_id,exchange,firm_name,status,status_flag,synced_at)
+VALUES($1,$2,$3,$4,$5,now()) ON CONFLICT(firm_id) DO UPDATE SET exchange=EXCLUDED.exchange,firm_name=EXCLUDED.firm_name,
+status=EXCLUDED.status,status_flag=EXCLUDED.status_flag,synced_at=now()`, f.FirmID, f.Exchange, f.FirmName, f.Status, f.StatusFlag); err != nil {
+			return err
+		}
 	}
-	return out, rows.Err()
+	return tx.Commit(ctx)
 }
 
 func (s *Store) ListActiveInstruments(ctx context.Context) ([]domain.SecurityRef, error) {
@@ -196,28 +201,6 @@ func (s *Store) ListActiveInstruments(ctx context.Context) ([]domain.SecurityRef
 		out = append(out, r)
 	}
 	return out, rows.Err()
-}
-
-// GetFirmByID returns a firm from the local quik_firms cache.
-// ok=false if firm_id is empty or not found (not an error).
-func (s *Store) GetFirmByID(ctx context.Context, firmID string) (Firm, bool, error) {
-	firmID = strings.TrimSpace(firmID)
-	if firmID == "" {
-		return Firm{}, false, nil
-	}
-	var f Firm
-	err := s.pool.QueryRow(ctx, `
-		SELECT firm_id, exchange, firm_name, status, status_flag
-		FROM quik_firms WHERE firm_id=$1`, firmID).Scan(
-		&f.FirmID, &f.Exchange, &f.FirmName, &f.Status, &f.StatusFlag,
-	)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return Firm{}, false, nil
-	}
-	if err != nil {
-		return Firm{}, false, err
-	}
-	return f, true, nil
 }
 
 type Firm struct {

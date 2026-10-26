@@ -61,31 +61,25 @@ paths:
   /api/v1/firm:
     get:
       tags: [Фирма]
-      summary: Код фирмы текущего токена
+      summary: Фирма токена — строка таблицы QUIK Firms
       security:
         - bearerAuth: []
       description: |
-        Требует `orders:read`.
-        Возвращает код фирмы, привязанный к токену (`quik_firm` → FIX tag 5018),
-        и название фирмы из локального кэша (если есть).
+        Требует `orders:read`. Строка `quik_export2.public."Firms"` для фирмы токена (`quik_firm` → FIX tag 5018,
+        при пустом значении — код брокера) как есть (`row_to_json`).
       responses:
         "200":
-          description: OK
+          description: Строка Firms
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  quik_firm:
-                    type: string
-                    description: Код фирмы (FIX 5018)
-                    example: "MC0031400000"
-                  firm_name:
-                    type: string
-                    description: Название фирмы
-                    example: "ТОО Example"
+                $ref: "#/components/schemas/QuikFirmRow"
         "401":
           description: Unauthorized
+        "404":
+          description: Фирмы нет в Firms
+        "503":
+          description: Источник QUIK недоступен
   /api/v1/instruments:
     get:
       tags: [Справочники]
@@ -243,25 +237,26 @@ paths:
   /api/v1/accounts:
     get:
       tags: [Справочники]
-      summary: Счета текущего брокера
+      summary: Торговые счета фирмы токена — строки QUIK Trdaccs
       security:
         - bearerAuth: []
       description: |
-        Требует `orders:read`. В `account_id` заявки передавайте `trading_account`.
+        Требует `orders:read`. JSON-массив строк `quik_export2.public."Trdaccs"` с `FirmId` фирмы токена,
+        как есть (`row_to_json`). В `account_id` заявки передавайте `TrdAccId` одной из этих строк:
+        другие значения заявка не принимает. Счета заводятся в QUIK, не в Gateway.
       responses:
         "200":
-          description: OK
+          description: Строки Trdaccs
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  accounts:
-                    type: array
-                    items:
-                      $ref: "#/components/schemas/BrokerAccount"
+                type: array
+                items:
+                  $ref: "#/components/schemas/QuikTradingAccountRow"
         "401":
           description: Unauthorized
+        "503":
+          description: Источник QUIK недоступен
   /api/v1/orders:
     post:
       tags: [Заявки]
@@ -824,25 +819,20 @@ components:
         message: {type: string}
         raw_fix: {type: string}
         created_at: {type: string, format: date-time}
-    BrokerAccount:
+    QuikTradingAccountRow:
       type: object
+      additionalProperties: true
+      description: Строка `quik_export2.public."Trdaccs"` как есть; набор колонок задаёт QUIK.
       properties:
-        id:
-          type: integer
-        broker_id:
-          type: integer
-        code:
-          type: string
-        name:
-          type: string
-        quik_firm:
-          type: string
-        trading_account:
-          type: string
-          example: "1-3101-2040"
-        status:
-          type: string
-          example: ACTIVE
+        TrdAccId: {type: string, description: Торговый счёт → account_id заявки и FIX tag 1}
+        FirmId: {type: string}
+    QuikFirmRow:
+      type: object
+      additionalProperties: true
+      description: Строка `quik_export2.public."Firms"` как есть; набор колонок задаёт QUIK.
+      properties:
+        FirmId: {type: string}
+        FirmName: {type: string, nullable: true}
     Instrument:
       type: object
       properties:

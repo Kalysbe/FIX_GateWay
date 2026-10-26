@@ -19,18 +19,6 @@ export type Broker = {
   ip_whitelist_enabled?: boolean;
 };
 
-export type BrokerAccount = {
-  id: number;
-  broker_id: number;
-  code: string;
-  name?: string;
-  quik_firm?: string;
-  trading_account: string;
-  status: string;
-  created_at?: string;
-  updated_at?: string;
-};
-
 export type APIToken = {
   id: string;
   broker_id?: number;

@@ -150,3 +150,66 @@ INSERT INTO public."Params" VALUES
 		t.Fatal("injection-like key matched", err)
 	}
 }
+
+func TestQUIKTradingAccountsAndFirmsByFirm(t *testing.T) {
+	dsn := os.Getenv("QUIK_ORDERS_STORE_TEST_DATABASE_URL")
+	if dsn == "" {
+		dsn = os.Getenv("QUIK_ORDERS_TEST_DATABASE_URL")
+	}
+	if dsn == "" {
+		t.Skip("disposable QUIK_ORDERS_TEST_DATABASE_URL required")
+	}
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	var name string
+	if err := pool.QueryRow(ctx, `SELECT current_database()`).Scan(&name); err != nil || !strings.HasSuffix(name, "_test") {
+		t.Fatal("disposable database name must end in _test", name, err)
+	}
+	_, err = pool.Exec(ctx, `CREATE TABLE public."Trdaccs" ("TrdAccId" char(16),"Type" integer,"FirmId" char(12),"Description" text,"Status" integer,"Flags" bigint);
+INSERT INTO public."Trdaccs" VALUES ('1-3001-71',1,'2040','Сенти',0,9007199254740993),('1-3001-72',1,'2040',NULL,0,0),('1-9999-01',1,'9999','other',0,0);
+CREATE TABLE public."Firms" ("Exchange" text,"FirmId" char(12),"FirmName" text,"Status" text,"StatusFlag" integer);
+INSERT INTO public."Firms" VALUES ('KSE','2040','Сенти',NULL,1),('KSE','9999','Other','x',0);`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = pool.Exec(ctx, `DROP TABLE public."Trdaccs"; DROP TABLE public."Firms"`) })
+	readOnly, err := db.ConnectReadOnly(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer readOnly.Close()
+	s := NewStore(readOnly)
+	list, err := s.ListTradingAccounts(ctx, "2040")
+	if err != nil || len(list) != 2 || !bytes.Contains(list[0].Raw, []byte(`"Flags":9007199254740993`)) || !bytes.Contains(list[1].Raw, []byte(`"Description":null`)) {
+		t.Fatal(list, err)
+	}
+	if list, err := s.ListTradingAccounts(ctx, ""); err != nil || len(list) != 0 {
+		t.Fatal("empty firm matched accounts", list, err)
+	}
+	acc, err := s.TradingAccount(ctx, "2040", " 1-3001-71 ")
+	if err != nil || strings.TrimSpace(acc.Text("TrdAccId")) != "1-3001-71" {
+		t.Fatal(acc, err)
+	}
+	// Another firm's account is not tradable for this firm.
+	if _, err := s.TradingAccount(ctx, "2040", "1-9999-01"); !errors.Is(err, ErrAccountNotFound) {
+		t.Fatal(err)
+	}
+	if _, err := s.TradingAccount(ctx, "2040", "1-3001-7"); !errors.Is(err, ErrAccountNotFound) {
+		t.Fatal("prefix matched", err)
+	}
+	firms, err := s.ListFirms(ctx)
+	if err != nil || len(firms) != 2 {
+		t.Fatal(firms, err)
+	}
+	f, err := s.Firm(ctx, "2040")
+	if err != nil || f.Text("FirmName") != "Сенти" || !bytes.Contains(f.Raw, []byte(`"Status":null`)) {
+		t.Fatal(string(f.Raw), err)
+	}
+	if _, err := s.Firm(ctx, "0000"); !errors.Is(err, ErrFirmNotFound) {
+		t.Fatal(err)
+	}
+}

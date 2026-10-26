@@ -243,30 +243,22 @@ paths:
           description: Prometheus text exposition
   /api/v1/firm:
     get:
-      summary: Firm for current API token
+      tags: [Broker]
+      summary: Row of QUIK Firms for the token firm
       security:
         - bearerAuth: []
-      description: |
-        Returns the firm code bound to the token (`quik_firm` → FIX tag 5018)
-        and the firm name from the local `quik_firms` reference cache (if present).
+      description: Requires `orders:read`. The quik_export2.public."Firms" row of the token firm (quik_firm, or the broker code when empty), as stored.
       responses:
         "200":
-          description: OK
+          description: Firms row
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  quik_firm:
-                    type: string
-                    description: Firm code (FIX 5018)
-                    example: "MC0031400000"
-                  firm_name:
-                    type: string
-                    description: Firm name from quik_firms; empty if not in local cache
-                    example: "ТОО Example"
-        "401":
-          description: Unauthorized
+                $ref: "#/components/schemas/QuikFirmRow"
+        "404":
+          description: Firm not present in Firms
+        "503":
+          description: QUIK source unavailable
   /api/v1/orders:
     post:
       summary: Create order
@@ -356,24 +348,21 @@ paths:
   /api/v1/accounts:
     get:
       tags: [Broker]
-      summary: List accounts of the current broker
+      summary: Trading accounts of the token firm — rows of QUIK Trdaccs
       security:
         - bearerAuth: []
-      description: Requires `orders:read`. Accounts belong to the broker bound to the token.
+      description: Requires `orders:read`. JSON array of quik_export2.public."Trdaccs" rows whose FirmId is the token firm, as stored. An order's account_id must be the TrdAccId of one of them.
       responses:
         "200":
-          description: OK
+          description: Trdaccs rows
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  accounts:
-                    type: array
-                    items:
-                      $ref: "#/components/schemas/BrokerAccount"
-        "401":
-          description: Unauthorized
+                type: array
+                items:
+                  $ref: "#/components/schemas/QuikTradingAccountRow"
+        "503":
+          description: QUIK source unavailable
   /api/v1/instruments:
     get:
       tags: [Broker]
@@ -1110,80 +1099,17 @@ paths:
   /api/v1/admin/brokers/{id}/accounts:
     get:
       tags: [Admin]
-      summary: List broker accounts
+      summary: Trdaccs rows of the firms of the broker's active tokens
+      description: Read-only; accounts are maintained in QUIK. The X-Firms header lists the firms used.
       security:
         - bearerAuth: []
       parameters:
         - $ref: "#/components/parameters/BrokerID"
       responses:
         "200":
-          description: OK
-    post:
-      tags: [Admin]
-      summary: Create broker account
-      security:
-        - bearerAuth: []
-      parameters:
-        - $ref: "#/components/parameters/BrokerID"
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                trading_account:
-                  type: string
-                  example: "1-3101-2040"
-                code:
-                  type: string
-                name:
-                  type: string
-                quik_firm:
-                  type: string
-      responses:
-        "201":
-          description: Created
-        "409":
-          description: Account code or trading_account already exists
-  /api/v1/admin/brokers/{id}/accounts/{account_id}:
-    patch:
-      tags: [Admin]
-      summary: Update broker account (fields and ACTIVE/DISABLED)
-      security:
-        - bearerAuth: []
-      parameters:
-        - $ref: "#/components/parameters/BrokerID"
-        - in: path
-          name: account_id
-          required: true
-          schema:
-            type: integer
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                trading_account:
-                  type: string
-                code:
-                  type: string
-                name:
-                  type: string
-                quik_firm:
-                  type: string
-                status:
-                  type: string
-                  enum: [ACTIVE, DISABLED]
-      responses:
-        "200":
-          description: Updated
-        "404":
-          description: Not found
-        "409":
-          description: Account code or trading_account already exists
+          description: Trdaccs rows
+        "503":
+          description: QUIK source unavailable
   /api/v1/admin/brokers/{id}/ip-whitelist/{entry_id}:
     delete:
       tags: [Admin]
@@ -1708,12 +1634,15 @@ paths:
   /api/v1/admin/firms:
     get:
       tags: [Admin]
-      summary: List cached QUIK firms
+      summary: Rows of QUIK Firms as stored
+      description: Token firms (quik_firm) must be one of these FirmId values.
       security:
         - bearerAuth: []
       responses:
         "200":
-          description: OK
+          description: Firms rows
+        "503":
+          description: QUIK source unavailable
   /api/v1/admin/users:
     get:
       tags: [Admin]
@@ -2091,25 +2020,20 @@ components:
               - "trades:read"
               - "positions:read"
               - "positions:write"
-    BrokerAccount:
+    QuikTradingAccountRow:
       type: object
+      additionalProperties: true
+      description: A quik_export2.public."Trdaccs" row as stored.
       properties:
-        id:
-          type: integer
-        broker_id:
-          type: integer
-        code:
-          type: string
-        name:
-          type: string
-        quik_firm:
-          type: string
-        trading_account:
-          type: string
-          example: "1-3101-2040"
-        status:
-          type: string
-          example: ACTIVE
+        TrdAccId: {type: string}
+        FirmId: {type: string}
+    QuikFirmRow:
+      type: object
+      additionalProperties: true
+      description: A quik_export2.public."Firms" row as stored.
+      properties:
+        FirmId: {type: string}
+        FirmName: {type: string, nullable: true}
     Instrument:
       type: object
       properties:

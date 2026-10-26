@@ -1,6 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-import { api } from "../api";
+import { api, apiWithHeaders } from "../api";
+import { dbValue, parseDBJSON, type DBOrder } from "../lib/rawOrders";
+import { rawColumns, rawSearchText } from "../components/rawColumns";
 import { StatusBadge } from "../components/StatusBadge";
 import { DataTable, type TableColumn } from "../components/DataTable";
 import { ErrorBanner } from "../components/feedback";
@@ -16,13 +18,6 @@ type Instrument = {
   status: string;
 };
 
-type Firm = {
-  firm_id: string;
-  exchange: string;
-  firm_name: string;
-  status: string;
-  status_flag?: number;
-};
 
 export default function ReferencePage() {
   const qc = useQueryClient();
@@ -34,7 +29,8 @@ export default function ReferencePage() {
   });
   const firms = useQuery({
     queryKey: ["admin-firms"],
-    queryFn: () => api<{ firms: Firm[]; count: number; note?: string }>("/api/v1/admin/firms"),
+    // Rows of QUIK "Firms" as stored.
+    queryFn: async ({ signal }) => (await apiWithHeaders<DBOrder[]>("/api/v1/admin/firms", { signal }, parseDBJSON)).data ?? [],
   });
 
   const sync = useMutation({
@@ -61,13 +57,7 @@ export default function ReferencePage() {
     { id: "status", header: "Статус", value: i => i.status, cell: i => <StatusBadge status={i.status} /> },
     { id: "internal", header: "Внутренний код", value: i => i.internal_symbol, className: "font-mono text-[10px]" },
   ];
-  const firmColumns: TableColumn<Firm>[] = [
-    { id: "id", header: "Код фирмы", value: f => f.firm_id, className: "font-mono" },
-    { id: "name", header: "Название", value: f => f.firm_name },
-    { id: "exchange", header: "Биржа", value: f => f.exchange },
-    { id: "status", header: "Статус", value: f => f.status, cell: f => <StatusBadge status={f.status} /> },
-    { id: "flag", header: "Флаг", value: f => f.status_flag, numeric: true },
-  ];
+  const firmRows = firms.data ?? [];
 
   return (
     <div className="space-y-6">
@@ -103,7 +93,7 @@ export default function ReferencePage() {
           Инструменты ({instruments.data?.count ?? "…"})
         </button>
         <button className={tab === "firms" ? "btn" : "btn-muted"} onClick={() => setTab("firms")}>
-          Фирмы ({firms.data?.count ?? "…"})
+          Фирмы ({firms.data ? firmRows.length : "…"})
         </button>
       </div>
 
@@ -111,9 +101,9 @@ export default function ReferencePage() {
         {instruments.error && <ErrorBanner error={instruments.error} onRetry={() => instruments.refetch()} />}
         <DataTable title="Инструменты" rows={instruments.data?.instruments ?? []} columns={instrumentColumns} rowKey={i => i.id} loading={instruments.isLoading} exportName="instruments" emptyHint="Синхронизируйте справочник по FIX" summary={rows => [{ label: "Инструментов", value: rows.length }, { label: "Классов", value: new Set(rows.map(i => i.board)).size }, { label: "Активны", value: rows.filter(i => i.status === "ACTIVE").length, tone: "success" }]} />
       </> : <>
-        {firms.data?.note && <p className="text-xs text-muted">{firms.data.note}</p>}
+        <p className="text-xs text-muted">Строки таблицы QUIK Firms в том виде, в каком они хранятся в базе</p>
         {firms.error && <ErrorBanner error={firms.error} onRetry={() => firms.refetch()} />}
-        <DataTable title="Фирмы" rows={firms.data?.firms ?? []} columns={firmColumns} rowKey={f => f.firm_id} loading={firms.isLoading} exportName="firms" emptyHint="Фирмы не передаются в Security Definition" />
+        <DataTable title="Фирмы" rows={firmRows} columns={rawColumns(firmRows)} rowKey={f => `${dbValue(f.FirmId)}\u0000${dbValue(f.Exchange)}`} getSearchText={rawSearchText(firmRows)} loading={firms.isLoading} exportName="firms" showTotals={false} emptyTitle={firms.error ? "Таблица Firms недоступна" : "В Firms нет строк"} />
       </>}
     </div>
   );

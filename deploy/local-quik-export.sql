@@ -55,9 +55,30 @@ INSERT INTO public."Params" VALUES
   ('LIST_GBA', 'GBA02280810', 'Local simulator bond', current_date, 'торгуется', 99.5, 100.5, 100, 99.5, 101, 99, 3, 1500, 150000),
   ('LISTEDSTOCKK', 'KG0105166315', 'Local simulator share', current_date, 'торгуется', NULL, 400, 400, 400, 400, 400, 1, 1, 400)
 ON CONFLICT DO NOTHING;
+-- Trading accounts and firms the local scripts trade with (QUIK column names).
+CREATE TABLE IF NOT EXISTS public."Firms" (
+  "Exchange" text, "FirmId" text NOT NULL, "FirmName" text, "Status" text, "StatusFlag" integer,
+  PRIMARY KEY ("FirmId")
+);
+INSERT INTO public."Firms" VALUES
+  ('LOCAL', 'SIM', 'Local simulator firm', NULL, NULL),
+  ('LOCAL', 'LOCAL_FIRM', 'Local demo firm', NULL, NULL)
+ON CONFLICT DO NOTHING;
+CREATE TABLE IF NOT EXISTS public."Trdaccs" (
+  "TrdAccId" text NOT NULL, "Type" integer, "FirmId" text NOT NULL, "LoadDate" timestamp, "Description" text,
+  "BankAccId" text, "Status" integer, "DepAccId" text, "TrdAccType" integer, "MainTrdAccId" text,
+  "FirmUse" integer, "FullCoveredSell" integer, "BankIdT0" text, "BankIdTPlus" text, "DepUnitId" text, "Flags" bigint,
+  PRIMARY KEY ("FirmId", "TrdAccId")
+);
+INSERT INTO public."Trdaccs" ("TrdAccId", "FirmId", "Description")
+SELECT account, firm, 'Local simulator account'
+FROM (VALUES ('SMOKE', 'SIM'), ('RELIABILITY', 'SIM'), ('RECOVERY', 'SIM'), ('CAPACITY', 'SIM'), ('VERIFY', 'SIM'),
+             ('LOCAL_ACCOUNT', 'LOCAL_FIRM')) AS v(account, firm)
+ON CONFLICT DO NOTHING;
 REVOKE ALL ON public."Orders" FROM PUBLIC;
+REVOKE ALL ON public."Firms", public."Trdaccs" FROM PUBLIC;
 REVOKE ALL ON public."Params" FROM PUBLIC;
 GRANT CONNECT ON DATABASE quik_export_local TO quik_sim_writer, quik_reader;
 GRANT USAGE ON SCHEMA public TO quik_sim_writer, quik_reader;
 GRANT SELECT, INSERT, UPDATE ON public."Orders" TO quik_sim_writer;
-GRANT SELECT ON public."Orders", public."Params" TO quik_reader;
+GRANT SELECT ON public."Orders", public."Params", public."Firms", public."Trdaccs" TO quik_reader;

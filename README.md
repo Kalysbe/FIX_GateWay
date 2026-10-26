@@ -37,6 +37,7 @@ environment with a separate database and the admin interface, use
 - [Сверка неопределённых отправок](docs/reconciliation.md)
 - [Текущие заявки из БД QUIK](docs/orders.md)
 - [Текущие торги из БД QUIK (Params)](docs/market-data.md)
+- [Торговые счета и фирмы из БД QUIK](docs/accounts.md)
 - [Торговые ограничения](docs/trading-limits.md)
 - [Проверка торгового релиза](docs/release-verification.md)
 - [Deployment](docs/deployment.md)

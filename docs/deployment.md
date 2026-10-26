@@ -58,7 +58,7 @@ password: admin123
 | Variable | Description |
 |----------|-------------|
 | `DATABASE_URL` | PostgreSQL DSN (local default: `postgres://postgres:123@localhost:5432/fix_gateway?sslmode=disable`) |
-| `QUIK_EXPORT_DATABASE_URL` | Optional PostgreSQL QUIK export DSN. Gateway opens read-only sessions for `emitents`, `Orders`, `Params`, `Securities` and `Quotes(text)`; no migrations run against this source |
+| `QUIK_EXPORT_DATABASE_URL` | Optional PostgreSQL QUIK export DSN. Gateway opens read-only sessions for `emitents`, `Orders`, `Params`, `Trdaccs`, `Firms`, `Securities` and `Quotes(text)`; no migrations run against this source |
 | `JWT_SECRET` | Admin JWT HMAC secret |
 | `API_TOKEN_PEPPER` | Pepper for API token hashing |
 | `APP_ENV` | `development` or `production`; production validates strong secrets, verified database TLS and HTTPS |
@@ -106,7 +106,7 @@ VPN-only broker access, strong secrets, and production certificates. Setting
 
 Для существующего стенда на `172.23.10.96` используется пара `deploy/docker-compose.yml` + `deploy/docker-compose.override.yml`. Override задаёт `ADAPTER_HOST_OVERRIDE=172.23.10.84` для всех FIX-сессий, включая резервную, и `QUIK_API_BASE_URL=http://172.23.10.85:5000` для истории. Админка остаётся на `5173`, API — на `8081`. Локальный тестовый стенд без этого override использует `192.168.0.89`.
 
-В существующей БД `adapters.host=172.23.10.84` для QUIK-адаптеров, а `gateway_settings.quik_api_base_url=http://172.23.10.85:5000`: сохранённый origin API имеет приоритет над env. Источник текущих заявок и текущих торгов — PostgreSQL `172.23.10.84:5432/quik_export`, таблицы `public."Orders"` и `public."Params"`. Его DSN задаётся через `QUIK_EXPORT_DATABASE_URL` в приватном `deploy/.env` сервера; учётные данные не хранить в репозитории. Подключение работает только на чтение. Основная БД самого gateway остаётся отдельной.
+В существующей БД `adapters.host=172.23.10.84` для QUIK-адаптеров, а `gateway_settings.quik_api_base_url=http://172.23.10.85:5000`: сохранённый origin API имеет приоритет над env. Источник текущих заявок и текущих торгов — PostgreSQL `172.23.10.84:5432/quik_export`, таблицы `public."Orders"`, `public."Params"`, `public."Trdaccs"` и `public."Firms"`. Его DSN задаётся через `QUIK_EXPORT_DATABASE_URL` в приватном `deploy/.env` сервера; учётные данные не хранить в репозитории. Подключение работает только на чтение. Основная БД самого gateway остаётся отдельной.
 
 ```bash
 docker compose -p deploy -f deploy/docker-compose.yml -f deploy/docker-compose.override.yml up -d --build

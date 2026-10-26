@@ -118,9 +118,6 @@ async function main() {
     const { broker: created } = await request('/api/v1/admin/brokers', admin, 'POST', {
       code: `SMOKE-${run}-${suffix}`, name: `Local smoke ${suffix}`,
     }, 201);
-    await request(`/api/v1/admin/brokers/${created.id}/accounts`, admin, 'POST', {
-      code: 'SMOKE', name: 'Simulator account', quik_firm: 'SIM', trading_account: 'SMOKE',
-    }, 201);
     return request(`/api/v1/admin/brokers/${created.id}/tokens`, admin, 'POST', {
       // An omitted list is read-only; trading rights must be explicit.
       name: 'Smoke test', quik_firm: 'SIM', expires_in_days: 30,

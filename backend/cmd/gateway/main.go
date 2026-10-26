@@ -94,6 +94,10 @@ func main() {
 	orderStore := orders.NewStore(pool)
 	auditStore := audit.NewStore(pool)
 	orderSvc := orders.NewService(orderStore, brokerStore, auditStore)
+	if quikExportStore != nil {
+		// Accounts a firm may trade come only from QUIK Trdaccs.
+		orderSvc.SetTradingAccounts(quikExportStore)
+	}
 	adapterStore := adapters.NewStore(pool)
 	outboxStore := outbox.NewStore(pool)
 	refStore := refdata.NewStore(pool)
@@ -237,6 +241,7 @@ func main() {
 		}, func(err error) {
 			log.Warn("QUIK Orders change read failed; retaining previous selection", "error", err)
 		})
+		go syncFirmNames(ctx, log, quikExportStore, refStore, 5*time.Minute)
 		go quikExportStore.RunParams(ctx, func(change quikexport.ParamChange) {
 			hub.BroadcastMarketData(change.Param.Raw, change.Removed)
 		}, func(err error) {

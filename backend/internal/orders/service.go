@@ -10,6 +10,7 @@ import (
 	"github.com/fix-gateway/backend/internal/brokers"
 	"github.com/fix-gateway/backend/internal/domain"
 	"github.com/fix-gateway/backend/internal/observability"
+	"github.com/fix-gateway/backend/internal/quikexport"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/shopspring/decimal"
@@ -21,7 +22,17 @@ type Service struct {
 	audit    *audit.Store
 	obs      observability.Emitter
 	onQueued func()
+	accounts TradingAccounts
 }
+
+// TradingAccounts is the QUIK Trdaccs source of the accounts a firm may trade.
+type TradingAccounts interface {
+	TradingAccount(ctx context.Context, firm, account string) (quikexport.Row, error)
+}
+
+// SetTradingAccounts must be called before serving requests; without it no
+// account can be confirmed and orders are refused as unavailable.
+func (s *Service) SetTradingAccounts(src TradingAccounts) { s.accounts = src }
 
 var ErrPersistenceUnavailable = errors.New("order storage unavailable")
 
@@ -115,12 +126,16 @@ func (s *Service) Create(ctx context.Context, broker domain.Broker, ip string, r
 		req.TimeInForce = "DAY"
 	}
 
-	acc, err := s.brokers.ResolveActiveAccount(ctx, broker.ID, req.AccountID)
+	firm := strings.TrimSpace(quikFirm)
+	if s.accounts == nil {
+		return domain.Order{}, false, fmt.Errorf("%w: QUIK trading accounts source is not configured", ErrPersistenceUnavailable)
+	}
+	acc, err := s.accounts.TradingAccount(ctx, firm, req.AccountID)
 	if err != nil {
-		msg := fmt.Errorf("account_id %q не найден среди активных счетов брокера", req.AccountID)
-		if !errors.Is(err, brokers.ErrNotFound) {
+		if !errors.Is(err, quikexport.ErrAccountNotFound) {
 			return domain.Order{}, false, fmt.Errorf("%w: %w", ErrPersistenceUnavailable, err)
 		}
+		msg := fmt.Errorf("account_id %q не найден в QUIK Trdaccs для фирмы %q", req.AccountID, firm)
 		s.emit(ctx, observability.Event{
 			Type: observability.TypeError, Subtype: observability.ErrValidation, BrokerID: &broker.ID,
 			BrokerCode: broker.Code, BrokerName: broker.Name, ClientOrderID: req.ClientOrderID,
@@ -129,10 +144,8 @@ func (s *Service) Create(ctx context.Context, broker domain.Broker, ip string, r
 		})
 		return domain.Order{}, false, msg
 	}
-	fixAccount := strings.TrimSpace(acc.TradingAccount)
-	if fixAccount == "" {
-		fixAccount = acc.Code
-	}
+	// FIX tag 1 carries the account as QUIK stores it.
+	fixAccount := strings.TrimSpace(acc.Text("TrdAccId"))
 
 	instr, err := s.store.ResolveInstrument(ctx, broker.ID, req.Symbol, req.Board)
 	if err != nil {

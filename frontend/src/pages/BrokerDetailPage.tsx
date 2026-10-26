@@ -4,7 +4,10 @@ import { dateValue } from "../lib/table";
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { api } from "../api";
+import { api, apiWithHeaders } from "../api";
+import { dbValue, parseDBJSON, type DBOrder } from "../lib/rawOrders";
+import { rawColumns, rawSearchText } from "../components/rawColumns";
+import { FirmSelect } from "../components/FirmSelect";
 import { formatDate, formatDateTime, formatTime } from "../labels";
 import { liveRefetchInterval } from "../lib/poll";
 import { useAdminStream } from "../hooks/useAdminStream";
@@ -13,7 +16,7 @@ import { StatusBadge } from "../components/StatusBadge";
 import { useBreadcrumbs } from "../components/breadcrumbs";
 import { Modal } from "../components/Modal";
 import { ErrorBanner, PageSpinner } from "../components/feedback";
-import { ALL_PERMS, READ_ONLY_PERMS, type APIToken, type AuditRow, type Broker, type BrokerAccount, type IPWhitelistEntry, type ObsLog } from "../types/admin";
+import { ALL_PERMS, READ_ONLY_PERMS, type APIToken, type AuditRow, type Broker, type IPWhitelistEntry, type ObsLog } from "../types/admin";
 import {
   ActivityList,
   BrokerActivity,
@@ -61,10 +64,15 @@ export default function BrokerDetailPage() {
     queryKey: ["broker", id],
     queryFn: ({ signal }) => api<{ broker: Broker }>(`/api/v1/admin/brokers/${id}`, { signal }),
   });
+  // Trading accounts of the broker's token firms, rows of QUIK "Trdaccs" as stored.
   const accounts = useQuery({
     queryKey: ["accounts", id],
-    queryFn: ({ signal }) => api<{ accounts: BrokerAccount[] }>(`/api/v1/admin/brokers/${id}/accounts`, { signal }),
+    queryFn: async ({ signal }) => {
+      const { data, headers } = await apiWithHeaders<DBOrder[]>(`/api/v1/admin/brokers/${id}/accounts`, { signal }, parseDBJSON);
+      return { rows: data ?? [], firms: (headers.get("X-Firms") || "").split(",").filter(Boolean) };
+    },
   });
+
   const security = useQuery({
     queryKey: ["security", id],
     queryFn: ({ signal }) =>
@@ -116,13 +124,6 @@ export default function BrokerDetailPage() {
     refetchInterval: liveRefetchInterval(connected, 8000),
   });
 
-  const emptyAccountForm = { trading_account: "", code: "", name: "", quik_firm: "" };
-  const [accountForm, setAccountForm] = useState(emptyAccountForm);
-  const [accountError, setAccountError] = useState("");
-  const [accountListError, setAccountListError] = useState("");
-  const [accountBusy, setAccountBusy] = useState(false);
-  const [showAccountForm, setShowAccountForm] = useState(false);
-  const [editingAccount, setEditingAccount] = useState<BrokerAccount | null>(null);
   const [showCreate, setShowCreate] = useState(false);
   const [tokenName, setTokenName] = useState("Production API");
   const [quikFirm, setQuikFirm] = useState("");
@@ -134,6 +135,7 @@ export default function BrokerDetailPage() {
   const [confirmRevoke, setConfirmRevoke] = useState<APIToken | null>(null);
   const [editFirm, setEditFirm] = useState<APIToken | null>(null);
   const [editFirmValue, setEditFirmValue] = useState("");
+  const [editFirmError, setEditFirmError] = useState("");
   const [newIP, setNewIP] = useState("");
   const [newIPNote, setNewIPNote] = useState("");
   const [manageIP, setManageIP] = useState(false);
@@ -143,8 +145,7 @@ export default function BrokerDetailPage() {
 
   const b = broker.data?.broker;
   const st = security.data?.security;
-  const accountList: BrokerAccount[] = accounts.data?.accounts || [];
-  const activeAccountCount = accountList.filter((a) => (a.status || "").toUpperCase() === "ACTIVE").length;
+  const accountList = accounts.data?.rows ?? [];
   const tokenList = tokens.data?.tokens || [];
   const ipEntries = whitelist.data?.entries || [];
   const wlEnabled = !!(whitelist.data?.ip_whitelist_enabled ?? b?.ip_whitelist_enabled);
@@ -168,76 +169,6 @@ export default function BrokerDetailPage() {
 
   function setTab(next: TabId) {
     setParams({ tab: next });
-  }
-
-  function openAccountCreate() {
-    setEditingAccount(null);
-    setAccountForm(emptyAccountForm);
-    setAccountError("");
-    setShowAccountForm(true);
-  }
-
-  function openAccountEdit(a: BrokerAccount) {
-    setEditingAccount(a);
-    setAccountForm({
-      trading_account: a.trading_account || "",
-      code: a.code || "",
-      name: a.name || "",
-      quik_firm: a.quik_firm || "",
-    });
-    setAccountError("");
-    setShowAccountForm(true);
-  }
-
-  async function saveAccount(e: FormEvent) {
-    e.preventDefault();
-    const trading = accountForm.trading_account.trim();
-    const code = accountForm.code.trim() || trading;
-    if (!trading && !code) {
-      setAccountError("Укажите торговый счёт — его брокер передаёт в account_id заявки");
-      return;
-    }
-    setAccountBusy(true);
-    setAccountError("");
-    try {
-      const body = {
-        trading_account: trading || code,
-        code,
-        name: accountForm.name.trim() || code,
-        quik_firm: accountForm.quik_firm.trim(),
-      };
-      if (editingAccount) {
-        await api(`/api/v1/admin/brokers/${id}/accounts/${editingAccount.id}`, {
-          method: "PATCH",
-          body: JSON.stringify(body),
-        });
-      } else {
-        await api(`/api/v1/admin/brokers/${id}/accounts`, {
-          method: "POST",
-          body: JSON.stringify(body),
-        });
-      }
-      setShowAccountForm(false);
-      setEditingAccount(null);
-      qc.invalidateQueries({ queryKey: ["accounts", id] });
-    } catch (err) {
-      setAccountError((err as Error).message || "Не удалось сохранить счёт");
-    } finally {
-      setAccountBusy(false);
-    }
-  }
-
-  async function setAccountStatus(a: BrokerAccount, status: "ACTIVE" | "DISABLED") {
-    setAccountListError("");
-    try {
-      await api(`/api/v1/admin/brokers/${id}/accounts/${a.id}`, {
-        method: "PATCH",
-        body: JSON.stringify({ status }),
-      });
-      qc.invalidateQueries({ queryKey: ["accounts", id] });
-    } catch (err) {
-      setAccountListError((err as Error).message || "Не удалось изменить статус счёта");
-    }
   }
 
   function openCreate() {
@@ -285,12 +216,19 @@ export default function BrokerDetailPage() {
 
   async function saveFirm() {
     if (!editFirm) return;
-    await api(`/api/v1/admin/tokens/${editFirm.id}`, {
-      method: "PATCH",
-      body: JSON.stringify({ quik_firm: editFirmValue.trim() }),
-    });
+    setEditFirmError("");
+    try {
+      await api(`/api/v1/admin/tokens/${editFirm.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ quik_firm: editFirmValue.trim() }),
+      });
+    } catch (err) {
+      setEditFirmError((err as Error).message || "Не удалось изменить фирму");
+      return;
+    }
     setEditFirm(null);
     qc.invalidateQueries({ queryKey: ["tokens", id] });
+    qc.invalidateQueries({ queryKey: ["accounts", id] });
   }
 
   async function toggleWhitelist(enabled: boolean) {
@@ -353,7 +291,7 @@ export default function BrokerDetailPage() {
         </div>
         <div className="flex flex-wrap items-center gap-3">
           <SummaryChip label="Токены" value={`${st?.active_tokens ?? 0} активных`} />
-          <SummaryChip label="Счета" value={`${activeAccountCount} активных`} />
+          <SummaryChip label="Счета QUIK" value={accounts.data ? String(accountList.length) : "…"} />
           <SummaryChip label="Заявки сегодня" value={String(ordersToday)} />
           <button
             type="button"
@@ -441,7 +379,7 @@ export default function BrokerDetailPage() {
                         <td className="relative">
                           {t.status === "ACTIVE" && (
                             <RowActions label={"Действия токена " + t.name} actions={[
-                              { label: "Изменить фирму", run: () => { setEditFirm(t); setEditFirmValue(t.quik_firm || ""); } },
+                              { label: "Изменить фирму", run: () => { setEditFirm(t); setEditFirmValue(t.quik_firm || ""); setEditFirmError(""); } },
                               { label: "Ротировать токен", run: () => rotate(t.id) },
                               { label: "Отозвать токен", danger: true, run: () => setConfirmRevoke(t) },
                             ]} />
@@ -462,67 +400,21 @@ export default function BrokerDetailPage() {
 
           {tab === "accounts" && (
             <section className="card !p-0 overflow-hidden">
-              <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-4 py-3">
-                <div>
-                  <h2 className="font-semibold">Торговые счета</h2>
-                  <p className="text-xs text-slate-500">
-                    В заявке брокер передаёт <span className="font-mono">account_id</span> — он должен совпасть с торговым
-                    счётом или кодом активного счёта (FIX tag 1)
-                  </p>
-                </div>
-                <button type="button" className="btn gap-1.5" onClick={openAccountCreate}>
-                  <Icons.plus size={16} />
-                  Добавить счёт
-                </button>
-              </div>
-              {accountListError && <p className="px-4 pt-3 text-sm text-danger">{accountListError}</p>}
-              <div className="overflow-x-auto">
-                <DataTable<BrokerAccount> title="Торговые счета" rows={accountList} columns={[{ id: "c0", header: "Торговый счёт", value: (a) => a.trading_account },
-{ id: "c1", header: "Код", value: (a) => a.code },
-{ id: "c2", header: "Название", value: (a) => a.name },
-{ id: "c3", header: "Статус", value: (a) => a.status },
-{ id: "actions", header: "Действия", value: () => "", sortable: false }]} rowKey={row => row.id} renderRow={(a) => {
-                      const active = (a.status || "").toUpperCase() === "ACTIVE";
-                      return (
-                        <tr key={a.id} className="align-middle">
-                          <td className="font-mono">{a.trading_account}</td>
-                          <td className="font-mono text-slate-600">{a.code}</td>
-                          <td>{a.name || "—"}</td>
-                          <td>
-                            <StatusBadge status={a.status} />
-                          </td>
-                          <td className="whitespace-nowrap">
-                            <button type="button" className="btn-muted mr-2" onClick={() => openAccountEdit(a)}>
-                              Изменить
-                            </button>
-                            {active ? (
-                              <button
-                                type="button"
-                                className="btn-muted"
-                                onClick={() => setAccountStatus(a, "DISABLED")}
-                              >
-                                Отключить
-                              </button>
-                            ) : (
-                              <button
-                                type="button"
-                                className="btn-muted"
-                                onClick={() => setAccountStatus(a, "ACTIVE")}
-                              >
-                                Включить
-                              </button>
-                            )}
-                          </td>
-                        </tr>
-                      );
-                    }} emptyTitle="Записей пока нет" />
-              </div>
-              <div className="m-4 flex gap-2 rounded-lg border border-sky-100 bg-sky-50 px-3 py-2.5 text-sm text-sky-900">
-                <Icons.info size={18} className="mt-0.5 shrink-0 text-sky-600" />
-                <p>
-                  Отключённый счёт остаётся в справочнике, но заявки с его <span className="font-mono">account_id</span>{" "}
-                  будут отклонены с 400.
+              <div className="border-b border-slate-100 px-4 py-3">
+                <h2 className="font-semibold">Торговые счета QUIK</h2>
+                <p className="text-xs text-slate-500">
+                  Строки таблицы QUIK Trdaccs фирм, указанных в активных токенах брокера
+                  {accounts.data?.firms.length ? <> (<span className="font-mono">{accounts.data.firms.join(", ")}</span>)</> : null}.
+                  В заявке брокер передаёт <span className="font-mono">account_id</span> — он должен совпасть с{" "}
+                  <span className="font-mono">TrdAccId</span> фирмы своего токена. Счета заводятся в QUIK, не в Gateway.
                 </p>
+              </div>
+              {accounts.error && <div className="px-4 pt-3"><ErrorBanner error={accounts.error} onRetry={() => accounts.refetch()} /></div>}
+              <div className="overflow-x-auto">
+                <DataTable title="Торговые счета QUIK" rows={accounts.error ? [] : accountList} columns={rawColumns(accountList)}
+                  rowKey={(r) => `${dbValue(r.FirmId)}\u0000${dbValue(r.TrdAccId)}`} getSearchText={rawSearchText(accountList)}
+                  loading={accounts.isLoading} exportName="trdaccs" showTotals={false}
+                  emptyTitle={accounts.error ? "Таблица Trdaccs недоступна" : accounts.data?.firms.length ? "В Trdaccs нет счетов этих фирм" : "У брокера нет активных токенов с фирмой"} />
               </div>
             </section>
           )}
@@ -740,91 +632,13 @@ export default function BrokerDetailPage() {
         </Modal>
       )}
 
-      {showAccountForm && (
-        <Modal
-          title={editingAccount ? "Изменить счёт" : "Добавить торговый счёт"}
-          onClose={() => {
-            setShowAccountForm(false);
-            setEditingAccount(null);
-          }}
-        >
-          <form onSubmit={saveAccount} className="space-y-3">
-            <label className="block space-y-1 text-sm">
-              <span className="text-slate-500">Торговый счёт (FIX tag 1)</span>
-              <input
-                className="input font-mono"
-                placeholder="например 1-3101-2040"
-                value={accountForm.trading_account}
-                onChange={(e) => setAccountForm((f) => ({ ...f, trading_account: e.target.value }))}
-                required
-              />
-              <span className="text-xs text-slate-400">
-                Значение, которое брокер передаёт в <span className="font-mono">account_id</span> при создании заявки
-              </span>
-            </label>
-            <label className="block space-y-1 text-sm">
-              <span className="text-slate-500">Код</span>
-              <input
-                className="input font-mono"
-                placeholder="по умолчанию = торговый счёт"
-                value={accountForm.code}
-                onChange={(e) => setAccountForm((f) => ({ ...f, code: e.target.value }))}
-              />
-            </label>
-            <label className="block space-y-1 text-sm">
-              <span className="text-slate-500">Название</span>
-              <input
-                className="input"
-                placeholder="необязательно"
-                value={accountForm.name}
-                onChange={(e) => setAccountForm((f) => ({ ...f, name: e.target.value }))}
-              />
-            </label>
-            <label className="block space-y-1 text-sm">
-              <span className="text-slate-500">Код фирмы QUIK</span>
-              <input
-                className="input font-mono"
-                placeholder="необязательно"
-                value={accountForm.quik_firm}
-                onChange={(e) => setAccountForm((f) => ({ ...f, quik_firm: e.target.value }))}
-              />
-            </label>
-            {accountError && <p className="text-sm text-danger">{accountError}</p>}
-            <div className="flex justify-end gap-2 pt-1">
-              <button
-                type="button"
-                className="btn-muted"
-                onClick={() => {
-                  setShowAccountForm(false);
-                  setEditingAccount(null);
-                }}
-              >
-                Отмена
-              </button>
-              <button type="submit" className="btn" disabled={accountBusy}>
-                {accountBusy ? "Сохранение…" : editingAccount ? "Сохранить" : "Добавить"}
-              </button>
-            </div>
-          </form>
-        </Modal>
-      )}
-
       {showCreate && (
         <Modal title="Создать API-токен" onClose={() => setShowCreate(false)}>
           <label className="mb-3 block space-y-1 text-sm">
             <span className="text-slate-500">Название токена</span>
             <input className="input" value={tokenName} onChange={(e) => setTokenName(e.target.value)} />
           </label>
-          <label className="mb-3 block space-y-1 text-sm">
-            <span className="text-slate-500">Код фирмы (FIX 5018)</span>
-            <input
-              className="input font-mono"
-              placeholder="например 2040"
-              value={quikFirm}
-              onChange={(e) => setQuikFirm(e.target.value)}
-              required
-            />
-          </label>
+          <FirmSelect value={quikFirm} onChange={setQuikFirm} />
           <label className="mb-3 block space-y-1 text-sm">
             <span className="text-slate-500">Срок действия</span>
             <select className="input" value={expiresIn} onChange={(e) => setExpiresIn(Number(e.target.value))}>
@@ -853,6 +667,7 @@ export default function BrokerDetailPage() {
               ))}
             </div>
           </div>
+          {createToken.error && <p className="mb-3 text-sm text-danger">{(createToken.error as Error).message}</p>}
           <div className="flex justify-end gap-2">
             <button type="button" className="btn-muted" onClick={() => setShowCreate(false)}>
               Отмена
@@ -874,12 +689,8 @@ export default function BrokerDetailPage() {
           <p className="mb-3 text-sm text-slate-600">
             Токен <span className="font-medium">{editFirm.name}</span>. Значение уходит в NewOrderSingle tag 5018.
           </p>
-          <input
-            className="input mb-4 font-mono"
-            value={editFirmValue}
-            onChange={(e) => setEditFirmValue(e.target.value)}
-            placeholder="код фирмы"
-          />
+          <FirmSelect value={editFirmValue} onChange={setEditFirmValue} />
+          {editFirmError && <p className="mb-3 text-sm text-danger">{editFirmError}</p>}
           <div className="flex justify-end gap-2">
             <button type="button" className="btn-muted" onClick={() => setEditFirm(null)}>
               Отмена

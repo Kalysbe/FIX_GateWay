@@ -96,7 +96,6 @@ async function main() {
   const adapters=(await expect('/api/v1/admin/adapters',admin)).adapters.filter(a=>a.enabled);
   assert.ok(adapters.length===2 && adapters.every(a=>a.host==='fixsimulator' && a.type==='simulator'));
   const {broker}=await expect('/api/v1/admin/brokers',admin,'POST',{code:prefix,name:'Isolated reliability test'},201);
-  await expect(`/api/v1/admin/brokers/${broker.id}/accounts`,admin,'POST',{code:'RELIABILITY',name:'Reliability',quik_firm:'SIM',trading_account:'RELIABILITY'},201);
   const created=await expect(`/api/v1/admin/brokers/${broker.id}/tokens`,admin,'POST',{name:'Reliability',quik_firm:'SIM',expires_in_days:30,permissions:['orders:create','orders:read']},201);
   token=created.token; tokenId=created.id;
   try {

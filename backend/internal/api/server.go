@@ -62,6 +62,7 @@ type Server struct {
 	quikExport         *quikexport.Store
 	quikOrders         quikOrderReader
 	quikParams         quikParamReader
+	quikRefs           quikRefReader
 	quikAPI            *quikapi.Client
 	obs                *observability.Pipeline
 	realtimeClient     pb.RealtimeServiceClient
@@ -107,10 +108,10 @@ func (s *Server) SetQuikExport(store *quikexport.Store) {
 	s.quikExport = store
 	// A typed nil *Store in the interface would defeat the `quikOrders == nil` checks.
 	if store == nil {
-		s.quikOrders, s.quikParams = nil, nil
+		s.quikOrders, s.quikParams, s.quikRefs = nil, nil, nil
 		return
 	}
-	s.quikOrders, s.quikParams = store, store
+	s.quikOrders, s.quikParams, s.quikRefs = store, store, store
 }
 
 func (s *Server) SetExecutionInbox(in *executioninbox.Inbox, cases *executioninbox.CaseStore) {
@@ -216,9 +217,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/v1/admin/brokers/{id}/ip-whitelist", s.adminRO(s.listIPWhitelist))
 	mux.Handle("POST /api/v1/admin/brokers/{id}/ip-whitelist", s.adminWrite(s.addIPWhitelist))
 	mux.Handle("DELETE /api/v1/admin/brokers/{id}/ip-whitelist/{entry_id}", s.adminWrite(s.removeIPWhitelist))
-	mux.Handle("POST /api/v1/admin/brokers/{id}/accounts", s.adminWrite(s.createAccount))
 	mux.Handle("GET /api/v1/admin/brokers/{id}/accounts", s.adminRO(s.listAccounts))
-	mux.Handle("PATCH /api/v1/admin/brokers/{id}/accounts/{account_id}", s.adminWrite(s.patchAccount))
 	mux.Handle("DELETE /api/v1/admin/tokens/{id}", s.adminWrite(s.revokeToken))
 	mux.Handle("POST /api/v1/admin/tokens/{id}/revoke", s.adminWrite(s.revokeToken))
 	mux.Handle("POST /api/v1/admin/tokens/{id}/rotate", s.adminWrite(s.rotateToken))
@@ -276,7 +275,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/v1/admin/orders/{id}/trace", s.adminRO(s.orderTrace))
 	mux.Handle("GET /api/v1/admin/users", s.adminUsers(s.listUsers))
 	mux.Handle("GET /api/v1/admin/instruments", s.adminRO(s.listAdminInstruments))
-	mux.Handle("GET /api/v1/admin/firms", s.adminRO(s.listAdminFirms))
+	mux.Handle("GET /api/v1/admin/firms", s.adminRO(s.listQuikFirms))
 	mux.Handle("POST /api/v1/admin/instruments/sync", s.adminOps(s.syncInstrumentsFIX))
 	mux.Handle("POST /api/v1/admin/quik/sync", s.adminOps(s.syncInstrumentsFIX)) // alias
 	mux.Handle("GET /api/v1/admin/events/stream", s.adminRO(s.streamAdminEvents))
@@ -439,36 +438,6 @@ func (s *Server) cancelBrokerOrder(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"order": orderDTO(order)})
 }
 
-func (s *Server) listBrokerAccounts(w http.ResponseWriter, r *http.Request) {
-	b, _ := BrokerFromContext(r.Context())
-	list, err := s.brokers.ListAccounts(r.Context(), b.ID)
-	if err != nil {
-		s.writeInternal(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"accounts": list})
-}
-
-// getBrokerFirm returns firm code (from token) and firm name (from quik_firms cache).
-func (s *Server) getBrokerFirm(w http.ResponseWriter, r *http.Request) {
-	tok, ok := TokenFromContext(r.Context())
-	if !ok {
-		writeErr(w, http.StatusUnauthorized, "invalid token")
-		return
-	}
-	firmName := ""
-	if f, found, err := s.refdata.GetFirmByID(r.Context(), tok.QuikFirm); err != nil {
-		s.writeInternal(w, err)
-		return
-	} else if found {
-		firmName = f.FirmName
-	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"quik_firm": tok.QuikFirm,
-		"firm_name": firmName,
-	})
-}
-
 func (s *Server) listInstruments(w http.ResponseWriter, r *http.Request) {
 	rows, err := s.pool.Query(r.Context(), `
 		SELECT id, internal_symbol, quik_symbol, board, currency, security_type, status
@@ -567,20 +536,6 @@ func (s *Server) listAdminInstruments(w http.ResponseWriter, r *http.Request) {
 		out = append(out, i)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"source": "local", "instruments": out, "count": len(out)})
-}
-
-func (s *Server) listAdminFirms(w http.ResponseWriter, r *http.Request) {
-	list, err := s.refdata.ListFirms(r.Context())
-	if err != nil {
-		s.writeInternal(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"source": "local",
-		"firms":  list,
-		"count":  len(list),
-		"note":   "фирмы не приходят через FIX Security Definition; в таблице — ранее сохранённый локальный кэш",
-	})
 }
 
 func (s *Server) syncInstrumentsFIX(w http.ResponseWriter, r *http.Request) {
@@ -953,6 +908,9 @@ func (s *Server) createToken(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "invalid json")
 		return
 	}
+	if !s.checkTokenFirm(w, r, req.QuikFirm) {
+		return
+	}
 	var createdBy *uuid.UUID
 	if admin, ok := AdminFromContext(r.Context()); ok {
 		if uid, err := uuid.Parse(admin.UserID); err == nil {
@@ -1035,6 +993,9 @@ func (s *Server) patchToken(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.QuikFirm == nil {
 		writeErr(w, http.StatusBadRequest, "quik_firm required")
+		return
+	}
+	if !s.checkTokenFirm(w, r, *req.QuikFirm) {
 		return
 	}
 	t, err := s.brokers.UpdateTokenQuikFirm(r.Context(), id, *req.QuikFirm)
@@ -1176,87 +1137,6 @@ func (s *Server) removeIPWhitelist(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"status": "removed"})
-}
-
-func (s *Server) createAccount(w http.ResponseWriter, r *http.Request) {
-	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
-	var req struct {
-		Code           string `json:"code"`
-		Name           string `json:"name"`
-		QuikFirm       string `json:"quik_firm"`
-		TradingAccount string `json:"trading_account"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid json")
-		return
-	}
-	a, err := s.brokers.CreateAccount(r.Context(), id, req.Code, req.Name, req.QuikFirm, req.TradingAccount)
-	if err != nil {
-		writeAccountErr(w, err)
-		return
-	}
-	s.writeAdminAudit(r, "ACCOUNT_CREATED", "broker_account", fmtInt(a.ID), &id, nil, map[string]any{
-		"code": a.Code, "trading_account": a.TradingAccount, "status": a.Status,
-	})
-	writeJSON(w, http.StatusCreated, map[string]any{"account": a})
-}
-
-func (s *Server) patchAccount(w http.ResponseWriter, r *http.Request) {
-	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
-	accountID, err := strconv.ParseInt(r.PathValue("account_id"), 10, 64)
-	if err != nil || accountID <= 0 {
-		writeErr(w, http.StatusBadRequest, "invalid account_id")
-		return
-	}
-	var req struct {
-		Code           *string `json:"code"`
-		Name           *string `json:"name"`
-		QuikFirm       *string `json:"quik_firm"`
-		TradingAccount *string `json:"trading_account"`
-		Status         *string `json:"status"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid json")
-		return
-	}
-	a, err := s.brokers.UpdateAccount(r.Context(), id, accountID, brokers.AccountUpdate{
-		Code: req.Code, Name: req.Name, QuikFirm: req.QuikFirm,
-		TradingAccount: req.TradingAccount, Status: req.Status,
-	})
-	if err != nil {
-		writeAccountErr(w, err)
-		return
-	}
-	s.writeAdminAudit(r, "ACCOUNT_UPDATED", "broker_account", fmtInt(a.ID), &id, nil, map[string]any{
-		"code": a.Code, "trading_account": a.TradingAccount, "status": a.Status,
-	})
-	writeJSON(w, http.StatusOK, map[string]any{"account": a})
-}
-
-func writeAccountErr(w http.ResponseWriter, err error) {
-	switch {
-	case errors.Is(err, brokers.ErrNotFound):
-		writeErr(w, http.StatusNotFound, "not found")
-	case errors.Is(err, brokers.ErrAccountExists):
-		writeErr(w, http.StatusConflict, err.Error())
-	case errors.Is(err, brokers.ErrAccountFields), errors.Is(err, brokers.ErrAccountStatus):
-		writeErr(w, http.StatusBadRequest, err.Error())
-	default:
-		writeErr(w, http.StatusBadRequest, err.Error())
-	}
-}
-
-func (s *Server) listAccounts(w http.ResponseWriter, r *http.Request) {
-	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
-	list, err := s.brokers.ListAccounts(r.Context(), id)
-	if err != nil {
-		s.writeInternal(w, err)
-		return
-	}
-	if list == nil {
-		list = []domain.BrokerAccount{}
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"accounts": list})
 }
 
 func (s *Server) listAdminOrders(w http.ResponseWriter, r *http.Request) {

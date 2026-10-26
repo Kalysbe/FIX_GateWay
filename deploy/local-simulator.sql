@@ -33,8 +33,4 @@ ON CONFLICT (code) DO NOTHING;
 INSERT INTO instruments (internal_symbol, quik_symbol, board, currency, security_type)
 VALUES ('REJECT', 'REJECT', 'TQBR', 'RUB', 'CS')
 ON CONFLICT (internal_symbol) DO NOTHING;
-INSERT INTO broker_accounts (broker_id, code, name, quik_firm, trading_account)
-SELECT id, 'LOCAL_ACCOUNT', 'Local simulator account', 'LOCAL_FIRM', 'LOCAL_ACCOUNT'
-FROM brokers WHERE code = 'LOCAL_DEMO'
-ON CONFLICT (broker_id, code) DO NOTHING;
 COMMIT;

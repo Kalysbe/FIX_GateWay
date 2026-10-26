@@ -24,6 +24,7 @@ import (
 	"github.com/fix-gateway/backend/internal/platform/db"
 	"github.com/fix-gateway/backend/internal/platform/logx"
 	"github.com/fix-gateway/backend/internal/platform/migrate"
+	"github.com/fix-gateway/backend/internal/quikexport"
 	"github.com/fix-gateway/backend/internal/ratelimit"
 	"github.com/fix-gateway/backend/internal/realtime"
 	"github.com/fix-gateway/backend/internal/routing"
@@ -68,7 +69,7 @@ func TestOrderIdempotencyIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = brokerStore.CreateAccount(ctx, b.ID, "A1", "A1", "F", "ACC1")
+	orderSvc.SetTradingAccounts(fixedAccounts{"FIRM1": {"ACC1"}})
 	if err := rateStore.Refresh(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -179,4 +180,16 @@ func TestOrderIdempotencyIntegration(t *testing.T) {
 	if replay := callCreate(body); replay.Code != http.StatusOK {
 		t.Fatalf("paused replay: %d %s", replay.Code, replay.Body.String())
 	}
+}
+
+// fixedAccounts stands in for QUIK Trdaccs: firm -> TrdAccId values.
+type fixedAccounts map[string][]string
+
+func (f fixedAccounts) TradingAccount(_ context.Context, firm, account string) (quikexport.Row, error) {
+	for _, a := range f[firm] {
+		if a == account {
+			return quikexport.Row{Raw: json.RawMessage(`{"TrdAccId":"` + a + `","FirmId":"` + firm + `"}`)}, nil
+		}
+	}
+	return quikexport.Row{}, quikexport.ErrAccountNotFound
 }
