@@ -3,7 +3,9 @@
 package api
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"io"
 	"log/slog"
 	"net/http/httptest"
@@ -11,6 +13,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/fix-gateway/backend/internal/admin"
 	"github.com/fix-gateway/backend/internal/audit"
 	"github.com/fix-gateway/backend/internal/auth"
 	"github.com/fix-gateway/backend/internal/brokers"
@@ -43,19 +46,20 @@ func TestQUIKParamsHTTPRowsAsStored(t *testing.T) {
 	if err := migrate.Up(dsn, "../../migrations"); err != nil {
 		t.Fatal(err)
 	}
-	var today string
-	_, err = pool.Exec(ctx, `CREATE TABLE public."Params" ("ClassCode" text,"SecCode" text,"Last" numeric,"Bid" numeric,"FirmId" text,"TradeDate" timestamp);
-INSERT INTO public."Params" SELECT c, s, l, b, f, (now() AT TIME ZONE 'Asia/Bishkek')::date - ago FROM (VALUES
-('LIST_GBA','GBA02280810',123.4567890123456789,NULL::numeric,'9999',0),('TQBR','SBER',1,1,NULL,0),
-('TQBR','SBER',2,2,NULL,1),('TQBR','GAZP',3,3,NULL,1)) v(c, s, l, b, f, ago);
-CREATE TABLE public."Securities" ("TradeDate" timestamp,"ClassCode" text,"SecCode" text,"FaceUnit" text,"SecShortName" text,"SecFullName" text);
-INSERT INTO public."Securities" VALUES (current_date,'LIST_GBA','GBA02280810','KGS','ГКО-2','ГКО-2 летние');
-CREATE TABLE public."Classes" ("TradeDate" timestamp,"ClassCode" text,"ClassName" text);
-INSERT INTO public."Classes" VALUES (current_date,'TQBR','Акции');`)
-	if err != nil {
+	// The migration's default; a previous run may have changed it.
+	if _, err := pool.Exec(ctx, `UPDATE gateway_settings SET value='LISTBND' WHERE key='market_data_classes'`); err != nil {
 		t.Fatal(err)
 	}
-	if err := pool.QueryRow(ctx, `SELECT to_char((now() AT TIME ZONE 'Asia/Bishkek')::date, 'YYYY-MM-DD"T00:00:00"')`).Scan(&today); err != nil {
+	_, err = pool.Exec(ctx, `CREATE TABLE public."Params" ("ClassCode" text,"SecCode" text,"last" numeric,"status" text,"TradeDate" timestamp);
+INSERT INTO public."Params" SELECT c, s, l, st, (now() AT TIME ZONE 'Asia/Bishkek')::date - ago FROM (VALUES
+('LISTBND','GBA02270915',100.5,'торгуется',0),('LISTBND','GD052260119',99,NULL,0),('AUCT_GBA','GBA02270915',1,'торгуется',0),
+('LISTBND','OLD',2,'вчера',1)) v(c, s, l, st, ago);
+CREATE TABLE public."Securities" ("TradeDate" timestamp,"ClassCode" text,"SecCode" text,"CouponValue" numeric,"FaceUnit" text,"SecShortName" text,"SecFullName" text);
+INSERT INTO public."Securities" VALUES (current_date,'LISTBND','GBA02270915',2.500000,'KGS','ГКО-2','ГКО-2 летние'),
+(current_date,'AUCT_GBA','GBA02270915',2.5,'KGS','ГКО аукцион','ГКО аукцион');
+CREATE TABLE public."Classes" ("TradeDate" timestamp,"ClassCode" text,"ClassName" text,"FirmsId" text);
+INSERT INTO public."Classes" VALUES (current_date,'LISTBND','Листинговые:облигации','KSE'),(current_date,'AUCT_GBA','Аукцион ГКО','KSE');`)
+	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
@@ -69,7 +73,9 @@ INSERT INTO public."Classes" VALUES (current_date,'TQBR','Акции');`)
 	bs := brokers.NewStore(pool, "params-test-pepper")
 	as := audit.NewStore(pool)
 	osStore := orders.NewStore(pool)
-	s := NewServer(config.Config{AuthFailMaxPerMinute: 100}, slog.New(slog.NewTextHandler(io.Discard, nil)), pool, bs, orders.NewService(osStore, bs, as), osStore, nil, nil, nil, as, nil, realtime.NewHub(), nil)
+	users := admin.NewUserStore(pool)
+	cfg := config.Config{AuthFailMaxPerMinute: 100, JWTSecret: "params-test-jwt-secret-32-bytes!!!!"}
+	s := NewServer(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), pool, bs, orders.NewService(osStore, bs, as), osStore, nil, nil, nil, as, users, realtime.NewHub(), nil)
 	s.SetAdmission(&ratelimit.Store{Pool: pool, Admission: ratelimit.NewAdmission()})
 	b, err := bs.CreateBroker(ctx, uuid.NewString(), "Params test", "")
 	if err != nil {
@@ -79,41 +85,81 @@ INSERT INTO public."Classes" VALUES (current_date,'TQBR','Акции');`)
 	if err != nil {
 		t.Fatal(err)
 	}
-	call := func(path string, want int) string {
+	email := uuid.NewString() + "@example.test"
+	if err := users.EnsureAdmin(ctx, email, "params-test-password"); err != nil {
+		t.Fatal(err)
+	}
+	u, err := users.Authenticate(ctx, email, "params-test-password")
+	if err != nil {
+		t.Fatal(err)
+	}
+	jwt, err := admin.IssueToken(cfg.JWTSecret, u)
+	if err != nil {
+		t.Fatal(err)
+	}
+	call := func(method, path, bearer string, body any, want int) string {
 		t.Helper()
-		r := httptest.NewRequest("GET", path, nil)
+		var buf bytes.Buffer
+		if body != nil {
+			_ = json.NewEncoder(&buf).Encode(body)
+		}
+		r := httptest.NewRequest(method, path, &buf)
 		r.RemoteAddr = "127.0.0.1:12345"
-		r.Header.Set("Authorization", "Bearer "+token.Raw)
+		r.Header.Set("Authorization", "Bearer "+bearer)
+		r.Header.Set("Content-Type", "application/json")
 		w := httptest.NewRecorder()
 		s.Handler().ServeHTTP(w, r)
 		if w.Code != want {
-			t.Fatalf("%s: %d %s", path, w.Code, w.Body.String())
+			t.Fatalf("%s %s: %d %s", method, path, w.Code, w.Body.String())
 		}
 		return strings.TrimSpace(w.Body.String())
 	}
+	get := func(path string, want int) string { t.Helper(); return call("GET", path, token.Raw, nil, want) }
 	// Before the source is configured: 503, never FIX quotes.
-	call("/api/v1/market-data", 503)
-	s.SetQuikExport(quikexport.NewStore(readOnly))
-	// Market data is not firm-scoped: a FirmId column does not filter rows.
-	// Only rows of the current trading day are served; earlier TradeDate rows are history.
-	// Instrument names from Securities and the class name from Classes follow the row.
-	gba := `{"ClassCode":"LIST_GBA","SecCode":"GBA02280810","Last":123.4567890123456789,"Bid":null,"FirmId":"9999","TradeDate":"` + today +
-		`","FaceUnit":"KGS","SecShortName":"ГКО-2","SecFullName":"ГКО-2 летние","ClassName":null}`
-	sber := `{"ClassCode":"TQBR","SecCode":"SBER","Last":1,"Bid":1,"FirmId":null,"TradeDate":"` + today +
-		`","FaceUnit":null,"SecShortName":null,"SecFullName":null,"ClassName":"Акции"}`
-	if got, want := call("/api/v1/market-data", 200), "["+gba+","+sber+"]"; got != want {
+	get("/api/v1/market-data", 503)
+	classes := quikexport.NewClassSettings(pool)
+	store := quikexport.NewStore(readOnly)
+	store.SetParamClasses(classes.Classes)
+	s.SetQuikExport(store)
+	s.SetMarketDataClasses(classes)
+	// Today's LISTBND rows (the default class), only the chosen columns, as stored.
+	// Market data is not firm-scoped.
+	bond := `{"ClassCode":"LISTBND","SecCode":"GBA02270915","CouponValue":2.500000,"status":"торгуется","FaceUnit":"KGS","SecShortName":"ГКО-2","SecFullName":"ГКО-2 летние","ClassName":"Листинговые:облигации"}`
+	bare := `{"ClassCode":"LISTBND","SecCode":"GD052260119","CouponValue":null,"status":null,"FaceUnit":null,"SecShortName":null,"SecFullName":null,"ClassName":"Листинговые:облигации"}`
+	if got, want := get("/api/v1/market-data", 200), "["+bond+","+bare+"]"; got != want {
 		t.Fatalf("rows changed:\n%s\n%s", got, want)
 	}
-	if got := call("/api/v1/market-data?board=TQBR", 200); got != "["+sber+"]" {
+	if got := get("/api/v1/market-data/LISTBND/GBA02270915", 200); got != bond {
 		t.Fatal(got)
 	}
-	if got := call("/api/v1/market-data/LIST_GBA/GBA02280810", 200); got != gba {
+	get("/api/v1/market-data/AUCT_GBA/GBA02270915", 404)
+	get("/api/v1/market-data/LISTBND/OLD", 404)
+	get("/api/v1/market-data?limit=0", 400)
+
+	// Administrators choose the classes; brokers cannot.
+	if got := call("GET", "/api/v1/admin/market-data/settings", jwt, nil, 200); got != `{"classes":["LISTBND"],"default_classes":["LISTBND"]}` {
 		t.Fatal(got)
 	}
-	call("/api/v1/market-data/TQBR/GAZP", 404)
-	call("/api/v1/market-data?limit=0", 400)
+	call("PATCH", "/api/v1/admin/market-data/settings", token.Raw, map[string]any{"classes": []string{"AUCT_GBA"}}, 401)
+	call("PATCH", "/api/v1/admin/market-data/settings", jwt, map[string]any{"classes": []string{}}, 400)
+	call("PATCH", "/api/v1/admin/market-data/settings", jwt, map[string]any{"classes": []string{"LIST BND"}}, 400)
+	if got := call("PATCH", "/api/v1/admin/market-data/settings", jwt, map[string]any{"classes": []string{" AUCT_GBA ", "AUCT_GBA"}}, 200); got != `{"classes":["AUCT_GBA"],"default_classes":["LISTBND"]}` {
+		t.Fatal(got)
+	}
+	if got := get("/api/v1/market-data", 200); got != `[{"ClassCode":"AUCT_GBA","SecCode":"GBA02270915","CouponValue":2.5,"status":"торгуется","FaceUnit":"KGS","SecShortName":"ГКО аукцион","SecFullName":"ГКО аукцион","ClassName":"Аукцион ГКО"}]` {
+		t.Fatal(got)
+	}
+	var audited int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM audit_logs WHERE action='MARKET_DATA_CLASSES_UPDATED' AND entity_id='market_data_classes'`).Scan(&audited); err != nil || audited == 0 {
+		t.Fatal("class change not audited", audited, err)
+	}
+	if got := call("GET", "/api/v1/admin/classes", jwt, nil, 200); got != `[{"ClassCode":"AUCT_GBA","ClassName":"Аукцион ГКО"},{"ClassCode":"LISTBND","ClassName":"Листинговые:облигации"}]` {
+		t.Fatal(got)
+	}
+	call("PATCH", "/api/v1/admin/market-data/settings", jwt, map[string]any{"classes": []string{"LISTBND"}}, 200)
+
 	if _, err := pool.Exec(ctx, `DROP TABLE public."Params"`); err != nil {
 		t.Fatal(err)
 	}
-	call("/api/v1/market-data", 503)
+	get("/api/v1/market-data", 503)
 }

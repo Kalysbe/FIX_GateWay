@@ -63,6 +63,7 @@ type Server struct {
 	quikOrders         quikOrderReader
 	quikParams         quikParamReader
 	quikRefs           quikRefReader
+	marketClasses      *quikexport.ClassSettings
 	quikAPI            *quikapi.Client
 	obs                *observability.Pipeline
 	realtimeClient     pb.RealtimeServiceClient
@@ -112,6 +113,10 @@ func (s *Server) SetQuikExport(store *quikexport.Store) {
 		return
 	}
 	s.quikOrders, s.quikParams, s.quikRefs = store, store, store
+}
+
+func (s *Server) SetMarketDataClasses(settings *quikexport.ClassSettings) {
+	s.marketClasses = settings
 }
 
 func (s *Server) SetExecutionInbox(in *executioninbox.Inbox, cases *executioninbox.CaseStore) {
@@ -246,6 +251,9 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/v1/admin/positions/sync", s.adminOps(s.syncPositionsFIX))
 	mux.Handle("GET /api/v1/admin/market-data", s.adminRO(s.listMarketData))
 	mux.Handle("GET /api/v1/admin/market-data/{board}/{symbol}", s.adminRO(s.getMarketData))
+	mux.Handle("GET /api/v1/admin/market-data/settings", s.adminRO(s.getMarketDataSettings))
+	mux.Handle("PATCH /api/v1/admin/market-data/settings", s.adminOps(s.patchMarketDataSettings))
+	mux.Handle("GET /api/v1/admin/classes", s.adminRO(s.listQuikClasses))
 	mux.Handle("GET /api/v1/admin/quik-api/settings", s.adminRO(s.getQuikAPISettings))
 	mux.Handle("PATCH /api/v1/admin/quik-api/settings", s.adminOps(s.patchQuikAPISettings))
 	mux.Handle("GET /api/v1/admin/quik-api/quotes", s.adminRO(s.listQuikAPIQuotes))

@@ -17,6 +17,7 @@ import (
 type quikRefReader interface {
 	ListTradingAccounts(context.Context, string) ([]quikexport.Row, error)
 	ListFirms(context.Context) ([]quikexport.Row, error)
+	ListClasses(context.Context) ([]quikexport.Row, error)
 	Firm(context.Context, string) (quikexport.Row, error)
 }
 
@@ -135,6 +136,21 @@ func (s *Server) listQuikFirms(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rows, err := s.quikRefs.ListFirms(r.Context())
+	if err != nil {
+		s.writeQuikRefError(w, err)
+		return
+	}
+	writeQuikJSON(w, rows)
+}
+
+// listQuikClasses serves ClassCode and ClassName of QUIK Classes, from which
+// administrators choose the market data classes.
+func (s *Server) listQuikClasses(w http.ResponseWriter, r *http.Request) {
+	if s.quikRefs == nil {
+		s.writeQuikRefError(w, errQuikRefsUnavailable)
+		return
+	}
+	rows, err := s.quikRefs.ListClasses(r.Context())
 	if err != nil {
 		s.writeQuikRefError(w, err)
 		return

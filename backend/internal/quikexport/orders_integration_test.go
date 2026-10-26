@@ -112,22 +112,22 @@ func TestQUIKParamsVerbatimFiltersAndPaging(t *testing.T) {
 	}
 	// char(n) columns, as QUIK exports often use, are matched after trimming.
 	_, err = pool.Exec(ctx, `CREATE TABLE public."Params" (
-"ClassCode" char(12),"SecCode" char(12),"LongName" text,"Last" numeric,"Bid" numeric,"NumTrades" numeric(19,0),"TradeDate" timestamp,"Status" text);
-INSERT INTO public."Params" SELECT c, s, n, l, b, t, d, st FROM (VALUES
-('LIST_GBA','GBA02280810','Облигации ГБА',123.4567890123456789,NULL::numeric,9007199254740993,0,'торгуется'),
-('LIST_GBA','KG0105166315','Акции',10.10,10.00,5,0,'торгуется'),
-('TQBR','SBER','Сбербанк',1,NULL,1,0,NULL),
+"ClassCode" char(12),"SecCode" char(12),"last" numeric,"couponvalue" numeric,"TradeDate" timestamp,"status" text);
+INSERT INTO public."Params" SELECT c, s, l, 7, d, st FROM (VALUES
+('LIST_GBA','GBA02280810',123.45,0,'торгуется'),
+('LIST_GBA','KG0105166315',10.10,0,'торгуется'),
+('TQBR','SBER',1,0,NULL),
 -- Earlier trading days of the same instruments are history, not current trades.
-('TQBR','SBER','Сбербанк',2,NULL,2,1,'вчера'),
-('TQBR','GAZP','Газпром',3,NULL,3,1,NULL)) v(c, s, n, l, b, t, ago, st),
+('TQBR','SBER',2,1,'вчера'),
+('TQBR','GAZP',3,1,NULL)) v(c, s, l, ago, st),
 LATERAL (SELECT (now() AT TIME ZONE 'Asia/Bishkek')::date - ago AS d) x;
-CREATE TABLE public."Securities" ("TradeDate" timestamp,"ClassCode" varchar,"SecCode" varchar,"FaceUnit" varchar,"SecShortName" varchar,"SecFullName" varchar);
+CREATE TABLE public."Securities" ("TradeDate" timestamp,"ClassCode" varchar,"SecCode" varchar,"CouponValue" numeric,"FaceUnit" varchar,"SecShortName" varchar,"SecFullName" varchar,"ISINCode" varchar);
 INSERT INTO public."Securities" VALUES
-(current_date,'LIST_GBA','GBA02280810','KGS','ГКО-2','ГКО-2 летние'),
-(current_date - 1,'LIST_GBA','GBA02280810','KGS','old','old'),
+(current_date,'LIST_GBA','GBA02280810',9007199254740993.000001,'KGS','ГКО-2','ГКО-2 летние','KG1'),
+(current_date - 1,'LIST_GBA','GBA02280810',1,'KGS','old','old','KG1'),
 -- The same SecCode in another class has its own names.
-(current_date,'REPO_GBA','GBA02280810','USD','РЕПО','РЕПО ГКО'),
-(current_date - 1,'LIST_GBA','KG0105166315','KGS','Акции','Акции (вчера)');
+(current_date,'REPO_GBA','GBA02280810',2,'USD','РЕПО','РЕПО ГКО','KG1'),
+(current_date - 1,'LIST_GBA','KG0105166315',NULL,'KGS','Акции','Акции (вчера)',NULL);
 CREATE TABLE public."Classes" ("TradeDate" timestamp,"ClassCode" varchar,"ClassName" varchar);
 INSERT INTO public."Classes" VALUES (current_date,'LIST_GBA','Листинг ГБА'),(current_date - 1,'LIST_GBA','old'),(current_date,'REPO_GBA','РЕПО');`)
 	if err != nil {
@@ -144,13 +144,10 @@ INSERT INTO public."Classes" VALUES (current_date,'LIST_GBA','Листинг Г�
 	if err != nil || len(page.Params) != 2 || !page.HasMore || page.NextOffset != 2 {
 		t.Fatal(page, err)
 	}
-	if !bytes.Contains(page.Params[0].Raw, []byte(`"Last":123.4567890123456789`)) || !bytes.Contains(page.Params[0].Raw, []byte(`"Bid":null`)) ||
-		!bytes.Contains(page.Params[0].Raw, []byte(`"NumTrades":9007199254740993`)) || !bytes.Contains(page.Params[0].Raw, []byte(`"LongName":"Облигации ГБА"`)) {
-		t.Fatalf("row not verbatim: %s", page.Params[0].Raw)
-	}
-	// Names follow the stored row, matched by ClassCode and SecCode, latest TradeDate.
-	if !bytes.HasSuffix(page.Params[0].Raw, []byte(`"Status":"торгуется","FaceUnit":"KGS","SecShortName":"ГКО-2","SecFullName":"ГКО-2 летние","ClassName":"Листинг ГБА"}`)) {
-		t.Fatalf("names not appended: %s", page.Params[0].Raw)
+	// Only the chosen columns, values as stored; the instrument is matched by
+	// ClassCode and SecCode on its latest TradeDate.
+	if got, want := string(page.Params[0].Raw), `{"ClassCode":"LIST_GBA    ","SecCode":"GBA02280810 ","CouponValue":9007199254740993.000001,"status":"торгуется","FaceUnit":"KGS","SecShortName":"ГКО-2","SecFullName":"ГКО-2 летние","ClassName":"Листинг ГБА"}`; got != want {
+		t.Fatalf("row:\n%s\n%s", got, want)
 	}
 	page, err = s.ListParams(ctx, ParamFilter{ClassCode: "LIST_GBA", SecCode: "KG0105166315"})
 	if err != nil || len(page.Params) != 1 || page.HasMore {
@@ -163,8 +160,31 @@ INSERT INTO public."Classes" VALUES (current_date,'LIST_GBA','Листинг Г�
 		t.Fatal("earlier TradeDate rows listed", page, err)
 	}
 	p, err := s.GetParam(ctx, "TQBR", "SBER")
-	if err != nil || !bytes.Contains(p.Raw, []byte(`"Status":null,"FaceUnit":null,"SecShortName":null,"SecFullName":null,"ClassName":null}`)) {
+	if err != nil || !bytes.HasSuffix(p.Raw, []byte(`"CouponValue":null,"status":null,"FaceUnit":null,"SecShortName":null,"SecFullName":null,"ClassName":null}`)) {
 		t.Fatal(string(p.Raw), err)
+	}
+	// Served classes come from the administrator setting.
+	var classes []string
+	s.SetParamClasses(func(context.Context) ([]string, error) { return classes, nil })
+	classes = []string{"TQBR"}
+	if page, err := s.ListParams(ctx, ParamFilter{}); err != nil || len(page.Params) != 1 || !bytes.Contains(page.Params[0].Raw, []byte(`"SecCode":"SBER`)) {
+		t.Fatal("class filter", page, err)
+	}
+	if _, err := s.GetParam(ctx, "LIST_GBA", "GBA02280810"); !errors.Is(err, ErrParamNotFound) {
+		t.Fatal("instrument of another class served", err)
+	}
+	classes = []string{}
+	if page, err := s.ListParams(ctx, ParamFilter{}); err != nil || len(page.Params) != 0 {
+		t.Fatal("empty class list served rows", page, err)
+	}
+	s.SetParamClasses(func(context.Context) ([]string, error) { return nil, errors.New("settings down") })
+	if _, err := s.ListParams(ctx, ParamFilter{}); err == nil {
+		t.Fatal("settings failure served unfiltered rows")
+	}
+	s.SetParamClasses(nil)
+	list, err := s.ListClasses(ctx)
+	if err != nil || len(list) != 2 || string(list[0].Raw) != `{"ClassCode":"LIST_GBA","ClassName":"Листинг ГБА"}` {
+		t.Fatal(list, err)
 	}
 	if _, err := s.GetParam(ctx, "TQBR", "GAZP"); !errors.Is(err, ErrParamNotFound) {
 		t.Fatal(err)

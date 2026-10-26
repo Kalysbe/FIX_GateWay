@@ -393,14 +393,14 @@ paths:
         - bearerAuth: []
       description: |
         Requires `orders:read`. REST source for gRPC `marketdata.tick`. Returns a JSON
-        array of quik_export2.public."Params" rows as stored (row_to_json): original
-        column names, numbers as JSON numbers with source precision, strings and nulls.
-        No fields are added, renamed or computed; market data is not firm-scoped.
-        Only rows of the current trading day are returned: TradeDate equals today's
-        date in Bishkek (UTC+6); rows of earlier days are history. Each row ends with
-        FaceUnit, SecShortName and SecFullName from Securities (matched by ClassCode and
-        SecCode) and ClassName from Classes (by ClassCode), as stored; null without a
-        reference row.
+        array of instruments of quik_export2.public."Params" with ClassCode, SecCode and
+        status (Params), CouponValue, FaceUnit, SecShortName and SecFullName (Securities,
+        matched by ClassCode and SecCode) and ClassName (Classes, by ClassCode), as stored:
+        numbers as JSON numbers with source precision, strings and nulls; null without a
+        reference row. Market data is not firm-scoped. Only rows of the current trading
+        day (TradeDate is today in Bishkek, UTC+6) of the classes chosen by a gateway
+        administrator (LISTBND by default) are returned; see
+        /api/v1/admin/market-data/settings.
         board and symbol filter the ClassCode and SecCode columns; order is ClassCode,
         SecCode. Paging is in X-Has-More and X-Next-Offset. An unavailable source
         returns HTTP 503 with Retry-After; FIX quotes are never substituted.
@@ -1456,6 +1456,50 @@ paths:
           description: Params row
         "404":
           description: Instrument not present in Params
+  /api/v1/admin/market-data/settings:
+    get:
+      tags: [Admin]
+      summary: QUIK classes served as current trades
+      description: Classes whose Params rows are served by the market data endpoints and marketdata.tick. LISTBND until changed.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Current classes
+          content:
+            application/json:
+              example: {classes: [LISTBND], default_classes: [LISTBND]}
+    patch:
+      tags: [Admin]
+      summary: Choose the QUIK classes served as current trades
+      description: 1 to 50 class codes (letters, digits, _); repeats are dropped. Requires operator role or above; audited as MARKET_DATA_CLASSES_UPDATED.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            example: {classes: [LISTBND, AUCT_GBA]}
+      responses:
+        "200":
+          description: Saved classes
+        "400":
+          description: Invalid class list
+  /api/v1/admin/classes:
+    get:
+      tags: [Admin]
+      summary: QUIK Classes to choose from
+      description: ClassCode and ClassName of each class in quik_export2.public."Classes", latest TradeDate, as stored.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Classes rows
+          content:
+            application/json:
+              example: [{ClassCode: LISTBND, ClassName: "Листинговые:облигации"}]
+        "503":
+          description: QUIK source unavailable
   /api/v1/admin/quik-api/settings:
     get:
       tags: [QUIK API]

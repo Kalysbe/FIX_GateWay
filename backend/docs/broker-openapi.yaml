@@ -111,14 +111,14 @@ paths:
         - bearerAuth: []
       description: |
         Требует `orders:read`. REST-источник события gRPC `marketdata.tick`.
-        Возвращает JSON-массив строк `quik_export2.public."Params"` как есть (`row_to_json`):
-        исходные имена колонок, числа JSON-числами с исходной точностью, строки и `null`.
-        Шлюз не добавляет, не переименовывает и не пересчитывает поля. Данные рынка
-        не зависят от фирмы токена. Возвращаются только строки текущего торгового дня:
-        `TradeDate` равна сегодняшней дате по Бишкеку (UTC+6); строки прошлых дней — история.
-        После колонок `Params` в конце строки добавлены `FaceUnit`, `SecShortName`, `SecFullName`
-        из `Securities` (инструмент сопоставляется по `ClassCode` и `SecCode`) и `ClassName`
-        из `Classes` (по `ClassCode`), в исходном виде; без записи в справочнике — `null`.
+        Возвращает JSON-массив инструментов из `quik_export2.public."Params"` с полями
+        `ClassCode`, `SecCode`, `status` (из `Params`), `CouponValue`, `FaceUnit`, `SecShortName`,
+        `SecFullName` (из `Securities`, инструмент сопоставляется по `ClassCode` и `SecCode`)
+        и `ClassName` (из `Classes`, по `ClassCode`). Значения в исходном виде: числа
+        JSON-числами с исходной точностью, строки и `null`; без записи в справочнике — `null`.
+        Данные рынка не зависят от фирмы токена. Возвращаются только строки текущего
+        торгового дня (`TradeDate` — сегодняшняя дата по Бишкеку, UTC+6) и только классов,
+        выбранных администратором шлюза (по умолчанию `LISTBND`).
 
         `board` и `symbol` фильтруют колонки `ClassCode` и `SecCode`. Порядок —
         `ClassCode`, `SecCode`. Пагинация — в заголовках `X-Has-More` и `X-Next-Offset`.
@@ -871,11 +871,17 @@ components:
       type: object
       additionalProperties: true
       description: |
-        Строка `quik_export2.public."Params"` как есть (`row_to_json`). Набор колонок задаёт QUIK;
-        шлюз не добавляет и не переименовывает поля. Ниже — колонки, по которым шлюз ищет строку.
+        Инструмент текущих торгов: колонки QUIK `Params`, `Securities` и `Classes` в исходном
+        виде (`row_to_json`), без переименования и пересчёта.
       properties:
-        ClassCode: {type: string}
-        SecCode: {type: string}
+        ClassCode: {type: string, description: Params.ClassCode}
+        SecCode: {type: string, description: Params.SecCode}
+        CouponValue: {type: [number, "null"], description: Securities.CouponValue}
+        status: {type: [string, "null"], description: Params.status}
+        FaceUnit: {type: [string, "null"], description: Securities.FaceUnit}
+        SecShortName: {type: [string, "null"], description: Securities.SecShortName}
+        SecFullName: {type: [string, "null"], description: Securities.SecFullName}
+        ClassName: {type: [string, "null"], description: Classes.ClassName}
     OrderBook:
       type: object
       properties:

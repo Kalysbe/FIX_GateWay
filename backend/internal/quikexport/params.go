@@ -12,9 +12,9 @@ import (
 
 var ErrParamNotFound = errors.New("instrument is not present in QUIK Params")
 
-// Param is one row of the QUIK current trades table, kept verbatim as the
-// database JSON, followed by the instrument and class names (see paramRows).
-// Rows are identified by ClassCode and SecCode.
+// Param is one market data row: the selected columns of the QUIK current
+// trades table and its instrument and class references (see paramRows), as
+// database JSON. Rows are identified by ClassCode and SecCode.
 type Param struct {
 	Raw json.RawMessage
 }
@@ -40,21 +40,40 @@ func (p Param) Key() string {
 // the exchange's (UTC+6, Asia/Bishkek).
 const paramsToday = `p."TradeDate"::date=(now() AT TIME ZONE 'Asia/Bishkek')::date`
 
-// paramRows is a Params row as stored followed by FaceUnit, SecShortName and
-// SecFullName of the instrument from Securities and ClassName from Classes.
+// paramRows selects only the columns the user asked for, values as stored:
+// ClassCode, SecCode and status of Params, CouponValue, FaceUnit, SecShortName
+// and SecFullName of the instrument from Securities, ClassName from Classes.
 // A SecCode can be listed in several classes with different names, so the
 // instrument is matched by ClassCode and SecCode. Both reference tables are
 // kept per TradeDate; the latest row is used, so the names stay available
 // until QUIK reloads them for the new day. A missing reference row gives null.
-const paramRows = `SELECT p.*, s."FaceUnit", s."SecShortName", s."SecFullName", c."ClassName"
+// $1 is the list of served classes (see SetParamClasses); NULL serves all.
+const paramRows = `SELECT p."ClassCode", p."SecCode", s."CouponValue", p.status, s."FaceUnit", s."SecShortName", s."SecFullName", c."ClassName"
 FROM public."Params" p
-LEFT JOIN LATERAL (SELECT s."FaceUnit", s."SecShortName", s."SecFullName" FROM public."Securities" s
+LEFT JOIN LATERAL (SELECT s."CouponValue", s."FaceUnit", s."SecShortName", s."SecFullName" FROM public."Securities" s
   WHERE btrim(s."ClassCode"::text)=btrim(p."ClassCode"::text) AND btrim(s."SecCode"::text)=btrim(p."SecCode"::text)
   ORDER BY s."TradeDate" DESC LIMIT 1) s ON true
 LEFT JOIN LATERAL (SELECT c."ClassName" FROM public."Classes" c
   WHERE btrim(c."ClassCode"::text)=btrim(p."ClassCode"::text)
   ORDER BY c."TradeDate" DESC LIMIT 1) c ON true
-WHERE ` + paramsToday
+WHERE ` + paramsToday + ` AND ($1::text[] IS NULL OR btrim(p."ClassCode"::text)=ANY($1::text[]))`
+
+// SetParamClasses sets where the served classes come from; it is called once
+// before the store is used. Without it every class is served.
+func (s *Store) SetParamClasses(classes func(context.Context) ([]string, error)) {
+	s.paramClasses = classes
+}
+
+func (s *Store) servedClasses(ctx context.Context) ([]string, error) {
+	if s.paramClasses == nil {
+		return nil, nil
+	}
+	list, err := s.paramClasses(ctx)
+	if err == nil && list == nil {
+		list = []string{}
+	}
+	return list, err
+}
 
 type ParamFilter struct {
 	// Empty values match any class or instrument.
@@ -76,14 +95,18 @@ func (s *Store) ListParams(ctx context.Context, f ParamFilter) (ParamPage, error
 	if s == nil || s.pool == nil {
 		return out, ErrNotConfigured
 	}
+	classes, err := s.servedClasses(ctx)
+	if err != nil {
+		return out, err
+	}
 	limit := f.Limit
 	if limit > 0 {
 		limit++
 	}
 	rows, err := s.pool.Query(ctx, `SELECT row_to_json(r) FROM (`+paramRows+`
-AND ($1='' OR btrim(p."ClassCode"::text)=$1) AND ($2='' OR btrim(p."SecCode"::text)=$2)) r
+AND ($2='' OR btrim(p."ClassCode"::text)=$2) AND ($3='' OR btrim(p."SecCode"::text)=$3)) r
 ORDER BY r."ClassCode", r."SecCode"
-LIMIT NULLIF($3,0) OFFSET $4`, f.ClassCode, f.SecCode, limit, f.Offset)
+LIMIT NULLIF($4,0) OFFSET $5`, classes, f.ClassCode, f.SecCode, limit, f.Offset)
 	if err != nil {
 		return out, err
 	}
@@ -110,9 +133,13 @@ func (s *Store) GetParam(ctx context.Context, classCode, secCode string) (Param,
 	if s == nil || s.pool == nil {
 		return Param{}, ErrNotConfigured
 	}
+	classes, err := s.servedClasses(ctx)
+	if err != nil {
+		return Param{}, err
+	}
 	var raw []byte
-	err := s.pool.QueryRow(ctx, `SELECT row_to_json(r) FROM (`+paramRows+`
-AND btrim(p."ClassCode"::text)=$1 AND btrim(p."SecCode"::text)=$2 LIMIT 1) r`, classCode, secCode).Scan(&raw)
+	err = s.pool.QueryRow(ctx, `SELECT row_to_json(r) FROM (`+paramRows+`
+AND btrim(p."ClassCode"::text)=$2 AND btrim(p."SecCode"::text)=$3 LIMIT 1) r`, classes, classCode, secCode).Scan(&raw)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Param{}, ErrParamNotFound
 	}

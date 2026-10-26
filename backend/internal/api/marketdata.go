@@ -10,8 +10,9 @@ import (
 	"github.com/fix-gateway/backend/internal/quikexport"
 )
 
-// Market data is the QUIK current trades table quik_export2.public."Params",
-// served as database rows: original column names, numbers, strings and nulls.
+// Market data is the QUIK current trades table quik_export2.public."Params"
+// of today and of the administrator-chosen classes, with instrument and class
+// names, served as database rows: original column names, numbers, strings and nulls.
 type quikParamReader interface {
 	ListParams(context.Context, quikexport.ParamFilter) (quikexport.ParamPage, error)
 	GetParam(context.Context, string, string) (quikexport.Param, error)
@@ -60,6 +61,42 @@ func (s *Server) listMarketData(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Has-More", strconv.FormatBool(page.HasMore))
 	w.Header().Set("X-Next-Offset", strconv.Itoa(page.NextOffset))
 	writeQuikJSON(w, page.Params)
+}
+
+// The served QUIK classes are an administrator setting (LISTBND until changed).
+func (s *Server) getMarketDataSettings(w http.ResponseWriter, r *http.Request) {
+	classes, err := s.marketClasses.Classes(r.Context())
+	if err != nil {
+		s.writeInternal(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"classes": classes, "default_classes": []string{quikexport.DefaultParamClass}})
+}
+
+func (s *Server) patchMarketDataSettings(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Classes []string `json:"classes"`
+	}
+	if err := decodeJSONBody(r, &req); err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	admin, _ := AdminFromContext(r.Context())
+	before, _ := s.marketClasses.Classes(r.Context())
+	classes, err := s.marketClasses.SetClasses(r.Context(), req.Classes, admin.Email)
+	if err != nil {
+		if errors.Is(err, quikexport.ErrInvalidClasses) {
+			writeErr(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		s.writeInternal(w, err)
+		return
+	}
+	if s.audit != nil {
+		s.writeAdminAudit(r, "MARKET_DATA_CLASSES_UPDATED", "gateway_settings", quikexport.ParamClassesKey, nil,
+			map[string]any{"classes": before}, map[string]any{"classes": classes})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"classes": classes, "default_classes": []string{quikexport.DefaultParamClass}})
 }
 
 func (s *Server) getMarketData(w http.ResponseWriter, r *http.Request) {

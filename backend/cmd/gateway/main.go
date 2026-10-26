@@ -234,6 +234,11 @@ func main() {
 	if os.Getenv("TRADE_RECONCILIATION_ENABLED") == "true" {
 		go server.RunTradeReconciliation(ctx)
 	}
+	marketClasses := quikexport.NewClassSettings(pool)
+	server.SetMarketDataClasses(marketClasses)
+	if quikExportStore != nil {
+		quikExportStore.SetParamClasses(marketClasses.Classes)
+	}
 	server.SetQuikExport(quikExportStore)
 	if quikExportStore != nil {
 		go quikExportStore.RunOrders(ctx, func(change quikexport.OrderChange) {

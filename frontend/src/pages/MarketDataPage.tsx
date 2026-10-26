@@ -2,16 +2,16 @@ import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { apiWithHeaders } from "../api";
 import { liveRefetchInterval } from "../lib/poll";
-import { dbDateValue, dbSortValue, dbValue, nextOrderOffset, parseDBJSON, type DBOrder } from "../lib/rawOrders";
+import { dbSortValue, dbValue, nextOrderOffset, parseDBJSON, type DBOrder } from "../lib/rawOrders";
 import { useAdminStream } from "../hooks/useAdminStream";
 import { PageHeader } from "../components/PageHeader";
 import { ErrorBanner } from "../components/feedback";
 import { DataTable, type TableColumn } from "../components/DataTable";
+import { MarketClassesSettings } from "../components/MarketClassesSettings";
 
-// Rows of QUIK quik_export2.public."Params" for the current trading day (the
-// server filters by TradeDate) exactly as stored: column names and values come
-// from the database, numbers keep their source text. Only TradeDate is shown
-// as dd/mm/yyyy.
+// Today's rows of QUIK quik_export2.public."Params" of the chosen classes with
+// instrument and class names; the server selects the columns. Column names
+// and values come from the database, numbers keep their source text.
 type ParamRow = DBOrder;
 
 const PAGE = 1000;
@@ -45,21 +45,21 @@ export default function MarketDataPage() {
   const boards = useMemo(() => Array.from(new Set(rows.map(r => dbValue(r.ClassCode)).filter(v => v !== "null"))).sort(), [rows]);
   const fields = useMemo(() => Array.from(new Set(rows.flatMap(r => Object.keys(r)))), [rows]);
   const filtered = board ? rows.filter(r => dbValue(r.ClassCode) === board) : rows;
-  const text = (r: ParamRow, field: string) => field === "TradeDate" ? dbDateValue(r[field]) : dbValue(r[field]);
   const columns: TableColumn<ParamRow>[] = fields.map(field => ({
-    id: field, header: field, value: r => dbSortValue(r[field]), exportValue: r => text(r, field),
-    cell: r => <span className="whitespace-pre-wrap">{text(r, field)}</span>,
+    id: field, header: field, value: r => dbSortValue(r[field]), exportValue: r => dbValue(r[field]),
+    cell: r => <span className="whitespace-pre-wrap">{dbValue(r[field])}</span>,
   }));
   return <div className="raw-orders space-y-4">
-    <PageHeader title="Текущие торги" subtitle="Строки таблицы QUIK Params за сегодняшний торговый день в том виде, в каком они хранятся в базе" />
+    <PageHeader title="Текущие торги" subtitle="Инструменты выбранных классов QUIK за сегодняшний торговый день: Params, Securities и Classes" />
+    <MarketClassesSettings />
     {q.error && <ErrorBanner error={q.error} onRetry={() => q.refetch()} />}
     <DataTable title="Текущие торги" rows={q.error ? [] : filtered} columns={columns} rowKey={paramKey} loading={q.isLoading} resetKey={board} exportName="market-data" showTotals={false}
-      getSearchText={r => fields.map(f => text(r, f)).join(" ")} onRefresh={() => void q.refetch()} refreshing={q.isFetching}
-      searchPlaceholder="Поиск по строкам Params…" emptyTitle={q.error ? "Таблица Params недоступна" : "В Params нет строк за сегодня"}
+      getSearchText={r => fields.map(f => dbValue(r[f])).join(" ")} onRefresh={() => void q.refetch()} refreshing={q.isFetching}
+      searchPlaceholder="Поиск по инструментам…" emptyTitle={q.error ? "Таблица Params недоступна" : "Нет строк выбранных классов за сегодня"}
       filters={<>
         <select className="input w-auto" aria-label="ClassCode" value={board} onChange={e => setBoard(e.target.value)}><option value="">ClassCode: все</option>{boards.map(b => <option key={b} value={b}>{b}</option>)}</select>
         {board && <button className="btn-muted" onClick={() => setBoard("")}>Сбросить</button>}
       </>} />
-    <div className="text-xs text-muted" aria-live="polite">Строк Params: {rows.length}{rows.length >= MAX_ROWS ? ` (показаны первые ${MAX_ROWS})` : ""}</div>
+    <div className="text-xs text-muted" aria-live="polite">Строк: {rows.length}{rows.length >= MAX_ROWS ? ` (показаны первые ${MAX_ROWS})` : ""}</div>
   </div>;
 }

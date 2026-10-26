@@ -39,7 +39,7 @@ CREATE TABLE IF NOT EXISTS public."Params" (
   "SecCode" text NOT NULL,
   "SecName" text,
   "TradeDate" date,
-  "Status" text,
+  "status" text,
   "Bid" numeric,
   "Offer" numeric,
   "Last" numeric,
@@ -55,15 +55,16 @@ INSERT INTO public."Params" VALUES
   ('LIST_GBA', 'GBA02280810', 'Local simulator bond', current_date, 'торгуется', 99.5, 100.5, 100, 99.5, 101, 99, 3, 1500, 150000),
   ('LISTEDSTOCKK', 'KG0105166315', 'Local simulator share', current_date, 'торгуется', NULL, 400, 400, 400, 400, 400, 1, 1, 400)
 ON CONFLICT DO NOTHING;
--- Instrument and class names that the Gateway appends to Params rows.
+-- Instrument and class names that the Gateway joins to Params rows. The
+-- local classes are not LISTBND: choose them on the "Текущие торги" page.
 CREATE TABLE IF NOT EXISTS public."Securities" (
   "TradeDate" timestamp NOT NULL, "ClassCode" text NOT NULL, "SecCode" text NOT NULL,
-  "FaceUnit" text, "SecShortName" text, "SecFullName" text,
+  "CouponValue" numeric, "FaceUnit" text, "SecShortName" text, "SecFullName" text,
   PRIMARY KEY ("TradeDate", "ClassCode", "SecCode")
 );
 INSERT INTO public."Securities" VALUES
-  (current_date, 'LIST_GBA', 'GBA02280810', 'KGS', 'Local bond', 'Local simulator bond'),
-  (current_date, 'LISTEDSTOCKK', 'KG0105166315', 'KGS', 'Local share', 'Local simulator share')
+  (current_date, 'LIST_GBA', 'GBA02280810', 2.5, 'KGS', 'Local bond', 'Local simulator bond'),
+  (current_date, 'LISTEDSTOCKK', 'KG0105166315', 0, 'KGS', 'Local share', 'Local simulator share')
 ON CONFLICT DO NOTHING;
 CREATE TABLE IF NOT EXISTS public."Classes" (
   "TradeDate" timestamp NOT NULL, "ClassCode" text NOT NULL, "ClassName" text,
