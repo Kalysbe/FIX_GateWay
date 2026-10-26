@@ -66,7 +66,7 @@ func (s *Server) listMarketData(w http.ResponseWriter, r *http.Request) {
 
 // getMarketInstrument is the admin page of one current-trades instrument: all
 // of its QUIK market data (whole Params, Securities and Classes rows) and its
-// quotes, the Orders rows in state "Активна", every row as stored.
+// quotes, today's Orders rows in state "Активна", every row as stored.
 func (s *Server) getMarketInstrument(w http.ResponseWriter, r *http.Request) {
 	board, symbol := strings.TrimSpace(r.PathValue("board")), strings.TrimSpace(r.PathValue("symbol"))
 	if board == "" || symbol == "" {
@@ -82,7 +82,9 @@ func (s *Server) getMarketInstrument(w http.ResponseWriter, r *http.Request) {
 		s.writeParamReadError(w, err)
 		return
 	}
-	quotes, err := s.quikOrders.ListOrders(r.Context(), quikexport.OrderFilter{State: quikActiveState, ClassCode: board, SecCode: symbol, Limit: 1000})
+	filter := quotesFilter(board, symbol)
+	filter.Limit = 1000
+	quotes, err := s.quikOrders.ListOrders(r.Context(), filter)
 	if err != nil {
 		s.writeParamReadError(w, err)
 		return

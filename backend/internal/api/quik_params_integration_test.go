@@ -61,10 +61,12 @@ CREATE TABLE public."Classes" ("TradeDate" timestamp,"ClassCode" text,"ClassName
 INSERT INTO public."Classes" VALUES (current_date,'LISTBND','Листинговые:облигации','KSE'),(current_date,'AUCT_GBA','Аукцион ГКО','KSE');
 CREATE TABLE public."Orders" ("OrderNum" numeric(19,0),"ClassCode" text,"TradeDate" timestamp,"SecCode" text,"FirmId" text,"Operation" text,"State" text,"Qty" numeric,"Balance" numeric,"Price" numeric,
 PRIMARY KEY("OrderNum","ClassCode","TradeDate"));
-INSERT INTO public."Orders" VALUES
-(7412,'LISTBND','2026-10-26','GBA02270915','SENTI2004','Купля','Активна',10,10,100.00000000),
-(7413,'LISTBND','2026-10-26','GBA02270915','BAKAI2008','Продажа','Исполнена',5,0,101),
-(7414,'AUCT_GBA','2026-10-26','GBA02270915','2040','Продажа','Активна',1,1,99);`)
+INSERT INTO public."Orders" SELECT n, c, (now() AT TIME ZONE 'Asia/Bishkek')::date - ago, s, f, op, st, q, b, p FROM (VALUES
+(7412,'LISTBND','GBA02270915','SENTI2004','Купля','Активна',10,10,100.00000000,0),
+(7413,'LISTBND','GBA02270915','BAKAI2008','Продажа','Исполнена',5,0,101,0),
+(7414,'AUCT_GBA','GBA02270915','2040','Продажа','Активна',1,1,99,0),
+-- QUIK still exports an earlier day's order as "Активна"; it is not a quote.
+(7300,'LISTBND','GBA02270915','FREEDOM2003','Купля','Активна',300,300,93,1)) v(n, c, s, f, op, st, q, b, p, ago);`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -169,9 +171,9 @@ INSERT INTO public."Orders" VALUES
 	}
 	call("PATCH", "/api/v1/admin/market-data/settings", jwt, map[string]any{"classes": []string{"LISTBND"}}, 200)
 
-	// Quotes: Orders rows in state "Активна" of every firm, as stored; brokers cannot read them here.
-	active7412 := `{"OrderNum":7412,"ClassCode":"LISTBND","TradeDate":"2026-10-26T00:00:00","SecCode":"GBA02270915","FirmId":"SENTI2004","Operation":"Купля","State":"Активна","Qty":10,"Balance":10,"Price":100.00000000}`
-	active7414 := `{"OrderNum":7414,"ClassCode":"AUCT_GBA","TradeDate":"2026-10-26T00:00:00","SecCode":"GBA02270915","FirmId":"2040","Operation":"Продажа","State":"Активна","Qty":1,"Balance":1,"Price":99}`
+	// Quotes: today's Orders rows in state "Активна" of every firm, as stored; brokers cannot read them here.
+	active7412 := `{"OrderNum":7412,"ClassCode":"LISTBND","TradeDate":"` + today + `","SecCode":"GBA02270915","FirmId":"SENTI2004","Operation":"Купля","State":"Активна","Qty":10,"Balance":10,"Price":100.00000000}`
+	active7414 := `{"OrderNum":7414,"ClassCode":"AUCT_GBA","TradeDate":"` + today + `","SecCode":"GBA02270915","FirmId":"2040","Operation":"Продажа","State":"Активна","Qty":1,"Balance":1,"Price":99}`
 	if got := call("GET", "/api/v1/admin/quotes", jwt, nil, 200); got != "["+active7414+","+active7412+"]" {
 		t.Fatal(got)
 	}

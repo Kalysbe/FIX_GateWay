@@ -23,8 +23,8 @@ function canEditURL(role?: string | null): boolean {
   return WRITE_ROLES.has((role || "").toUpperCase());
 }
 
-// Quotes are QUIK Orders rows still in the book (State = "Активна"), read by
-// the gateway from the QUIK export database.
+// Quotes are today's QUIK Orders rows still in the book (State = "Активна"),
+// read by the gateway from the QUIK export database.
 async function loadQuotes(signal: AbortSignal): Promise<DBOrder[]> {
   const rows: DBOrder[] = [];
   for (let offset: number | null = 0; offset != null && rows.length < MAX_ROWS;) {
@@ -87,7 +87,7 @@ export default function QuotesPage() {
     <div className="space-y-4">
       <PageHeader
         title="Котировки"
-        subtitle="Активные заявки QUIK · таблица Orders, State = «Активна»"
+        subtitle="Сегодняшние активные заявки QUIK · таблица Orders, State = «Активна»"
         actions={
           <div className="rounded-lg border border-line bg-panel px-3 py-1.5 text-xs text-ink">
             <span className="mr-2 text-slate-500">Строк</span>
@@ -97,7 +97,7 @@ export default function QuotesPage() {
       />
 
       {quotesQ.isError && <ErrorBanner error={quotesQ.error} onRetry={() => void quotesQ.refetch()} />}
-      <DataTable title="Котировки QUIK" rows={quotesQ.isError ? [] : filtered} columns={columns} rowKey={orderRowKey} loading={quotesQ.isLoading} resetKey={opFilter + ":" + classFilter} exportName="quotes" onRefresh={() => void quotesQ.refetch()} refreshing={quotesQ.isFetching} searchPlaceholder="Номер заявки, фирма, класс, инструмент…" emptyTitle={quotesQ.isError ? "Таблица Orders недоступна" : "Нет активных заявок"} getSearchText={r => [r.OrderNum, r.FirmId, r.ClassCode, r.SecCode, r.Operation].map(dbValue).join(" ")} filters={<>
+      <DataTable title="Котировки QUIK" rows={quotesQ.isError ? [] : filtered} columns={columns} rowKey={orderRowKey} loading={quotesQ.isLoading} resetKey={opFilter + ":" + classFilter} exportName="quotes" onRefresh={() => void quotesQ.refetch()} refreshing={quotesQ.isFetching} searchPlaceholder="Номер заявки, фирма, класс, инструмент…" emptyTitle={quotesQ.isError ? "Таблица Orders недоступна" : "Нет активных заявок за сегодня"} getSearchText={r => [r.OrderNum, r.FirmId, r.ClassCode, r.SecCode, r.Operation].map(dbValue).join(" ")} filters={<>
         <select className="input w-auto" aria-label="Операция" value={opFilter} onChange={e => setOpFilter(e.target.value)}><option value="">Все операции</option>{operations.map(op => <option key={op} value={op}>{op}</option>)}</select>
         <select className="input w-auto" aria-label="Класс котировки" value={classFilter} onChange={e => setClassFilter(e.target.value)}><option value="">Все классы</option>{classOptions.map(c => <option key={c} value={c}>{c}</option>)}</select>
         {(opFilter || classFilter) && <button className="btn-muted" onClick={() => { setOpFilter(""); setClassFilter(""); }}>Сбросить</button>}

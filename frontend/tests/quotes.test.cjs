@@ -42,7 +42,7 @@ test('quotes come from QUIK Orders rows and link to the order and the instrument
     '../components/Toast': { useToast: () => ({ push() {} }) },
   });
   const html = renderToStaticMarkup(React.createElement(page.default));
-  assert.match(html, /State = «Активна»/);
+  assert.match(html, /Сегодняшние активные заявки QUIK · таблица Orders, State = «Активна»/);
   assert.match(html, /<a href="\/orders\/quik-20261026-LIST_GD-7412" class="text-accent">7412<\/a>/);
   assert.match(html, /<a href="\/market-data\/LIST_GD\/GD052270215" class="text-accent">GD052270215<\/a>/);
   assert.match(html, /SENTI2004/);

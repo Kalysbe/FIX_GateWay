@@ -10,7 +10,7 @@ import { DataTable } from "../components/DataTable";
 import { quoteColumns } from "../lib/quotes";
 
 // Everything QUIK holds on one instrument of today's current trades, each row
-// as stored, and its quotes (Orders in state "Активна").
+// as stored, and its quotes (today's Orders in state "Активна").
 type InstrumentDetails = {
   params: DBOrder;
   security: DBOrder | null;
@@ -44,7 +44,7 @@ export default function MarketInstrumentPage() {
     {q.isLoading && <PageSpinner />}
     {q.error && <ErrorBanner error={q.error} onRetry={() => q.refetch()} />}
     {d && <>
-      <DataTable title={`Котировки${d.quotes_has_more ? " (показаны первые 1000)" : ""}`} rows={d.quotes} columns={quoteColumns()} rowKey={orderRowKey} exportName={`quotes-${board}-${symbol}`} showTotals={false} emptyTitle="Нет активных заявок по инструменту" />
+      <DataTable title={`Котировки${d.quotes_has_more ? " (показаны первые 1000)" : ""}`} rows={d.quotes} columns={quoteColumns()} rowKey={orderRowKey} exportName={`quotes-${board}-${symbol}`} showTotals={false} emptyTitle="Нет активных заявок по инструменту за сегодня" />
       <div className="grid gap-4 xl:grid-cols-2">
         <RowCard title="Рыночные данные · Params (сегодня)" row={d.params} empty="" />
         <div className="space-y-4">

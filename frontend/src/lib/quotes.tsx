@@ -2,7 +2,7 @@ import { Link } from "react-router-dom";
 import { dbSortValue, dbValue, orderKey, type DBOrder } from "./rawOrders";
 import type { TableColumn } from "../components/DataTable";
 
-// Quotes are QUIK Orders rows still in the book (State = "Активна"), as stored.
+// Quotes are today's QUIK Orders rows still in the book (State = "Активна"), as stored.
 
 function fmt(v: DBOrder[string] | undefined, digits = 2): string {
   if (v == null || v === "") return "—";

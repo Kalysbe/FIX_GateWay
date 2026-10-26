@@ -1473,7 +1473,7 @@ paths:
       description: |
         The whole quik_export2.public."Params" row of today (Bishkek, UTC+6) for the
         ClassCode and SecCode, its Securities row (latest TradeDate) and Classes row,
-        and its quotes — Orders rows in state "Активна" of every firm (up to 1000) —
+        and its quotes — today's Orders rows in state "Активна" of every firm (up to 1000) —
         every row as stored. Not limited to the served classes. Missing reference rows
         are null.
       security:
@@ -1499,11 +1499,12 @@ paths:
   /api/v1/admin/quotes:
     get:
       tags: [Admin]
-      summary: Quotes — active QUIK orders
+      summary: Quotes — today's active QUIK orders
       description: |
-        Rows of quik_export2.public."Orders" with State = "Активна" of every firm, as
-        stored, read by the gateway from the QUIK export database. Order is TradeDate
-        and OrderNum descending; paging is in X-Has-More and X-Next-Offset.
+        Rows of quik_export2.public."Orders" with State = "Активна" and TradeDate of
+        today (Bishkek, UTC+6) of every firm, as stored, read by the gateway from the
+        QUIK export database. Earlier days' rows still exported as "Активна" are not
+        quotes. Order is OrderNum descending; paging is in X-Has-More and X-Next-Offset.
       security:
         - bearerAuth: []
       parameters:

@@ -81,6 +81,15 @@ func TestBrokerOrdersUseAuthenticatedFirmBeforePagination(t *testing.T) {
 	if strings.TrimSpace(w.Body.String()) != "["+raw+"]" {
 		t.Fatal("active list added or changed fields", w.Body.String())
 	}
+	if source.filter.Today {
+		t.Fatal("broker active orders are not limited to today")
+	}
+	// Admin quotes: today's active orders of every firm.
+	w = httptest.NewRecorder()
+	s.listAdminQuotes(w, httptest.NewRequest("GET", "/api/v1/admin/quotes?board=LISTBND&symbol=GBA1", nil))
+	if f := source.filter; w.Code != 200 || f.State != "Активна" || !f.Today || f.Firm != nil || f.ClassCode != "LISTBND" || f.SecCode != "GBA1" {
+		t.Fatal(w.Code, w.Body.String(), source.filter)
+	}
 	r.SetPathValue("id", "quik-20261022-LIST_GBA-1")
 	w = httptest.NewRecorder()
 	s.getBrokerOrder(w, r)
