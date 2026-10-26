@@ -120,11 +120,20 @@ INSERT INTO public."Params" SELECT c, s, n, l, b, t, d, st FROM (VALUES
 -- Earlier trading days of the same instruments are history, not current trades.
 ('TQBR','SBER','Сбербанк',2,NULL,2,1,'вчера'),
 ('TQBR','GAZP','Газпром',3,NULL,3,1,NULL)) v(c, s, n, l, b, t, ago, st),
-LATERAL (SELECT (now() AT TIME ZONE 'Asia/Bishkek')::date - ago AS d) x;`)
+LATERAL (SELECT (now() AT TIME ZONE 'Asia/Bishkek')::date - ago AS d) x;
+CREATE TABLE public."Securities" ("TradeDate" timestamp,"ClassCode" varchar,"SecCode" varchar,"FaceUnit" varchar,"SecShortName" varchar,"SecFullName" varchar);
+INSERT INTO public."Securities" VALUES
+(current_date,'LIST_GBA','GBA02280810','KGS','ГКО-2','ГКО-2 летние'),
+(current_date - 1,'LIST_GBA','GBA02280810','KGS','old','old'),
+-- The same SecCode in another class has its own names.
+(current_date,'REPO_GBA','GBA02280810','USD','РЕПО','РЕПО ГКО'),
+(current_date - 1,'LIST_GBA','KG0105166315','KGS','Акции','Акции (вчера)');
+CREATE TABLE public."Classes" ("TradeDate" timestamp,"ClassCode" varchar,"ClassName" varchar);
+INSERT INTO public."Classes" VALUES (current_date,'LIST_GBA','Листинг ГБА'),(current_date - 1,'LIST_GBA','old'),(current_date,'REPO_GBA','РЕПО');`)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _, _ = pool.Exec(ctx, `DROP TABLE public."Params"`) })
+	t.Cleanup(func() { _, _ = pool.Exec(ctx, `DROP TABLE public."Params"; DROP TABLE public."Securities"; DROP TABLE public."Classes"`) })
 	readOnly, err := db.ConnectReadOnly(ctx, dsn)
 	if err != nil {
 		t.Fatal(err)
@@ -139,15 +148,22 @@ LATERAL (SELECT (now() AT TIME ZONE 'Asia/Bishkek')::date - ago AS d) x;`)
 		!bytes.Contains(page.Params[0].Raw, []byte(`"NumTrades":9007199254740993`)) || !bytes.Contains(page.Params[0].Raw, []byte(`"LongName":"Облигации ГБА"`)) {
 		t.Fatalf("row not verbatim: %s", page.Params[0].Raw)
 	}
+	// Names follow the stored row, matched by ClassCode and SecCode, latest TradeDate.
+	if !bytes.HasSuffix(page.Params[0].Raw, []byte(`"Status":"торгуется","FaceUnit":"KGS","SecShortName":"ГКО-2","SecFullName":"ГКО-2 летние","ClassName":"Листинг ГБА"}`)) {
+		t.Fatalf("names not appended: %s", page.Params[0].Raw)
+	}
 	page, err = s.ListParams(ctx, ParamFilter{ClassCode: "LIST_GBA", SecCode: "KG0105166315"})
 	if err != nil || len(page.Params) != 1 || page.HasMore {
 		t.Fatal(page, err)
+	}
+	if !bytes.Contains(page.Params[0].Raw, []byte(`"SecFullName":"Акции (вчера)","ClassName":"Листинг ГБА"`)) {
+		t.Fatalf("earlier reference row not used: %s", page.Params[0].Raw)
 	}
 	if page, err := s.ListParams(ctx, ParamFilter{}); err != nil || len(page.Params) != 3 {
 		t.Fatal("earlier TradeDate rows listed", page, err)
 	}
 	p, err := s.GetParam(ctx, "TQBR", "SBER")
-	if err != nil || !bytes.Contains(p.Raw, []byte(`"Status":null`)) {
+	if err != nil || !bytes.Contains(p.Raw, []byte(`"Status":null,"FaceUnit":null,"SecShortName":null,"SecFullName":null,"ClassName":null}`)) {
 		t.Fatal(string(p.Raw), err)
 	}
 	if _, err := s.GetParam(ctx, "TQBR", "GAZP"); !errors.Is(err, ErrParamNotFound) {

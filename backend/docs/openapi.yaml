@@ -397,7 +397,10 @@ paths:
         column names, numbers as JSON numbers with source precision, strings and nulls.
         No fields are added, renamed or computed; market data is not firm-scoped.
         Only rows of the current trading day are returned: TradeDate equals today's
-        date in Bishkek (UTC+6); rows of earlier days are history.
+        date in Bishkek (UTC+6); rows of earlier days are history. Each row ends with
+        FaceUnit, SecShortName and SecFullName from Securities (matched by ClassCode and
+        SecCode) and ClassName from Classes (by ClassCode), as stored; null without a
+        reference row.
         board and symbol filter the ClassCode and SecCode columns; order is ClassCode,
         SecCode. Paging is in X-Has-More and X-Next-Offset. An unavailable source
         returns HTTP 503 with Retry-After; FIX quotes are never substituted.

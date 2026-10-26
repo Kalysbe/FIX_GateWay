@@ -55,6 +55,24 @@ INSERT INTO public."Params" VALUES
   ('LIST_GBA', 'GBA02280810', 'Local simulator bond', current_date, 'торгуется', 99.5, 100.5, 100, 99.5, 101, 99, 3, 1500, 150000),
   ('LISTEDSTOCKK', 'KG0105166315', 'Local simulator share', current_date, 'торгуется', NULL, 400, 400, 400, 400, 400, 1, 1, 400)
 ON CONFLICT DO NOTHING;
+-- Instrument and class names that the Gateway appends to Params rows.
+CREATE TABLE IF NOT EXISTS public."Securities" (
+  "TradeDate" timestamp NOT NULL, "ClassCode" text NOT NULL, "SecCode" text NOT NULL,
+  "FaceUnit" text, "SecShortName" text, "SecFullName" text,
+  PRIMARY KEY ("TradeDate", "ClassCode", "SecCode")
+);
+INSERT INTO public."Securities" VALUES
+  (current_date, 'LIST_GBA', 'GBA02280810', 'KGS', 'Local bond', 'Local simulator bond'),
+  (current_date, 'LISTEDSTOCKK', 'KG0105166315', 'KGS', 'Local share', 'Local simulator share')
+ON CONFLICT DO NOTHING;
+CREATE TABLE IF NOT EXISTS public."Classes" (
+  "TradeDate" timestamp NOT NULL, "ClassCode" text NOT NULL, "ClassName" text,
+  PRIMARY KEY ("TradeDate", "ClassCode")
+);
+INSERT INTO public."Classes" VALUES
+  (current_date, 'LIST_GBA', 'Local bonds'),
+  (current_date, 'LISTEDSTOCKK', 'Local shares')
+ON CONFLICT DO NOTHING;
 -- Trading accounts and firms the local scripts trade with (QUIK column names).
 CREATE TABLE IF NOT EXISTS public."Firms" (
   "Exchange" text, "FirmId" text NOT NULL, "FirmName" text, "Status" text, "StatusFlag" integer,
@@ -77,8 +95,8 @@ FROM (VALUES ('SMOKE', 'SIM'), ('RELIABILITY', 'SIM'), ('RECOVERY', 'SIM'), ('CA
 ON CONFLICT DO NOTHING;
 REVOKE ALL ON public."Orders" FROM PUBLIC;
 REVOKE ALL ON public."Firms", public."Trdaccs" FROM PUBLIC;
-REVOKE ALL ON public."Params" FROM PUBLIC;
+REVOKE ALL ON public."Params", public."Securities", public."Classes" FROM PUBLIC;
 GRANT CONNECT ON DATABASE quik_export_local TO quik_sim_writer, quik_reader;
 GRANT USAGE ON SCHEMA public TO quik_sim_writer, quik_reader;
 GRANT SELECT, INSERT, UPDATE ON public."Orders" TO quik_sim_writer;
-GRANT SELECT ON public."Orders", public."Params", public."Firms", public."Trdaccs" TO quik_reader;
+GRANT SELECT ON public."Orders", public."Params", public."Securities", public."Classes", public."Firms", public."Trdaccs" TO quik_reader;

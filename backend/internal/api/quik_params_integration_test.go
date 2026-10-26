@@ -47,14 +47,20 @@ func TestQUIKParamsHTTPRowsAsStored(t *testing.T) {
 	_, err = pool.Exec(ctx, `CREATE TABLE public."Params" ("ClassCode" text,"SecCode" text,"Last" numeric,"Bid" numeric,"FirmId" text,"TradeDate" timestamp);
 INSERT INTO public."Params" SELECT c, s, l, b, f, (now() AT TIME ZONE 'Asia/Bishkek')::date - ago FROM (VALUES
 ('LIST_GBA','GBA02280810',123.4567890123456789,NULL::numeric,'9999',0),('TQBR','SBER',1,1,NULL,0),
-('TQBR','SBER',2,2,NULL,1),('TQBR','GAZP',3,3,NULL,1)) v(c, s, l, b, f, ago);`)
+('TQBR','SBER',2,2,NULL,1),('TQBR','GAZP',3,3,NULL,1)) v(c, s, l, b, f, ago);
+CREATE TABLE public."Securities" ("TradeDate" timestamp,"ClassCode" text,"SecCode" text,"FaceUnit" text,"SecShortName" text,"SecFullName" text);
+INSERT INTO public."Securities" VALUES (current_date,'LIST_GBA','GBA02280810','KGS','ГКО-2','ГКО-2 летние');
+CREATE TABLE public."Classes" ("TradeDate" timestamp,"ClassCode" text,"ClassName" text);
+INSERT INTO public."Classes" VALUES (current_date,'TQBR','Акции');`)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := pool.QueryRow(ctx, `SELECT to_char((now() AT TIME ZONE 'Asia/Bishkek')::date, 'YYYY-MM-DD"T00:00:00"')`).Scan(&today); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _, _ = pool.Exec(ctx, `DROP TABLE public."Params"`) })
+	t.Cleanup(func() {
+		_, _ = pool.Exec(ctx, `DROP TABLE IF EXISTS public."Params"; DROP TABLE public."Securities"; DROP TABLE public."Classes"`)
+	})
 	readOnly, err := db.ConnectReadOnly(ctx, dsn)
 	if err != nil {
 		t.Fatal(err)
@@ -90,8 +96,11 @@ INSERT INTO public."Params" SELECT c, s, l, b, f, (now() AT TIME ZONE 'Asia/Bish
 	s.SetQuikExport(quikexport.NewStore(readOnly))
 	// Market data is not firm-scoped: a FirmId column does not filter rows.
 	// Only rows of the current trading day are served; earlier TradeDate rows are history.
-	gba := `{"ClassCode":"LIST_GBA","SecCode":"GBA02280810","Last":123.4567890123456789,"Bid":null,"FirmId":"9999","TradeDate":"` + today + `"}`
-	sber := `{"ClassCode":"TQBR","SecCode":"SBER","Last":1,"Bid":1,"FirmId":null,"TradeDate":"` + today + `"}`
+	// Instrument names from Securities and the class name from Classes follow the row.
+	gba := `{"ClassCode":"LIST_GBA","SecCode":"GBA02280810","Last":123.4567890123456789,"Bid":null,"FirmId":"9999","TradeDate":"` + today +
+		`","FaceUnit":"KGS","SecShortName":"ГКО-2","SecFullName":"ГКО-2 летние","ClassName":null}`
+	sber := `{"ClassCode":"TQBR","SecCode":"SBER","Last":1,"Bid":1,"FirmId":null,"TradeDate":"` + today +
+		`","FaceUnit":null,"SecShortName":null,"SecFullName":null,"ClassName":"Акции"}`
 	if got, want := call("/api/v1/market-data", 200), "["+gba+","+sber+"]"; got != want {
 		t.Fatalf("rows changed:\n%s\n%s", got, want)
 	}
