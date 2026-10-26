@@ -34,6 +34,11 @@ func (p Param) Key() string {
 	return fieldText(fields["ClassCode"]) + "\x00" + fieldText(fields["SecCode"])
 }
 
+// paramsToday keeps only rows of the current KSE trading day: Params holds a
+// row per instrument and TradeDate, and the QUIK server's own time zone is not
+// the exchange's (UTC+6, Asia/Bishkek).
+const paramsToday = `p."TradeDate"::date=(now() AT TIME ZONE 'Asia/Bishkek')::date`
+
 type ParamFilter struct {
 	// Empty values match any class or instrument.
 	ClassCode string
@@ -59,7 +64,7 @@ func (s *Store) ListParams(ctx context.Context, f ParamFilter) (ParamPage, error
 		limit++
 	}
 	rows, err := s.pool.Query(ctx, `SELECT row_to_json(p) FROM public."Params" p
-WHERE ($1='' OR btrim(p."ClassCode"::text)=$1) AND ($2='' OR btrim(p."SecCode"::text)=$2)
+WHERE `+paramsToday+` AND ($1='' OR btrim(p."ClassCode"::text)=$1) AND ($2='' OR btrim(p."SecCode"::text)=$2)
 ORDER BY p."ClassCode", p."SecCode"
 LIMIT NULLIF($3,0) OFFSET $4`, f.ClassCode, f.SecCode, limit, f.Offset)
 	if err != nil {
@@ -90,7 +95,7 @@ func (s *Store) GetParam(ctx context.Context, classCode, secCode string) (Param,
 	}
 	var raw []byte
 	err := s.pool.QueryRow(ctx, `SELECT row_to_json(p) FROM public."Params" p
-WHERE btrim(p."ClassCode"::text)=$1 AND btrim(p."SecCode"::text)=$2 LIMIT 1`, classCode, secCode).Scan(&raw)
+WHERE `+paramsToday+` AND btrim(p."ClassCode"::text)=$1 AND btrim(p."SecCode"::text)=$2 LIMIT 1`, classCode, secCode).Scan(&raw)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Param{}, ErrParamNotFound
 	}

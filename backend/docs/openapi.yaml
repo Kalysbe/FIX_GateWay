@@ -396,6 +396,8 @@ paths:
         array of quik_export2.public."Params" rows as stored (row_to_json): original
         column names, numbers as JSON numbers with source precision, strings and nulls.
         No fields are added, renamed or computed; market data is not firm-scoped.
+        Only rows of the current trading day are returned: TradeDate equals today's
+        date in Bishkek (UTC+6); rows of earlier days are history.
         board and symbol filter the ClassCode and SecCode columns; order is ClassCode,
         SecCode. Paging is in X-Has-More and X-Next-Offset. An unavailable source
         returns HTTP 503 with Retry-After; FIX quotes are never substituted.

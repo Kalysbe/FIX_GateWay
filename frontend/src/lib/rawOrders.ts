@@ -11,6 +11,13 @@ export function dbValue(value: DBOrder[string] | undefined): string {
   return value == null ? "null" : String(value);
 }
 
+// Display only: an ISO database date or timestamp as dd/mm/yyyy; anything else
+// is shown as stored. Sorting keeps the ISO text, which orders correctly.
+export function dbDateValue(value: DBOrder[string] | undefined): string {
+  const m = typeof value === "string" ? /^(\d{4})-(\d{2})-(\d{2})(?:$|[T ])/.exec(value) : null;
+  return m ? `${m[3]}/${m[2]}/${m[1]}` : dbValue(value);
+}
+
 // Sorting only: decimals that fit a double compare as numbers (the display
 // value stays the source text). Longer integers keep the string, which the
 // table's numeric collator orders correctly digit by digit.

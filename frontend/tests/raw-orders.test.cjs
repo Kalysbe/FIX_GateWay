@@ -7,7 +7,16 @@ const ts = require('typescript');
 const source = ts.transpileModule(readFileSync(resolve(__dirname, '../src/lib/rawOrders.ts'), 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
 const context = { exports: {} };
 vm.runInNewContext(source, context);
-const { parseDBJSON, dbValue, dbSortValue, orderKey, orderRowKey, nextOrderOffset } = context.exports;
+const { parseDBJSON, dbValue, dbDateValue, dbSortValue, orderKey, orderRowKey, nextOrderOffset } = context.exports;
+
+test('database dates display as dd/mm/yyyy, other values as stored', () => {
+  assert.equal(dbDateValue('2026-10-26T00:00:00'), '26/10/2026');
+  assert.equal(dbDateValue('2026-07-08'), '08/07/2026');
+  assert.equal(dbDateValue('2026-07-08 00:00:00'), '08/07/2026');
+  assert.equal(dbDateValue('26-10-2026'), '26-10-2026');
+  assert.equal(dbDateValue('2026-10-261'), '2026-10-261');
+  assert.equal(dbDateValue(null), 'null');
+});
 
 test('rows without a full Orders key get no key collision and no link', () => {
   const a = { OrderNum: '1', ClassCode: null, TradeDate: '2026-10-22T00:00:00' };

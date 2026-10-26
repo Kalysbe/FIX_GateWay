@@ -112,11 +112,15 @@ func TestQUIKParamsVerbatimFiltersAndPaging(t *testing.T) {
 	}
 	// char(n) columns, as QUIK exports often use, are matched after trimming.
 	_, err = pool.Exec(ctx, `CREATE TABLE public."Params" (
-"ClassCode" char(12),"SecCode" char(12),"LongName" text,"Last" numeric,"Bid" numeric,"NumTrades" numeric(19,0),"TradeDate" date,"Status" text);
-INSERT INTO public."Params" VALUES
-('LIST_GBA','GBA02280810','Облигации ГБА',123.4567890123456789,NULL,9007199254740993,'2026-10-26','торгуется'),
-('LIST_GBA','KG0105166315','Акции',10.10,10.00,5,'2026-10-26','торгуется'),
-('TQBR','SBER','Сбербанк',1,NULL,1,'2026-10-26',NULL);`)
+"ClassCode" char(12),"SecCode" char(12),"LongName" text,"Last" numeric,"Bid" numeric,"NumTrades" numeric(19,0),"TradeDate" timestamp,"Status" text);
+INSERT INTO public."Params" SELECT c, s, n, l, b, t, d, st FROM (VALUES
+('LIST_GBA','GBA02280810','Облигации ГБА',123.4567890123456789,NULL::numeric,9007199254740993,0,'торгуется'),
+('LIST_GBA','KG0105166315','Акции',10.10,10.00,5,0,'торгуется'),
+('TQBR','SBER','Сбербанк',1,NULL,1,0,NULL),
+-- Earlier trading days of the same instruments are history, not current trades.
+('TQBR','SBER','Сбербанк',2,NULL,2,1,'вчера'),
+('TQBR','GAZP','Газпром',3,NULL,3,1,NULL)) v(c, s, n, l, b, t, ago, st),
+LATERAL (SELECT (now() AT TIME ZONE 'Asia/Bishkek')::date - ago AS d) x;`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -138,6 +142,9 @@ INSERT INTO public."Params" VALUES
 	page, err = s.ListParams(ctx, ParamFilter{ClassCode: "LIST_GBA", SecCode: "KG0105166315"})
 	if err != nil || len(page.Params) != 1 || page.HasMore {
 		t.Fatal(page, err)
+	}
+	if page, err := s.ListParams(ctx, ParamFilter{}); err != nil || len(page.Params) != 3 {
+		t.Fatal("earlier TradeDate rows listed", page, err)
 	}
 	p, err := s.GetParam(ctx, "TQBR", "SBER")
 	if err != nil || !bytes.Contains(p.Raw, []byte(`"Status":null`)) {

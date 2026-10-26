@@ -43,9 +43,15 @@ func TestQUIKParamsHTTPRowsAsStored(t *testing.T) {
 	if err := migrate.Up(dsn, "../../migrations"); err != nil {
 		t.Fatal(err)
 	}
-	_, err = pool.Exec(ctx, `CREATE TABLE public."Params" ("ClassCode" text,"SecCode" text,"Last" numeric,"Bid" numeric,"FirmId" text);
-INSERT INTO public."Params" VALUES ('LIST_GBA','GBA02280810',123.4567890123456789,NULL,'9999'),('TQBR','SBER',1,1,NULL);`)
+	var today string
+	_, err = pool.Exec(ctx, `CREATE TABLE public."Params" ("ClassCode" text,"SecCode" text,"Last" numeric,"Bid" numeric,"FirmId" text,"TradeDate" timestamp);
+INSERT INTO public."Params" SELECT c, s, l, b, f, (now() AT TIME ZONE 'Asia/Bishkek')::date - ago FROM (VALUES
+('LIST_GBA','GBA02280810',123.4567890123456789,NULL::numeric,'9999',0),('TQBR','SBER',1,1,NULL,0),
+('TQBR','SBER',2,2,NULL,1),('TQBR','GAZP',3,3,NULL,1)) v(c, s, l, b, f, ago);`)
 	if err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT to_char((now() AT TIME ZONE 'Asia/Bishkek')::date, 'YYYY-MM-DD"T00:00:00"')`).Scan(&today); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _, _ = pool.Exec(ctx, `DROP TABLE public."Params"`) })
@@ -83,14 +89,16 @@ INSERT INTO public."Params" VALUES ('LIST_GBA','GBA02280810',123.456789012345678
 	call("/api/v1/market-data", 503)
 	s.SetQuikExport(quikexport.NewStore(readOnly))
 	// Market data is not firm-scoped: a FirmId column does not filter rows.
-	want := `[{"ClassCode":"LIST_GBA","SecCode":"GBA02280810","Last":123.4567890123456789,"Bid":null,"FirmId":"9999"},{"ClassCode":"TQBR","SecCode":"SBER","Last":1,"Bid":1,"FirmId":null}]`
-	if got := call("/api/v1/market-data", 200); got != want {
+	// Only rows of the current trading day are served; earlier TradeDate rows are history.
+	gba := `{"ClassCode":"LIST_GBA","SecCode":"GBA02280810","Last":123.4567890123456789,"Bid":null,"FirmId":"9999","TradeDate":"` + today + `"}`
+	sber := `{"ClassCode":"TQBR","SecCode":"SBER","Last":1,"Bid":1,"FirmId":null,"TradeDate":"` + today + `"}`
+	if got, want := call("/api/v1/market-data", 200), "["+gba+","+sber+"]"; got != want {
 		t.Fatalf("rows changed:\n%s\n%s", got, want)
 	}
-	if got := call("/api/v1/market-data?board=TQBR", 200); got != `[{"ClassCode":"TQBR","SecCode":"SBER","Last":1,"Bid":1,"FirmId":null}]` {
+	if got := call("/api/v1/market-data?board=TQBR", 200); got != "["+sber+"]" {
 		t.Fatal(got)
 	}
-	if got := call("/api/v1/market-data/LIST_GBA/GBA02280810", 200); got != `{"ClassCode":"LIST_GBA","SecCode":"GBA02280810","Last":123.4567890123456789,"Bid":null,"FirmId":"9999"}` {
+	if got := call("/api/v1/market-data/LIST_GBA/GBA02280810", 200); got != gba {
 		t.Fatal(got)
 	}
 	call("/api/v1/market-data/TQBR/GAZP", 404)
