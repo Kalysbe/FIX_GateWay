@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { apiWithHeaders } from "../api";
 import { liveRefetchInterval } from "../lib/poll";
@@ -8,6 +9,7 @@ import { PageHeader } from "../components/PageHeader";
 import { ErrorBanner } from "../components/feedback";
 import { DataTable, type TableColumn } from "../components/DataTable";
 import { MarketClassesSettings } from "../components/MarketClassesSettings";
+import { instrumentPath } from "../lib/quotes";
 
 // Today's rows of QUIK quik_export2.public."Params" of the chosen classes with
 // instrument and class names; the server selects the columns. Column names
@@ -47,7 +49,10 @@ export default function MarketDataPage() {
   const filtered = board ? rows.filter(r => dbValue(r.ClassCode) === board) : rows;
   const columns: TableColumn<ParamRow>[] = fields.map(field => ({
     id: field, header: field, value: r => dbSortValue(r[field]), exportValue: r => dbValue(r[field]),
-    cell: r => <span className="whitespace-pre-wrap">{dbValue(r[field])}</span>,
+    // Each instrument has its own page with all of its market data.
+    cell: r => field === "SecCode" && r.ClassCode != null && r.SecCode != null
+      ? <Link className="whitespace-pre-wrap text-accent" to={instrumentPath(r.ClassCode, r.SecCode)}>{dbValue(r[field])}</Link>
+      : <span className="whitespace-pre-wrap">{dbValue(r[field])}</span>,
   }));
   return <div className="raw-orders space-y-4">
     <PageHeader title="Текущие торги" subtitle="Инструменты выбранных классов QUIK за сегодняшний торговый день: Params, Securities и Classes" />

@@ -16,6 +16,7 @@ import (
 type quikParamReader interface {
 	ListParams(context.Context, quikexport.ParamFilter) (quikexport.ParamPage, error)
 	GetParam(context.Context, string, string) (quikexport.Param, error)
+	GetParamDetails(context.Context, string, string) (quikexport.ParamDetails, error)
 }
 
 func (s *Server) writeParamReadError(w http.ResponseWriter, err error) {
@@ -61,6 +62,36 @@ func (s *Server) listMarketData(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Has-More", strconv.FormatBool(page.HasMore))
 	w.Header().Set("X-Next-Offset", strconv.Itoa(page.NextOffset))
 	writeQuikJSON(w, page.Params)
+}
+
+// getMarketInstrument is the admin page of one current-trades instrument: all
+// of its QUIK market data (whole Params, Securities and Classes rows) and its
+// quotes, the Orders rows in state "Активна", every row as stored.
+func (s *Server) getMarketInstrument(w http.ResponseWriter, r *http.Request) {
+	board, symbol := strings.TrimSpace(r.PathValue("board")), strings.TrimSpace(r.PathValue("symbol"))
+	if board == "" || symbol == "" {
+		writeErr(w, http.StatusBadRequest, "board and symbol are required")
+		return
+	}
+	if s.quikParams == nil || s.quikOrders == nil {
+		s.writeParamReadError(w, quikexport.ErrNotConfigured)
+		return
+	}
+	details, err := s.quikParams.GetParamDetails(r.Context(), board, symbol)
+	if err != nil {
+		s.writeParamReadError(w, err)
+		return
+	}
+	quotes, err := s.quikOrders.ListOrders(r.Context(), quikexport.OrderFilter{State: quikActiveState, ClassCode: board, SecCode: symbol, Limit: 1000})
+	if err != nil {
+		s.writeParamReadError(w, err)
+		return
+	}
+	writeQuikJSON(w, struct {
+		quikexport.ParamDetails
+		Quotes        []quikexport.Order `json:"quotes"`
+		QuotesHasMore bool               `json:"quotes_has_more"`
+	}{details, quotes.Orders, quotes.HasMore})
 }
 
 // The served QUIK classes are an administrator setting (LISTBND until changed).

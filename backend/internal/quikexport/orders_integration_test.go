@@ -182,6 +182,19 @@ INSERT INTO public."Classes" VALUES (current_date,'LIST_GBA','Листинг Г�
 		t.Fatal("settings failure served unfiltered rows")
 	}
 	s.SetParamClasses(nil)
+	// The instrument page ignores the served classes and keeps every stored column.
+	d, err := s.GetParamDetails(ctx, "LIST_GBA", "GBA02280810")
+	if err != nil || !bytes.Contains(d.Params.Raw, []byte(`"last":123.45`)) || !bytes.Contains(d.Params.Raw, []byte(`"couponvalue":7`)) ||
+		d.Security == nil || !bytes.Contains(d.Security.Raw, []byte(`"ISINCode":"KG1"`)) || !bytes.Contains(d.Security.Raw, []byte(`"SecShortName":"ГКО-2"`)) ||
+		d.Class == nil || !bytes.Contains(d.Class.Raw, []byte(`"ClassName":"Листинг ГБА"`)) {
+		t.Fatal(d, err)
+	}
+	if d, err := s.GetParamDetails(ctx, "TQBR", "SBER"); err != nil || d.Security != nil || d.Class != nil {
+		t.Fatal("missing reference rows", d, err)
+	}
+	if _, err := s.GetParamDetails(ctx, "TQBR", "GAZP"); !errors.Is(err, ErrParamNotFound) {
+		t.Fatal("yesterday's instrument has a page", err)
+	}
 	list, err := s.ListClasses(ctx)
 	if err != nil || len(list) != 2 || string(list[0].Raw) != `{"ClassCode":"LIST_GBA","ClassName":"Листинг ГБА"}` {
 		t.Fatal(list, err)

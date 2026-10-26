@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -148,6 +149,50 @@ AND btrim(p."ClassCode"::text)=$2 AND btrim(p."SecCode"::text)=$3 LIMIT 1) r`, c
 	}
 	return Param{Raw: raw}, nil
 }
+
+// ParamDetails is everything QUIK holds on one instrument of today's current
+// trades, every row as stored: its whole Params row, its Securities row
+// (ClassCode and SecCode, latest TradeDate) and its Classes row. Missing
+// reference rows stay null.
+type ParamDetails struct {
+	Params   Row  `json:"params"`
+	Security *Row `json:"security"`
+	Class    *Row `json:"class"`
+}
+
+// GetParamDetails does not apply the served-class setting: it is the admin
+// view of any instrument QUIK trades today.
+func (s *Store) GetParamDetails(ctx context.Context, classCode, secCode string) (ParamDetails, error) {
+	classCode, secCode = strings.TrimSpace(classCode), strings.TrimSpace(secCode)
+	params, err := s.row(ctx, ErrParamNotFound, `SELECT row_to_json(p) FROM public."Params" p
+WHERE `+paramsToday+` AND btrim(p."ClassCode"::text)=$1 AND btrim(p."SecCode"::text)=$2 LIMIT 1`, classCode, secCode)
+	if err != nil {
+		return ParamDetails{}, err
+	}
+	out := ParamDetails{Params: params}
+	if out.Security, err = s.optionalRow(ctx, `SELECT row_to_json(s) FROM public."Securities" s
+WHERE btrim(s."ClassCode"::text)=$1 AND btrim(s."SecCode"::text)=$2 ORDER BY s."TradeDate" DESC LIMIT 1`, classCode, secCode); err != nil {
+		return ParamDetails{}, err
+	}
+	if out.Class, err = s.optionalRow(ctx, `SELECT row_to_json(c) FROM public."Classes" c
+WHERE btrim(c."ClassCode"::text)=$1 ORDER BY c."TradeDate" DESC LIMIT 1`, classCode); err != nil {
+		return ParamDetails{}, err
+	}
+	return out, nil
+}
+
+func (s *Store) optionalRow(ctx context.Context, query string, args ...any) (*Row, error) {
+	row, err := s.row(ctx, errNoRow, query, args...)
+	if errors.Is(err, errNoRow) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &row, nil
+}
+
+var errNoRow = errors.New("no row")
 
 type ParamChange struct {
 	Param   Param

@@ -99,6 +99,18 @@ func (s *Server) listQuikOrders(w http.ResponseWriter, r *http.Request, admin bo
 }
 
 func (s *Server) listQuikOrdersInState(w http.ResponseWriter, r *http.Request, admin bool, state string) {
+	s.listQuikOrdersMatching(w, r, admin, quikexport.OrderFilter{State: state})
+}
+
+// listAdminQuotes serves the quotes of the admin "Котировки" page: QUIK
+// Orders rows still in the book (State = "Активна") of every firm, as stored.
+// board and symbol narrow them to one instrument.
+func (s *Server) listAdminQuotes(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	s.listQuikOrdersMatching(w, r, true, quikexport.OrderFilter{State: quikActiveState, ClassCode: q.Get("board"), SecCode: q.Get("symbol")})
+}
+
+func (s *Server) listQuikOrdersMatching(w http.ResponseWriter, r *http.Request, admin bool, filter quikexport.OrderFilter) {
 	firm, _, err := s.orderReadScope(r, admin)
 	if err != nil {
 		s.writeOrderReadError(w, err)
@@ -123,7 +135,8 @@ func (s *Server) listQuikOrdersInState(w http.ResponseWriter, r *http.Request, a
 		s.writeOrderReadError(w, quikexport.ErrNotConfigured)
 		return
 	}
-	page, err := s.quikOrders.ListOrders(r.Context(), quikexport.OrderFilter{Firm: firm, State: state, Limit: limit, Offset: offset})
+	filter.Firm, filter.Limit, filter.Offset = firm, limit, offset
+	page, err := s.quikOrders.ListOrders(r.Context(), filter)
 	if err != nil {
 		s.writeOrderReadError(w, err)
 		return

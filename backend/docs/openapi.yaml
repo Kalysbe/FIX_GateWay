@@ -1466,6 +1466,61 @@ paths:
                 $ref: "#/components/schemas/MarketDataRow"
         "404":
           description: Instrument not present today or its class is not chosen
+  /api/v1/admin/market-data/{board}/{symbol}/details:
+    get:
+      tags: [Admin]
+      summary: All QUIK market data of one current-trades instrument
+      description: |
+        The whole quik_export2.public."Params" row of today (Bishkek, UTC+6) for the
+        ClassCode and SecCode, its Securities row (latest TradeDate) and Classes row,
+        and its quotes — Orders rows in state "Активна" of every firm (up to 1000) —
+        every row as stored. Not limited to the served classes. Missing reference rows
+        are null.
+      security:
+        - bearerAuth: []
+      parameters:
+        - {in: path, name: board, required: true, schema: {type: string}, description: ClassCode}
+        - {in: path, name: symbol, required: true, schema: {type: string}, description: SecCode}
+      responses:
+        "200":
+          description: Instrument data
+          content:
+            application/json:
+              example:
+                params: {ClassCode: LISTBND, SecCode: GBA02270915, TradeDate: "2026-10-26T00:00:00", last: 100.5, status: торгуется}
+                security: {ClassCode: LISTBND, SecCode: GBA02270915, CouponValue: 2.5, FaceUnit: KGS, SecShortName: "ГКО-2 летние (GBA02270915)"}
+                class: {ClassCode: LISTBND, ClassName: "Листинговые:облигации"}
+                quotes: [{OrderNum: 7412, ClassCode: LISTBND, SecCode: GBA02270915, FirmId: SENTI2004, Operation: Купля, State: Активна, Price: 100, Qty: 10, Balance: 10}]
+                quotes_has_more: false
+        "404":
+          description: Instrument not present in today's Params
+        "503":
+          description: QUIK source unavailable
+  /api/v1/admin/quotes:
+    get:
+      tags: [Admin]
+      summary: Quotes — active QUIK orders
+      description: |
+        Rows of quik_export2.public."Orders" with State = "Активна" of every firm, as
+        stored, read by the gateway from the QUIK export database. Order is TradeDate
+        and OrderNum descending; paging is in X-Has-More and X-Next-Offset.
+      security:
+        - bearerAuth: []
+      parameters:
+        - {in: query, name: board, schema: {type: string}, description: ClassCode}
+        - {in: query, name: symbol, schema: {type: string}, description: SecCode}
+        - {in: query, name: limit, schema: {type: integer, minimum: 1, maximum: 1000, default: 200}}
+        - {in: query, name: offset, schema: {type: integer, minimum: 0, maximum: 10000000, default: 0}}
+      responses:
+        "200":
+          description: Active Orders rows
+          content:
+            application/json:
+              example: [{OrderNum: 7412, ClassCode: LISTBND, TradeDate: "2026-10-26T00:00:00", SecCode: GBA02270915, FirmId: SENTI2004, Operation: Купля, State: Активна, Qty: 10, Balance: 10, Price: 100}]
+        "400":
+          description: Invalid limit or offset
+        "503":
+          description: QUIK Orders source unavailable
   /api/v1/admin/market-data/settings:
     get:
       tags: [Admin]
@@ -1562,7 +1617,8 @@ paths:
       summary: Active QUIK quotes (orders)
       description: |
         Proxies `GET {base_url}/api/quotes` from the internal QUIK Module API.
-        Returns only active orders (`State = "Активна"`).
+        Returns only active orders (`State = "Активна"`). The admin "Котировки" page
+        no longer uses it: quotes are read from the QUIK database, see /api/v1/admin/quotes.
         Fields: operation, order_num, class_code, sec_code, price, value, qty.
         Optional query filters are forwarded upstream.
       security:

@@ -19,9 +19,12 @@ const raw = load('lib/rawOrders.ts');
 
 function renderPage(text, error = null) {
   const rows = raw.parseDBJSON(text);
+  const router = { Link: ({ to, className, children }) => React.createElement('a', { href: to, className }, children) };
   const imports = {
     react: React,
     'react/jsx-runtime': require('react/jsx-runtime'),
+    'react-router-dom': router,
+    '../lib/quotes': load('lib/quotes.tsx', { 'react/jsx-runtime': require('react/jsx-runtime'), 'react-router-dom': router, './rawOrders': raw }),
     '@tanstack/react-query': { useQuery: () => ({ data: error ? undefined : rows, error, isLoading: false, isFetching: false, refetch() {} }) },
     '../api': { apiWithHeaders: () => { throw Error('unexpected network request'); } },
     '../lib/poll': { liveRefetchInterval: () => 2000 },
@@ -45,6 +48,8 @@ test('Params rows render with database column names and unrounded values', () =>
   assert.match(html, />9007199254740993</);
   assert.match(html, />null</);
   assert.match(html, /class-settings/);
+  // Each instrument links to its own page with all of its market data.
+  assert.match(html, /<a href="\/market-data\/LISTBND\/GBA02270915" class="whitespace-pre-wrap text-accent">GBA02270915<\/a>/);
   assert.match(html, /<option value="LISTBND">LISTBND<\/option><option value="TQBR">TQBR<\/option>/);
   assert.doesNotMatch(html, /Подписка|FIX|Стакан/);
 });

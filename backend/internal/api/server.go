@@ -251,6 +251,8 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/v1/admin/positions/sync", s.adminOps(s.syncPositionsFIX))
 	mux.Handle("GET /api/v1/admin/market-data", s.adminRO(s.listMarketData))
 	mux.Handle("GET /api/v1/admin/market-data/{board}/{symbol}", s.adminRO(s.getMarketData))
+	mux.Handle("GET /api/v1/admin/market-data/{board}/{symbol}/details", s.adminRO(s.getMarketInstrument))
+	mux.Handle("GET /api/v1/admin/quotes", s.adminRO(s.listAdminQuotes))
 	mux.Handle("GET /api/v1/admin/market-data/settings", s.adminRO(s.getMarketDataSettings))
 	mux.Handle("PATCH /api/v1/admin/market-data/settings", s.adminOps(s.patchMarketDataSettings))
 	mux.Handle("GET /api/v1/admin/classes", s.adminRO(s.listQuikClasses))

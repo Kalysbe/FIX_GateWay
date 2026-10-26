@@ -18,6 +18,7 @@ import OrderDetailPage from "./pages/OrderDetailPage";
 import TradesPage from "./pages/TradesPage";
 import TradeDetailPage from "./pages/TradeDetailPage";
 import MarketDataPage from "./pages/MarketDataPage";
+import MarketInstrumentPage from "./pages/MarketInstrumentPage";
 import QuotesPage from "./pages/QuotesPage";
 import PositionsPage from "./pages/PositionsPage";
 import AdaptersPage from "./pages/AdaptersPage";
@@ -77,6 +78,7 @@ export default function App() {
         <Route path="/trades" element={<TradesPage />} />
         <Route path="/trades/:id" element={<TradeDetailPage />} />
         <Route path="/market-data" element={<MarketDataPage />} />
+        <Route path="/market-data/:board/:symbol" element={<MarketInstrumentPage />} />
         <Route path="/quotes" element={<QuotesPage />} />
         <Route path="/positions" element={<PositionsPage />} />
         <Route path="/adapters" element={<AdaptersPage />} />

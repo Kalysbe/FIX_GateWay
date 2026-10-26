@@ -37,7 +37,19 @@
 `GET /api/v1/admin/classes`. Если настройку прочитать нельзя, строки не
 отдаются (503), а не отдаются без фильтра.
 
-Строка определяется парой `ClassCode` + `SecCode`.
+Строка определяется парой `ClassCode` + `SecCode`. У каждого инструмента в
+админке есть своя страница (`/market-data/{ClassCode}/{SecCode}`, ссылка из
+колонки `SecCode`): все колонки его строки `Params` за сегодня, строки
+`Securities` и `Classes` целиком и его котировки. Страница не ограничена
+выбранными классами.
+
+Котировки (страница «Котировки» и раздел страницы инструмента) Gateway
+читает сам из `public."Orders"` той же БД: только строки с `State` =
+`Активна`, всех фирм, в исходном виде. QUIK Module API (`/api/quotes`) для
+котировок больше не используется; его адрес нужен только для истории сделок.
+Таблица `Orders` должна выгружаться QUIK актуально: если выгрузка
+остановилась, в котировках останутся заявки, «Активные» на момент последней
+выгрузки.
 
 | Метод | Ответ |
 |---|---|
@@ -46,6 +58,8 @@
 | `GET /api/v1/admin/market-data`, `GET /api/v1/admin/market-data/{board}/{symbol}` | То же для админки |
 | `GET`/`PATCH /api/v1/admin/market-data/settings` | Выбранные классы |
 | `GET /api/v1/admin/classes` | `ClassCode` и `ClassName` из QUIK `Classes` |
+| `GET /api/v1/admin/market-data/{board}/{symbol}/details` | Страница инструмента: вся строка `Params` за сегодня, строки `Securities` и `Classes`, котировки |
+| `GET /api/v1/admin/quotes` | Котировки: строки `Orders` с `State` = `Активна` всех фирм |
 | gRPC/SSE `marketdata.tick` | Одна изменённая строка на событие |
 
 `board` и `symbol` фильтруют `ClassCode` и `SecCode` (с обрезкой пробелов

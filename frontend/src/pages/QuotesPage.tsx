@@ -1,29 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { api, getSessionUser } from "../api";
+import { api, apiWithHeaders, getSessionUser } from "../api";
 import { liveRefetchInterval } from "../lib/poll";
+import { dbValue, nextOrderOffset, orderRowKey, parseDBJSON, type DBOrder } from "../lib/rawOrders";
+import { isBuy, quoteColumns } from "../lib/quotes";
 import { useToast } from "../components/Toast";
 import { PageHeader } from "../components/PageHeader";
 import { ErrorBanner } from "../components/feedback";
-import { DataTable, type TableColumn } from "../components/DataTable";
-import { numberValue } from "../lib/table";
-
-type QuikQuote = {
-  operation: string;
-  order_num: string;
-  class_code: string;
-  sec_code: string;
-  price: string;
-  value: string;
-  qty: string;
-};
-
-type QuotesResp = {
-  source?: string;
-  base_url?: string;
-  count: number;
-  quotes: QuikQuote[];
-};
+import { DataTable } from "../components/DataTable";
 
 type SettingsResp = {
   base_url: string;
@@ -31,24 +15,24 @@ type SettingsResp = {
 };
 
 const WRITE_ROLES = new Set(["SUPER_ADMIN", "ADMIN", "OPERATOR"]);
+const PAGE = 1000;
+// Bounds a runaway source; a real order book is far smaller.
+const MAX_ROWS = 20000;
 
 function canEditURL(role?: string | null): boolean {
   return WRITE_ROLES.has((role || "").toUpperCase());
 }
 
-function fmt(v: string | number | null | undefined, digits = 2): string {
-  if (v == null || v === "") return "—";
-  const n = Number(v);
-  if (!Number.isFinite(n)) return String(v);
-  return n.toLocaleString("ru-RU", {
-    minimumFractionDigits: 0,
-    maximumFractionDigits: digits,
-  });
-}
-
-function isBuy(op: string): boolean {
-  const s = (op || "").toLowerCase();
-  return s === "buy" || s.includes("купл");
+// Quotes are QUIK Orders rows still in the book (State = "Активна"), read by
+// the gateway from the QUIK export database.
+async function loadQuotes(signal: AbortSignal): Promise<DBOrder[]> {
+  const rows: DBOrder[] = [];
+  for (let offset: number | null = 0; offset != null && rows.length < MAX_ROWS;) {
+    const { data, headers } = await apiWithHeaders<DBOrder[]>(`/api/v1/admin/quotes?limit=${PAGE}&offset=${offset}`, { signal }, parseDBJSON);
+    rows.push(...(data ?? []));
+    offset = nextOrderOffset(headers);
+  }
+  return rows;
 }
 
 export default function QuotesPage() {
@@ -66,8 +50,8 @@ export default function QuotesPage() {
   });
 
   const quotesQ = useQuery({
-    queryKey: ["quik-api-quotes"],
-    queryFn: ({ signal }) => api<QuotesResp>("/api/v1/admin/quik-api/quotes", { signal }),
+    queryKey: ["admin-quotes"],
+    queryFn: ({ signal }) => loadQuotes(signal),
     refetchInterval: liveRefetchInterval(false, 5000, 8000),
   });
 
@@ -88,64 +72,36 @@ export default function QuotesPage() {
       setTouched(false);
       toast.push("Адрес QUIK API сохранён", "ok");
       qc.invalidateQueries({ queryKey: ["quik-api-settings"] });
-      qc.invalidateQueries({ queryKey: ["quik-api-quotes"] });
     },
     onError: (err) => toast.push(err instanceof Error ? err.message : "Не удалось сохранить адрес"),
   });
 
-  const quotes = quotesQ.data?.quotes || [];
-  const classOptions = useMemo(() => {
-    const set = new Set<string>();
-    quotes.forEach((r) => {
-      if (r.class_code) set.add(r.class_code);
-    });
-    return Array.from(set).sort();
-  }, [quotes]);
-
-  const filtered = useMemo(() => {
-    return quotes.filter((r) => {
-      if (opFilter && r.operation !== opFilter) return false;
-      if (classFilter && r.class_code !== classFilter) return false;
-      return true;
-    });
-  }, [quotes, opFilter, classFilter]);
-
-  const operations = useMemo(() => {
-    const set = new Set<string>();
-    quotes.forEach((r) => {
-      if (r.operation) set.add(r.operation);
-    });
-    return Array.from(set);
-  }, [quotes]);
-
-  const columns: TableColumn<QuikQuote>[] = [
-    { id: "operation", header: "Операция", value: r => r.operation, cell: r => <span className={isBuy(r.operation) ? "badge-success" : "badge-danger"}>{r.operation || "—"}</span> },
-    { id: "number", header: "№ заявки", value: r => r.order_num, className: "font-mono" },
-    { id: "class", header: "Класс", value: r => r.class_code, className: "font-mono" },
-    { id: "symbol", header: "Инструмент", value: r => r.sec_code, className: "font-mono font-medium" },
-    { id: "price", header: "Цена", value: r => numberValue(r.price), cell: r => fmt(r.price), numeric: true },
-    { id: "value", header: "Сумма", value: r => numberValue(r.value), cell: r => fmt(r.value), numeric: true },
-    { id: "quantity", header: "Количество", value: r => numberValue(r.qty), cell: r => fmt(r.qty, 0), numeric: true },
-  ];
+  const quotes = quotesQ.data ?? [];
+  const classOptions = useMemo(() => Array.from(new Set(quotes.map(r => dbValue(r.ClassCode)).filter(v => v !== "null"))).sort(), [quotes]);
+  const operations = useMemo(() => Array.from(new Set(quotes.map(r => dbValue(r.Operation)).filter(v => v !== "null"))), [quotes]);
+  const filtered = useMemo(() => quotes.filter(r =>
+    (!opFilter || dbValue(r.Operation) === opFilter) && (!classFilter || dbValue(r.ClassCode) === classFilter)), [quotes, opFilter, classFilter]);
+  const columns = quoteColumns();
 
   return (
     <div className="space-y-4">
       <PageHeader
         title="Котировки"
-        subtitle="Активные заявки QUIK Module · GET /api/quotes"
+        subtitle="Активные заявки QUIK · таблица Orders, State = «Активна»"
         actions={
-          <div className="flex flex-wrap gap-2 text-xs">
-            <div className="rounded-lg border border-line bg-panel px-3 py-1.5 text-ink">
-              <span className="mr-2 text-slate-500">Источник</span>
-              <span className="font-mono">{quotesQ.data?.base_url || settingsQ.data?.base_url || "—"}</span>
-            </div>
-            <div className="rounded-lg border border-line bg-panel px-3 py-1.5 text-ink">
-              <span className="mr-2 text-slate-500">Строк</span>
-              <span className="font-mono font-semibold">{filtered.length}</span>
-            </div>
+          <div className="rounded-lg border border-line bg-panel px-3 py-1.5 text-xs text-ink">
+            <span className="mr-2 text-slate-500">Строк</span>
+            <span className="font-mono font-semibold">{filtered.length}</span>
           </div>
         }
       />
+
+      {quotesQ.isError && <ErrorBanner error={quotesQ.error} onRetry={() => void quotesQ.refetch()} />}
+      <DataTable title="Котировки QUIK" rows={quotesQ.isError ? [] : filtered} columns={columns} rowKey={orderRowKey} loading={quotesQ.isLoading} resetKey={opFilter + ":" + classFilter} exportName="quotes" onRefresh={() => void quotesQ.refetch()} refreshing={quotesQ.isFetching} searchPlaceholder="Номер заявки, фирма, класс, инструмент…" emptyTitle={quotesQ.isError ? "Таблица Orders недоступна" : "Нет активных заявок"} getSearchText={r => [r.OrderNum, r.FirmId, r.ClassCode, r.SecCode, r.Operation].map(dbValue).join(" ")} filters={<>
+        <select className="input w-auto" aria-label="Операция" value={opFilter} onChange={e => setOpFilter(e.target.value)}><option value="">Все операции</option>{operations.map(op => <option key={op} value={op}>{op}</option>)}</select>
+        <select className="input w-auto" aria-label="Класс котировки" value={classFilter} onChange={e => setClassFilter(e.target.value)}><option value="">Все классы</option>{classOptions.map(c => <option key={c} value={c}>{c}</option>)}</select>
+        {(opFilter || classFilter) && <button className="btn-muted" onClick={() => { setOpFilter(""); setClassFilter(""); }}>Сбросить</button>}
+      </>} summary={rows => [{ label: "Заявок", value: rows.length }, { label: "Покупка", value: rows.filter(r => isBuy(r.Operation)).length, tone: "success" }, { label: "Продажа", value: rows.filter(r => !isBuy(r.Operation)).length }, { label: "Инструментов", value: new Set(rows.map(r => dbValue(r.ClassCode) + ":" + dbValue(r.SecCode))).size }]} />
 
       <div className="card space-y-3">
         <form
@@ -156,7 +112,7 @@ export default function QuotesPage() {
           }}
         >
           <label className="min-w-[280px] flex-1">
-            <div className="mb-1 text-[12px] font-medium text-muted">Адрес внутреннего API</div>
+            <div className="mb-1 text-[12px] font-medium text-muted">Адрес QUIK API (история сделок)</div>
             <input
               className="input font-mono"
               placeholder="http://192.168.0.89:5000"
@@ -173,27 +129,12 @@ export default function QuotesPage() {
               {save.isPending ? "Сохранение…" : "Сохранить"}
             </button>
           ) : null}
-          <button
-            type="button"
-            className="btn-muted"
-            onClick={() => void quotesQ.refetch()}
-          >
-            Обновить
-          </button>
         </form>
         <p className="text-[12px] text-muted">
-          Хост меняется — достаточно <span className="font-mono">http://192.168.0.89</span> или с портом{" "}
-          <span className="font-mono">http://192.168.0.89:5000</span>. Шлюз сам запросит{" "}
-          <span className="font-mono">/api/quotes</span>.
+          Котировки читаются из БД QUIK. Этот адрес используется только для загрузки истории сделок; достаточно{" "}
+          <span className="font-mono">http://192.168.0.89</span> или с портом <span className="font-mono">http://192.168.0.89:5000</span>.
         </p>
       </div>
-
-      {quotesQ.isError && <ErrorBanner error={quotesQ.error} onRetry={() => void quotesQ.refetch()} />}
-      <DataTable title="Котировки QUIK" rows={filtered} columns={columns} rowKey={r => [r.order_num, r.sec_code, r.class_code].join("|")} loading={quotesQ.isLoading} resetKey={opFilter + ":" + classFilter} exportName="quotes" onRefresh={() => void quotesQ.refetch()} refreshing={quotesQ.isFetching} searchPlaceholder="Номер заявки, класс, инструмент…" emptyTitle="Нет активных котировок" emptyHint="Проверьте подключение к внутреннему API" filters={<>
-        <select className="input w-auto" aria-label="Операция" value={opFilter} onChange={e => setOpFilter(e.target.value)}><option value="">Все операции</option>{operations.map(op => <option key={op} value={op}>{op}</option>)}</select>
-        <select className="input w-auto" aria-label="Класс котировки" value={classFilter} onChange={e => setClassFilter(e.target.value)}><option value="">Все классы</option>{classOptions.map(c => <option key={c} value={c}>{c}</option>)}</select>
-        {(opFilter || classFilter) && <button className="btn-muted" onClick={() => { setOpFilter(""); setClassFilter(""); }}>Сбросить</button>}
-      </>} summary={rows => [{ label: "Заявок", value: rows.length }, { label: "Покупка", value: rows.filter(r => isBuy(r.operation)).length, tone: "success" }, { label: "Продажа", value: rows.filter(r => !isBuy(r.operation)).length }, { label: "Инструментов", value: new Set(rows.map(r => r.class_code + ":" + r.sec_code)).size }]} />
     </div>
   );
 }
