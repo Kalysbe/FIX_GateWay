@@ -387,7 +387,7 @@ paths:
   /api/v1/market-data:
     get:
       tags: [Broker]
-      summary: Current trades — rows of QUIK Params
+      summary: Current trades — instruments of the chosen QUIK classes
       x-grpc-event: marketdata.tick
       security:
         - bearerAuth: []
@@ -411,7 +411,7 @@ paths:
         - {in: query, name: offset, schema: {type: integer, minimum: 0, maximum: 10000000, default: 0}}
       responses:
         "200":
-          description: Params rows
+          description: Current-trades instruments
           content:
             application/json:
               schema:
@@ -431,7 +431,7 @@ paths:
   /api/v1/market-data/{board}/{symbol}:
     get:
       tags: [Broker]
-      summary: One Params row by ClassCode and SecCode
+      summary: One current-trades instrument by ClassCode and SecCode
       security:
         - bearerAuth: []
       parameters:
@@ -439,13 +439,13 @@ paths:
         - {in: path, name: symbol, required: true, schema: {type: string}, description: SecCode}
       responses:
         "200":
-          description: Params row
+          description: Instrument
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/MarketDataRow"
         "404":
-          description: Instrument not present in Params
+          description: Instrument not present today or its class is not chosen
         "503":
           description: Params source unavailable
   /api/v1/orderbook:
@@ -1428,7 +1428,7 @@ paths:
   /api/v1/admin/market-data:
     get:
       tags: [Admin]
-      summary: Current trades — rows of QUIK Params
+      summary: Current trades — instruments of the chosen QUIK classes
       description: Same rows, filters and paging as GET /api/v1/market-data. The FIX market data subscription keeps running in the gateway but is not exposed here.
       security:
         - bearerAuth: []
@@ -1439,13 +1439,19 @@ paths:
         - {in: query, name: offset, schema: {type: integer, minimum: 0, maximum: 10000000, default: 0}}
       responses:
         "200":
-          description: Params rows
+          description: Current-trades instruments
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/MarketDataRow"
         "503":
           description: Params source unavailable
   /api/v1/admin/market-data/{board}/{symbol}:
     get:
       tags: [Admin]
-      summary: One Params row by ClassCode and SecCode
+      summary: One current-trades instrument by ClassCode and SecCode
       security:
         - bearerAuth: []
       parameters:
@@ -1453,9 +1459,13 @@ paths:
         - {in: path, name: symbol, required: true, schema: {type: string}}
       responses:
         "200":
-          description: Params row
+          description: Instrument
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MarketDataRow"
         "404":
-          description: Instrument not present in Params
+          description: Instrument not present today or its class is not chosen
   /api/v1/admin/market-data/settings:
     get:
       tags: [Admin]
@@ -2107,10 +2117,17 @@ components:
     MarketDataRow:
       type: object
       additionalProperties: true
-      description: A quik_export2.public."Params" row as stored; columns are defined by QUIK.
+      description: A current-trades instrument from QUIK Params, Securities and Classes, values as stored.
       properties:
-        ClassCode: {type: string}
-        SecCode: {type: string}
+        ClassCode: {type: string, description: Params.ClassCode}
+        SecCode: {type: string, description: Params.SecCode}
+        CouponValue: {type: number, nullable: true, description: Securities.CouponValue}
+        status: {type: string, nullable: true, description: Params.status}
+        FaceUnit: {type: string, nullable: true, description: Securities.FaceUnit}
+        SecShortName: {type: string, nullable: true, description: Securities.SecShortName}
+        SecFullName: {type: string, nullable: true, description: Securities.SecFullName}
+        ClassName: {type: string, nullable: true, description: Classes.ClassName}
+      example: {ClassCode: LISTBND, SecCode: GBA02270915, CouponValue: 2.5, status: торгуется, FaceUnit: KGS, SecShortName: "ГКО-2 летние (GBA02270915)", SecFullName: "ГКО-2 летние (GBA02270915)", ClassName: "Листинговые:облигации"}
     AdminTokenMetadata:
       type: object
       description: API token metadata; full credentials and storage hashes are excluded

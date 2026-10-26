@@ -105,7 +105,7 @@ paths:
   /api/v1/market-data:
     get:
       tags: [Рыночные данные]
-      summary: Текущие торги — строки таблицы QUIK Params
+      summary: Текущие торги — инструменты выбранных классов QUIK
       x-grpc-event: marketdata.tick
       security:
         - bearerAuth: []
@@ -129,17 +129,17 @@ paths:
           name: board
           schema: {type: string}
           description: Значение колонки ClassCode
-          example: LIST_GBA
+          example: LISTBND
         - in: query
           name: symbol
           schema: {type: string}
           description: Значение колонки SecCode
-          example: GBA02280810
+          example: GBA02270915
         - {in: query, name: limit, schema: {type: integer, minimum: 1, maximum: 5000, default: 1000}}
         - {in: query, name: offset, schema: {type: integer, minimum: 0, maximum: 10000000, default: 0}}
       responses:
         "200":
-          description: Строки Params
+          description: Инструменты текущих торгов
           headers:
             X-Has-More: {schema: {type: boolean}}
             X-Next-Offset: {schema: {type: integer}}
@@ -149,6 +149,8 @@ paths:
                 type: array
                 items:
                   $ref: "#/components/schemas/MarketDataRow"
+              example:
+                - {ClassCode: LISTBND, SecCode: GBA02270915, CouponValue: 2.5, status: торгуется, FaceUnit: KGS, SecShortName: "ГКО-2 летние (GBA02270915)", SecFullName: "ГКО-2 летние (GBA02270915)", ClassName: "Листинговые:облигации"}
         "400":
           description: Неверные limit/offset
         "401":
@@ -162,16 +164,16 @@ paths:
   /api/v1/market-data/{board}/{symbol}:
     get:
       tags: [Рыночные данные]
-      summary: Одна строка Params по ClassCode и SecCode
+      summary: Один инструмент текущих торгов по ClassCode и SecCode
       security:
         - bearerAuth: []
-      description: Требует `orders:read`. Возвращает исходную строку или 404, если её нет в текущей таблице.
+      description: Требует `orders:read`. Возвращает строку того же вида, что и список, или 404, если инструмента нет за сегодня или его класс не выбран администратором.
       parameters:
         - {in: path, name: board, required: true, schema: {type: string}, description: ClassCode}
         - {in: path, name: symbol, required: true, schema: {type: string}, description: SecCode}
       responses:
         "200":
-          description: Строка Params
+          description: Инструмент
           content:
             application/json:
               schema:
@@ -181,7 +183,7 @@ paths:
         "403":
           description: Нет права orders:read или IP не в whitelist
         "404":
-          description: Инструмента нет в Params
+          description: Инструмента нет за сегодня или класс не выбран
         "503":
           description: Источник Params недоступен
   /api/v1/orderbook:
@@ -876,12 +878,12 @@ components:
       properties:
         ClassCode: {type: string, description: Params.ClassCode}
         SecCode: {type: string, description: Params.SecCode}
-        CouponValue: {type: [number, "null"], description: Securities.CouponValue}
-        status: {type: [string, "null"], description: Params.status}
-        FaceUnit: {type: [string, "null"], description: Securities.FaceUnit}
-        SecShortName: {type: [string, "null"], description: Securities.SecShortName}
-        SecFullName: {type: [string, "null"], description: Securities.SecFullName}
-        ClassName: {type: [string, "null"], description: Classes.ClassName}
+        CouponValue: {type: number, nullable: true, description: Securities.CouponValue}
+        status: {type: string, nullable: true, description: Params.status}
+        FaceUnit: {type: string, nullable: true, description: Securities.FaceUnit}
+        SecShortName: {type: string, nullable: true, description: Securities.SecShortName}
+        SecFullName: {type: string, nullable: true, description: Securities.SecFullName}
+        ClassName: {type: string, nullable: true, description: Classes.ClassName}
     OrderBook:
       type: object
       properties:

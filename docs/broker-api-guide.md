@@ -177,12 +177,16 @@ gRPC не отправляет начальный список сделок.
 
 | REST / gRPC | Назначение | Возвращаемые данные |
 |---|---|---|
-| `GET /api/v1/market-data` | Текущие торги | JSON-массив строк таблицы QUIK `Params` как есть; при недоступности источника — HTTP 503 |
-| `GET /api/v1/market-data/{board}/{symbol}` | Один инструмент | Строка `Params` по `ClassCode` и `SecCode`; 404, если её нет |
+| `GET /api/v1/market-data` | Текущие торги | JSON-массив инструментов (8 полей, см. ниже); при недоступности источника — HTTP 503 |
+| `GET /api/v1/market-data/{board}/{symbol}` | Один инструмент | Строка по `ClassCode` и `SecCode`; 404, если её нет за сегодня или класс не выбран |
 | `GET /api/v1/orderbook` | Стаканы: спрос и предложение рынка (FIX) | `{source: "live", live, books: [OrderBook]}`; без доступных данных — `live: false`, `books: []`, `note` |
 | gRPC `marketdata.tick` | Изменения строк `Params` | `event.data_json` — исходная строка, `event.removed` — строка исчезла |
 
-Строки `Params` передаются в исходном виде (`row_to_json`): имена колонок QUIK, числа JSON-числами с исходной точностью, строки и `null`. Шлюз не добавляет и не переименовывает поля. Разбирайте JSON с сохранением точности чисел. Рыночные данные общие для всех брокеров.
+Строка содержит только поля `ClassCode`, `SecCode`, `CouponValue`, `status`, `FaceUnit`, `SecShortName`, `SecFullName`, `ClassName` — из таблиц QUIK `Params`, `Securities` (по `ClassCode` + `SecCode`) и `Classes`, значения в исходном виде: числа JSON-числами с исходной точностью, строки и `null`. Разбирайте JSON с сохранением точности чисел. Отдаются только инструменты текущего торгового дня (по Бишкеку, UTC+6) из классов, выбранных администратором шлюза (по умолчанию `LISTBND`). Рыночные данные общие для всех брокеров.
+
+```json
+{"ClassCode":"LISTBND","SecCode":"GBA02270915","CouponValue":2.500000,"status":"торгуется","FaceUnit":"KGS","SecShortName":"ГКО-2 летние (GBA02270915)","SecFullName":"ГКО-2 летние (GBA02270915)","ClassName":"Листинговые:облигации"}
+```
 
 REST-фильтры: `?board=<ClassCode>&symbol=<SecCode>`, оба необязательны; `limit` (1–5000, по умолчанию 1000) и `offset`, продолжение — в заголовках `X-Has-More` и `X-Next-Offset`. Если источник недоступен, ответ — HTTP 503 с `{"error":"market data unavailable"}` и `Retry-After`; пустая успешная выборка — `[]`.
 
@@ -193,6 +197,8 @@ REST-фильтры: `?board=<ClassCode>&symbol=<SecCode>`, оба необяз�
 ### Изменение контракта 26.10.2026
 
 `GET /api/v1/market-data` и gRPC `marketdata.tick` переведены с FIX Market Data на таблицу QUIK `Params`. Вместо `{quotes: [MarketQuote]}` REST возвращает массив исходных строк; в gRPC строка передаётся в `data_json`, без `quotes`, `live` и `replace`, и начальный снимок при подписке больше не приходит. Фильтры `board`/`symbol` относятся к `ClassCode`/`SecCode`. Стакан `/api/v1/orderbook` не изменился.
+
+В тот же день строка сокращена до 8 полей (`ClassCode`, `SecCode`, `CouponValue`, `status`, `FaceUnit`, `SecShortName`, `SecFullName`, `ClassName`); остальные колонки `Params`, включая `TradeDate`, больше не передаются. Отдаются только строки сегодняшнего торгового дня из классов, выбранных администратором (по умолчанию `LISTBND`).
 
 ## Позиции
 

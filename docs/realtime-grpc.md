@@ -13,7 +13,7 @@ The gRPC runtime is pinned to stable v1.83.2, which includes the [GO-2026-6443 f
 
 Events: `obs.event`, `notification.new`, `order.updated`, `trade.created`, `positions.updated`, `marketdata.tick`, `adapter.status_changed`. `obs.event` requires an audit-authorized role; READ_ONLY cannot receive it. Unknown event types default to denied.
 
-`marketdata.tick` carries one changed row of the QUIK `Params` table verbatim in `data_json` (`data` is empty; `removed=true` marks a row that disappeared), the same for brokers and admins. See [market data](market-data.md).
+`marketdata.tick` carries one changed current-trades row (ClassCode, SecCode, CouponValue, status, FaceUnit, SecShortName, SecFullName, ClassName from QUIK `Params`/`Securities`/`Classes`, values as stored; today's rows of the administrator-chosen classes) in `data_json` (`data` is empty; `removed=true` marks a row that disappeared), the same for brokers and admins. See [market data](market-data.md).
 
 Limits: incoming message 16 KiB, outgoing message 8 MiB, 128 concurrent streams per connection, 1,024 active subscriptions, queue 64 events per subscription. Slow consumers disconnect instead of blocking producers; sends have a five-second deadline. Server sends heartbeat pong every 20 seconds. There is no replay or resume guarantee. Refresh REST state after reconnect; sequence is global and role filtering can create gaps.
 

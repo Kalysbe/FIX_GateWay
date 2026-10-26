@@ -58,7 +58,7 @@ Unix timestamp, nonce, `POST`, полный RPC-путь выше, пустое 
 - `order.updated` → `GET /api/v1/orders` и `GET /api/v1/orders/{id}` (`orders:read`).
 - `trade.created` → `GET /api/v1/trades` (`trades:read`).
 - `positions.updated` → `GET /api/v1/positions` (`positions:read`).
-- `marketdata.tick` → `GET /api/v1/market-data` и `GET /api/v1/market-data/{board}/{symbol}` (`orders:read`), строки QUIK `Params` в `data_json`.
+- `marketdata.tick` → `GET /api/v1/market-data` и `GET /api/v1/market-data/{board}/{symbol}` (`orders:read`), строка текущих торгов (8 полей из QUIK `Params`/`Securities`/`Classes`) в `data_json`.
 
 Успешный рыночный REST-снимок содержит только `quotes`.
 Поля котировки совпадают с gRPC: стакан, цены OHLC, средневзвешенная цена,
