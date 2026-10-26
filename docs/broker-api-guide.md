@@ -206,11 +206,6 @@ REST-фильтры: `?board=<ClassCode>&symbol=<SecCode>`, оба необяз�
 |---|---|---|---|
 | `GET /api/v1/positions` | Последние позиции своей фирмы | `{source, firm_id, cash: [Position], instruments: [Position]}`; при наличии — `snapshot`, `note` | `positions:read` |
 | gRPC `positions.updated` | Получать полные снимки позиций своей фирмы | `event.data = {source: "fix", firm_id, cash, instruments}`; без `snapshot` и `raw_fix` | `positions:read` |
-| `PUT /api/v1/positions` | Установить деньги и/или бумаги в QUIK | `200`, `PositionWriteResult` | `positions:write` |
-| `PUT /api/v1/positions/cash` | Установить одну денежную позицию | `200`, `PositionWriteResult` | `positions:write` |
-| `PUT /api/v1/positions/instruments` | Установить одну позицию по бумаге | `200`, `PositionWriteResult` | `positions:write` |
-| `DELETE /api/v1/positions/cash` | Удалить денежную позицию в QUIK | `200`, `PositionWriteResult` | `positions:write` |
-| `DELETE /api/v1/positions/instruments` | Удалить позицию по бумаге в QUIK | `200`, `PositionWriteResult` | `positions:write` |
 
 `cash` — деньги; `instruments` — бумаги и фьючерсы. REST `source`: `fix`, `manual` или `mixed`. gRPC отправляет полный снимок после `ready` и при обновлениях. Каждый снимок полностью заменяет оба массива. При отсутствии позиций массивы пустые. REST-фильтров по клиенту или инструменту нет.
 
@@ -230,33 +225,6 @@ REST-фильтры: `?board=<ClassCode>&symbol=<SecCode>`, оба необяз�
 | `source`, `raw_fix` | Источник строки и исходный FIX; необязательны; `raw_fix` доступен только в REST |
 
 `snapshot` в REST: `id`, `adapter_id`, `pos_req_id`, `clearing_date`, `requested_at`, `completed_at`, `status`, `error`, `report_count`. Содержит служебные данные синхронизации; `completed_at` и `error` необязательны. `snapshot` отсутствует, если снимка нет.
-
-### Установка и удаление позиций
-
-| Метод | Входные данные |
-|---|---|
-| `PUT /api/v1/positions` | JSON: `client_code`, необязательный `account_code`, массивы `cash` и/или `instruments`; хотя бы один непустой. Клиент и счёт наследуются элементами, если не заданы в них |
-| `PUT /api/v1/positions/cash` | JSON: обязательные `client_code`, `currency`, `amount`; необязательные `account_code`, `tag`, `open_bal`, `limit`, `locked` |
-| `PUT /api/v1/positions/instruments` | JSON: обязательные `client_code`, `symbol` и `quantity` либо `long_qty` / `short_qty`; необязательные `account_code`, `security_id`, `board`, `currency`, `settl_price` |
-| `DELETE /api/v1/positions/cash` | Query: обязательные `client_code`, `currency`; необязательные `account_code`, `tag` |
-| `DELETE /api/v1/positions/instruments` | Query: обязательные `client_code`, `symbol`; необязательные `account_code`, `board` |
-
-`firm_id` необязателен для всех операций: по умолчанию используется код брокера; можно указать только свою фирму.
-
-Деньги: `amount` — текущий остаток; `open_bal` по умолчанию равен `amount`; `limit` и `locked` — `0`; `tag` — `EQTV`. Бумаги: `security_id` по умолчанию равен `symbol`; `quantity = long_qty - short_qty`; `long_qty` и `short_qty` ≥ 0. Элементы пакетного запроса используют те же поля.
-
-```json
-{
-  "client_code": "006",
-  "account_code": "1-3101-006",
-  "cash": [{"currency": "KGS", "amount": "1500000"}],
-  "instruments": [{"symbol": "KG0105166315", "board": "LISTEDSTOCKK", "quantity": "100"}]
-}
-```
-
-`PositionWriteResult`: `{ok: true, source: "fix", firm_id, adapter_id, pos_req_id, result}`. `result` содержит `source`, `cash`, `instruments` и при наличии `snapshot`; `firm_id` находится на верхнем уровне ответа.
-
-`ok: true` означает принятие изменения QUIK. Обновление снимка выполняется после изменения; если оно не удалось, `result` может содержать прежние данные. Актуальные позиции доступны через GET или следующий gRPC-снимок.
 
 ## gRPC: команды и сообщения
 

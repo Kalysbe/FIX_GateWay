@@ -6,7 +6,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/fix-gateway/backend/internal/audit"
 	"github.com/fix-gateway/backend/internal/brokers"
 	"github.com/fix-gateway/backend/internal/domain"
 	"github.com/fix-gateway/backend/internal/positions"
@@ -50,47 +49,15 @@ type setPositionsBody struct {
 	Instruments []setInstrumentBody `json:"instruments"`
 }
 
-func (s *Server) setBrokerPositions(w http.ResponseWriter, r *http.Request) {
-	s.handleSetPositions(w, r, false)
-}
-
-func (s *Server) setAdminPositions(w http.ResponseWriter, r *http.Request) {
-	s.handleSetPositions(w, r, true)
-}
-
-func (s *Server) setBrokerCash(w http.ResponseWriter, r *http.Request) {
-	s.handleSetCash(w, r, false)
-}
-
-func (s *Server) setAdminCash(w http.ResponseWriter, r *http.Request) {
-	s.handleSetCash(w, r, true)
-}
-
-func (s *Server) setBrokerInstrument(w http.ResponseWriter, r *http.Request) {
-	s.handleSetInstrument(w, r, false)
-}
-
-func (s *Server) setAdminInstrument(w http.ResponseWriter, r *http.Request) {
-	s.handleSetInstrument(w, r, true)
-}
-
-func (s *Server) deleteBrokerCash(w http.ResponseWriter, r *http.Request) {
-	s.handleDeleteOverride(w, r, false, "CASH")
-}
-
 func (s *Server) deleteAdminCash(w http.ResponseWriter, r *http.Request) {
-	s.handleDeleteOverride(w, r, true, "CASH")
-}
-
-func (s *Server) deleteBrokerInstrument(w http.ResponseWriter, r *http.Request) {
-	s.handleDeleteOverride(w, r, false, "INSTRUMENT")
+	s.handleDeleteOverride(w, r, "CASH")
 }
 
 func (s *Server) deleteAdminInstrument(w http.ResponseWriter, r *http.Request) {
-	s.handleDeleteOverride(w, r, true, "INSTRUMENT")
+	s.handleDeleteOverride(w, r, "INSTRUMENT")
 }
 
-func (s *Server) handleSetPositions(w http.ResponseWriter, r *http.Request, admin bool) {
+func (s *Server) setAdminPositions(w http.ResponseWriter, r *http.Request) {
 	var req setPositionsBody
 	if err := decodeJSONBody(r, &req); err != nil {
 		writeErrDetails(w, http.StatusBadRequest, "invalid request body", err.Error())
@@ -100,7 +67,7 @@ func (s *Server) handleSetPositions(w http.ResponseWriter, r *http.Request, admi
 		writeErr(w, http.StatusBadRequest, "укажите cash и/или instruments")
 		return
 	}
-	firm, brokerID, err := s.resolveSetFirm(r, admin, req.FirmID, req.BrokerID)
+	firm, brokerID, err := s.resolveSetFirm(r, req.FirmID, req.BrokerID)
 	if err != nil {
 		s.writePositionErr(w, err)
 		return
@@ -117,10 +84,10 @@ func (s *Server) handleSetPositions(w http.ResponseWriter, r *http.Request, admi
 	for _, it := range req.Instruments {
 		instrIn = append(instrIn, instrumentFromBody(it, firm, req.ClientCode, req.AccountCode, ""))
 	}
-	s.sendPositionMaintenance(w, r, admin, firm, brokerID, firstNonEmpty(req.ClientCode, firstCashClient(cashIn), firstInstrClient(instrIn)), firstNonEmpty(req.AccountCode, firstCashAccount(cashIn), firstInstrAccount(instrIn)), cashIn, instrIn, "1", "2")
+	s.sendPositionMaintenance(w, r, firm, brokerID, firstNonEmpty(req.ClientCode, firstCashClient(cashIn), firstInstrClient(instrIn)), firstNonEmpty(req.AccountCode, firstCashAccount(cashIn), firstInstrAccount(instrIn)), cashIn, instrIn, "1", "2")
 }
 
-func (s *Server) handleSetCash(w http.ResponseWriter, r *http.Request, admin bool) {
+func (s *Server) setAdminCash(w http.ResponseWriter, r *http.Request) {
 	var req setCashBody
 	if err := decodeJSONBody(r, &req); err != nil {
 		writeErrDetails(w, http.StatusBadRequest, "invalid request body", err.Error())
@@ -130,31 +97,31 @@ func (s *Server) handleSetCash(w http.ResponseWriter, r *http.Request, admin boo
 		s.writePositionErr(w, err)
 		return
 	}
-	firm, brokerID, err := s.resolveSetFirm(r, admin, req.FirmID, req.BrokerID)
+	firm, brokerID, err := s.resolveSetFirm(r, req.FirmID, req.BrokerID)
 	if err != nil {
 		s.writePositionErr(w, err)
 		return
 	}
 	in := cashFromBody(req, firm, "", "", "")
-	s.sendPositionMaintenance(w, r, admin, firm, brokerID, in.ClientCode, in.AccountCode, []positions.CashSet{in}, nil, "1", "2")
+	s.sendPositionMaintenance(w, r, firm, brokerID, in.ClientCode, in.AccountCode, []positions.CashSet{in}, nil, "1", "2")
 }
 
-func (s *Server) handleSetInstrument(w http.ResponseWriter, r *http.Request, admin bool) {
+func (s *Server) setAdminInstrument(w http.ResponseWriter, r *http.Request) {
 	var req setInstrumentBody
 	if err := decodeJSONBody(r, &req); err != nil {
 		writeErrDetails(w, http.StatusBadRequest, "invalid request body", err.Error())
 		return
 	}
-	firm, brokerID, err := s.resolveSetFirm(r, admin, req.FirmID, req.BrokerID)
+	firm, brokerID, err := s.resolveSetFirm(r, req.FirmID, req.BrokerID)
 	if err != nil {
 		s.writePositionErr(w, err)
 		return
 	}
 	in := instrumentFromBody(req, firm, "", "", "")
-	s.sendPositionMaintenance(w, r, admin, firm, brokerID, in.ClientCode, in.AccountCode, nil, []positions.InstrumentSet{in}, "1", "2")
+	s.sendPositionMaintenance(w, r, firm, brokerID, in.ClientCode, in.AccountCode, nil, []positions.InstrumentSet{in}, "1", "2")
 }
 
-func (s *Server) handleDeleteOverride(w http.ResponseWriter, r *http.Request, admin bool, kind string) {
+func (s *Server) handleDeleteOverride(w http.ResponseWriter, r *http.Request, kind string) {
 	q := r.URL.Query()
 	var brokerID *int64
 	if raw := q.Get("broker_id"); raw != "" {
@@ -163,13 +130,10 @@ func (s *Server) handleDeleteOverride(w http.ResponseWriter, r *http.Request, ad
 			brokerID = &id
 		}
 	}
-	firm, bid, err := s.resolveSetFirm(r, admin, q.Get("firm_id"), brokerID)
+	firm, _, err := s.resolveSetFirm(r, q.Get("firm_id"), brokerID)
 	if err != nil {
 		s.writePositionErr(w, err)
 		return
-	}
-	if bid != nil {
-		brokerID = bid
 	}
 	client := strings.TrimSpace(q.Get("client_code"))
 	if client == "" {
@@ -203,10 +167,10 @@ func (s *Server) handleDeleteOverride(w http.ResponseWriter, r *http.Request, ad
 			Symbol: symbol, Board: board, Quantity: &qty,
 		}}
 	}
-	s.sendPositionMaintenance(w, r, admin, firm, brokerID, client, account, cashIn, instrIn, "2", "3")
+	s.sendPositionMaintenance(w, r, firm, brokerID, client, account, cashIn, instrIn, "2", "3")
 }
 
-func (s *Server) sendPositionMaintenance(w http.ResponseWriter, r *http.Request, admin bool, firm string, brokerID *int64, client, account string, cash []positions.CashSet, instr []positions.InstrumentSet, updateAction, maintAction string) {
+func (s *Server) sendPositionMaintenance(w http.ResponseWriter, r *http.Request, firm string, brokerID *int64, client, account string, cash []positions.CashSet, instr []positions.InstrumentSet, updateAction, maintAction string) {
 	blocks, err := positions.BlocksFromSets(cash, instr, updateAction)
 	if err != nil {
 		s.writePositionErr(w, err)
@@ -229,22 +193,7 @@ func (s *Server) sendPositionMaintenance(w http.ResponseWriter, r *http.Request,
 		"firm_id": firm, "client_code": client, "adapter_id": adapterID, "pos_req_id": reqID,
 		"blocks": len(blocks), "action": maintAction,
 	}
-	if admin {
-		s.writeAdminAudit(r, "POSITION_SET_FIX", "position", firm, brokerID, nil, auditAfter)
-	} else {
-		// Broker 35=AL changes QUIK limits, so it needs a durable audit row, not only HTTP logs.
-		actorID := ""
-		if tok, ok := TokenFromContext(r.Context()); ok {
-			actorID = tok.ID.String()
-		}
-		ip, _ := s.clientIP(r)
-		auditAfter["blocks_detail"] = blocks
-		_ = s.audit.Write(r.Context(), audit.Entry{
-			ActorType: "broker", ActorID: actorID, BrokerID: brokerID,
-			Action: "POSITION_SET_FIX", EntityType: "position", EntityID: firm, IP: ip,
-			AdapterID: adapterID, RequestPayload: auditAfter, Result: "ok",
-		})
-	}
+	s.writeAdminAudit(r, "POSITION_SET_FIX", "position", firm, brokerID, nil, auditAfter)
 	s.hub.Broadcast("positions.updated", map[string]any{
 		"source": "fix", "firm_id": firm, "adapter_id": adapterID, "pos_req_id": reqID,
 	})
@@ -318,54 +267,23 @@ func instrumentFromBody(it setInstrumentBody, firm, parentClient, parentAccount,
 	}
 }
 
-func (s *Server) resolveSetFirm(r *http.Request, admin bool, firmID string, brokerID *int64) (string, *int64, error) {
+func (s *Server) resolveSetFirm(r *http.Request, firmID string, brokerID *int64) (string, *int64, error) {
 	firmID = strings.TrimSpace(firmID)
-	if admin {
-		if firmID == "" && brokerID != nil {
-			b, err := s.brokers.GetBroker(r.Context(), *brokerID)
-			if err != nil {
-				if errors.Is(err, brokers.ErrNotFound) {
-					return "", brokerID, invalidError("брокер не найден")
-				}
-				return "", brokerID, err
+	if firmID == "" && brokerID != nil {
+		b, err := s.brokers.GetBroker(r.Context(), *brokerID)
+		if err != nil {
+			if errors.Is(err, brokers.ErrNotFound) {
+				return "", brokerID, invalidError("брокер не найден")
 			}
-			firmID = strings.TrimSpace(b.Code)
+			return "", brokerID, err
 		}
-		if firmID == "" {
-			return "", brokerID, invalidError("firm_id или broker_id обязателен")
-		}
-		return firmID, brokerID, nil
+		firmID = strings.TrimSpace(b.Code)
 	}
-	b, _ := BrokerFromContext(r.Context())
-	tok, _ := TokenFromContext(r.Context())
-	allowed := positions.NormalizeFirmIDs(b.Code, tok.QuikFirm)
-	if len(allowed) == 0 {
-		return "", &b.ID, invalidError("у брокера не задан код фирмы")
+	if firmID == "" {
+		return "", brokerID, invalidError("firm_id или broker_id обязателен")
 	}
-	if firmID != "" {
-		ok := false
-		for _, f := range allowed {
-			if strings.EqualFold(f, firmID) {
-				ok = true
-				break
-			}
-		}
-		if !ok {
-			return "", &b.ID, errForbiddenFirm
-		}
-		return firmID, &b.ID, nil
-	}
-	if strings.TrimSpace(b.Code) != "" {
-		return strings.TrimSpace(b.Code), &b.ID, nil
-	}
-	return allowed[0], &b.ID, nil
+	return firmID, brokerID, nil
 }
-
-var errForbiddenFirm = forbiddenError("firm_id не принадлежит текущему брокеру")
-
-type forbiddenError string
-
-func (e forbiddenError) Error() string { return string(e) }
 
 type invalidAPIError string
 
@@ -378,15 +296,9 @@ func (s *Server) writePositionErr(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, positions.ErrNotFound):
 		writeErr(w, http.StatusNotFound, err.Error())
-	case errors.Is(err, errForbiddenFirm):
-		writeErr(w, http.StatusForbidden, err.Error())
 	case errors.Is(err, positions.ErrInvalid):
 		writeErr(w, http.StatusBadRequest, err.Error())
 	default:
-		if _, ok := err.(forbiddenError); ok {
-			writeErr(w, http.StatusForbidden, err.Error())
-			return
-		}
 		if _, ok := err.(invalidAPIError); ok {
 			writeErr(w, http.StatusBadRequest, err.Error())
 			return

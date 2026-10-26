@@ -14,9 +14,6 @@ import (
 func (s *Server) SetAdmission(store *ratelimit.Store) { s.ratePolicies = store }
 func rateOperation(r *http.Request) (string, string) {
 	path := r.URL.Path
-	if strings.HasPrefix(path, "/api/v1/positions") && r.Method != http.MethodGet {
-		return "Trading", "MaintainPositions"
-	}
 	if tradingRequest(r) {
 		if strings.HasSuffix(path, "/cancel") {
 			return "Trading", "CancelOrder"

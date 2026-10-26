@@ -197,11 +197,6 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/v1/market-data/{board}/{symbol}", s.brokerAuth(s.requirePermission(auth.PermOrdersRead)(http.HandlerFunc(s.getMarketData))))
 	mux.Handle("GET /api/v1/trades", s.brokerAuth(s.requirePermission(auth.PermTradesRead)(http.HandlerFunc(s.listTrades))))
 	mux.Handle("GET /api/v1/positions", s.brokerAuth(s.requirePermission(auth.PermPositionsRead)(http.HandlerFunc(s.listBrokerPositions))))
-	mux.Handle("PUT /api/v1/positions", s.brokerAuth(s.requirePermission(auth.PermPositionsWrite)(http.HandlerFunc(s.setBrokerPositions))))
-	mux.Handle("PUT /api/v1/positions/cash", s.brokerAuth(s.requirePermission(auth.PermPositionsWrite)(http.HandlerFunc(s.setBrokerCash))))
-	mux.Handle("DELETE /api/v1/positions/cash", s.brokerAuth(s.requirePermission(auth.PermPositionsWrite)(http.HandlerFunc(s.deleteBrokerCash))))
-	mux.Handle("PUT /api/v1/positions/instruments", s.brokerAuth(s.requirePermission(auth.PermPositionsWrite)(http.HandlerFunc(s.setBrokerInstrument))))
-	mux.Handle("DELETE /api/v1/positions/instruments", s.brokerAuth(s.requirePermission(auth.PermPositionsWrite)(http.HandlerFunc(s.deleteBrokerInstrument))))
 
 	mux.HandleFunc("POST /api/v1/admin/login", s.adminLogin)
 	mux.Handle("GET /api/v1/admin/dashboard", s.adminRO(s.dashboard))
