@@ -23,7 +23,6 @@ import (
 	"github.com/fix-gateway/backend/internal/config"
 	"github.com/fix-gateway/backend/internal/domain"
 	"github.com/fix-gateway/backend/internal/executioninbox"
-	"github.com/fix-gateway/backend/internal/marketdata"
 	"github.com/fix-gateway/backend/internal/metrics"
 	"github.com/fix-gateway/backend/internal/observability"
 	"github.com/fix-gateway/backend/internal/orders"
@@ -60,9 +59,9 @@ type Server struct {
 	hub                *realtime.Hub
 	refdata            *refdata.Store
 	positions          *positions.Store
-	marketdata         *marketdata.Store
 	quikExport         *quikexport.Store
 	quikOrders         quikOrderReader
+	quikParams         quikParamReader
 	quikAPI            *quikapi.Client
 	obs                *observability.Pipeline
 	realtimeClient     pb.RealtimeServiceClient
@@ -89,7 +88,6 @@ func NewServer(
 		adapters: adapterStore, manager: manager, outbox: outboxStore, audit: auditStore, users: users, hub: hub,
 		refdata:         refdata.NewStore(pool),
 		positions:       positions.NewStore(pool),
-		marketdata:      marketdata.NewStore(pool),
 		tradeLedger:     tradeledger.NewStore(pool),
 		quikAPI:         quikapi.NewClient(quikapi.NewStore(pool, cfg.QuikAPIBaseURL), nil),
 		obs:             obs,
@@ -109,10 +107,10 @@ func (s *Server) SetQuikExport(store *quikexport.Store) {
 	s.quikExport = store
 	// A typed nil *Store in the interface would defeat the `quikOrders == nil` checks.
 	if store == nil {
-		s.quikOrders = nil
+		s.quikOrders, s.quikParams = nil, nil
 		return
 	}
-	s.quikOrders = store
+	s.quikOrders, s.quikParams = store, store
 }
 
 func (s *Server) SetExecutionInbox(in *executioninbox.Inbox, cases *executioninbox.CaseStore) {
@@ -189,7 +187,8 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/v1/firm", s.brokerAuth(s.requirePermission(auth.PermOrdersRead)(http.HandlerFunc(s.getBrokerFirm))))
 	mux.Handle("GET /api/v1/instruments", s.brokerAuth(s.requirePermission(auth.PermOrdersRead)(http.HandlerFunc(s.listInstruments))))
 	mux.Handle("GET /api/v1/orderbook", s.brokerAuth(s.requirePermission(auth.PermOrdersRead)(http.HandlerFunc(s.listBrokerOrderBook))))
-	mux.Handle("GET /api/v1/market-data", s.brokerAuth(s.requirePermission(auth.PermOrdersRead)(http.HandlerFunc(s.listBrokerMarketData))))
+	mux.Handle("GET /api/v1/market-data", s.brokerAuth(s.requirePermission(auth.PermOrdersRead)(http.HandlerFunc(s.listMarketData))))
+	mux.Handle("GET /api/v1/market-data/{board}/{symbol}", s.brokerAuth(s.requirePermission(auth.PermOrdersRead)(http.HandlerFunc(s.getMarketData))))
 	mux.Handle("GET /api/v1/trades", s.brokerAuth(s.requirePermission(auth.PermTradesRead)(http.HandlerFunc(s.listTrades))))
 	mux.Handle("GET /api/v1/positions", s.brokerAuth(s.requirePermission(auth.PermPositionsRead)(http.HandlerFunc(s.listBrokerPositions))))
 	mux.Handle("PUT /api/v1/positions", s.brokerAuth(s.requirePermission(auth.PermPositionsWrite)(http.HandlerFunc(s.setBrokerPositions))))
@@ -246,8 +245,8 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("PUT /api/v1/admin/positions/instruments", s.adminWrite(s.setAdminInstrument))
 	mux.Handle("DELETE /api/v1/admin/positions/instruments", s.adminWrite(s.deleteAdminInstrument))
 	mux.Handle("POST /api/v1/admin/positions/sync", s.adminOps(s.syncPositionsFIX))
-	mux.Handle("GET /api/v1/admin/market-data", s.adminRO(s.listAdminMarketData))
-	mux.Handle("POST /api/v1/admin/market-data/sync", s.adminOps(s.syncMarketDataFIX))
+	mux.Handle("GET /api/v1/admin/market-data", s.adminRO(s.listMarketData))
+	mux.Handle("GET /api/v1/admin/market-data/{board}/{symbol}", s.adminRO(s.getMarketData))
 	mux.Handle("GET /api/v1/admin/quik-api/settings", s.adminRO(s.getQuikAPISettings))
 	mux.Handle("PATCH /api/v1/admin/quik-api/settings", s.adminOps(s.patchQuikAPISettings))
 	mux.Handle("GET /api/v1/admin/quik-api/quotes", s.adminRO(s.listQuikAPIQuotes))
@@ -1379,14 +1378,6 @@ func (s *Server) syncPositionsFIX(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func mapMarketDataResponse(sn marketdata.Snapshot, items []domain.MarketQuote) map[string]any {
-	return map[string]any{
-		"source":   "fix",
-		"snapshot": sn,
-		"quotes":   items,
-	}
-}
-
 func filterQuotes(items []domain.MarketQuote, board, symbol string) []domain.MarketQuote {
 	if board == "" && symbol == "" {
 		return items
@@ -1404,71 +1395,6 @@ func filterQuotes(items []domain.MarketQuote, board, symbol string) []domain.Mar
 	return out
 }
 
-func (s *Server) listAdminMarketData(w http.ResponseWriter, r *http.Request) {
-	board := r.URL.Query().Get("board")
-	symbol := r.URL.Query().Get("symbol")
-	subscription := s.manager.MarketDataSubscription()
-	if adapterID, items, ok := s.manager.LiveQuotes(); ok {
-		items = filterQuotes(items, board, symbol)
-		writeJSON(w, http.StatusOK, map[string]any{
-			"source":       "live",
-			"live":         subscription.Status == "ACTIVE" || subscription.Status == "PARTIAL",
-			"subscription": subscription,
-			"snapshot": marketdata.Snapshot{
-				AdapterID:   adapterID,
-				Status:      subscription.Status,
-				ReportCount: len(items),
-				RequestedAt: time.Now().UTC(),
-			},
-			"quotes": items,
-		})
-		return
-	}
-	sn, items, err := s.marketdata.ListFromLatest(r.Context(), board, symbol)
-	if err != nil {
-		if marketdata.IsNoSnapshot(err) {
-			writeJSON(w, http.StatusOK, map[string]any{
-				"source": "fix", "quotes": []any{}, "live": false,
-				"subscription": subscription,
-				"note":         "Шлюз автоматически поддерживает подписку на инструменты и восстанавливает её при разрыве связи.",
-			})
-			return
-		}
-		s.writeInternal(w, err)
-		return
-	}
-	result := mapMarketDataResponse(sn, items)
-	result["subscription"], result["live"] = subscription, false
-	writeJSON(w, http.StatusOK, result)
-}
-
-func (s *Server) syncMarketDataFIX(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		Symbol string `json:"symbol"`
-		Board  string `json:"board"`
-	}
-	_ = json.NewDecoder(r.Body).Decode(&req)
-	adapterID, items, ok := s.manager.LiveQuotes()
-	if !ok {
-		writeErr(w, http.StatusServiceUnavailable, "FIX market data subscription is warming up; retry shortly")
-		return
-	}
-	items = filterQuotes(items, strings.TrimSpace(req.Board), strings.TrimSpace(req.Symbol))
-	subscription := s.manager.MarketDataSubscription()
-	live := subscription.Status == "ACTIVE" || subscription.Status == "PARTIAL"
-	received := 0
-	for _, row := range items {
-		if row.HasData() {
-			received++
-		}
-	}
-	// UI refreshes read the persistent backend subscription; they must not replace it.
-	writeJSON(w, http.StatusOK, map[string]any{
-		"ok": true, "adapter_id": adapterID, "live": live, "subscription": subscription,
-		"received": received, "summary": marketdata.FormatReceived(received),
-		"result": map[string]any{"source": "live", "live": live, "quotes": items, "subscription": subscription},
-	})
-}
 func (s *Server) getAdminOrder(w http.ResponseWriter, r *http.Request) {
 	s.getQuikOrder(w, r, true)
 }

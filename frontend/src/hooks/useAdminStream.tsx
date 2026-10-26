@@ -61,6 +61,9 @@ export function AdminStreamProvider({ children }: { children: ReactNode }) {
         case "positions.updated":
           refresh.add([["admin-positions"]]);
           break;
+        case "marketdata.tick":
+          refresh.add([["admin-market-data"]]);
+          break;
         case "adapter.status_changed":
           refresh.add([["adapters"]]);
           refresh.add([["dashboard"]]);

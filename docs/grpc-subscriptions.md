@@ -46,10 +46,10 @@ Unix timestamp, nonce, `POST`, полный RPC-путь выше, пустое 
 
 `order.updated` требует `orders:read`, `trade.created` — `trades:read`,
 `marketdata.tick` — `orders:read`, `positions.updated` — `positions:read`. Заявки и исполнения доставляются только своему
-брокеру; котировки общие. Пустой список выбирает все разрешённые события.
+брокеру; строки текущих торгов (`Params`) общие. Пустой список выбирает все разрешённые события.
 Повторный Subscribe полностью заменяет список. Административные события брокеру
 запрещены. Пути в окне — соответствующие источники данных (`/api/v1/orders`,
-`/api/v1/trades`, `/api/v1/market-data`, `/api/v1/orderbook`), а не отдельные RPC.
+`/api/v1/trades`, `/api/v1/market-data`), а не отдельные RPC.
 
 ### REST-источники брокерских событий
 
@@ -58,7 +58,7 @@ Unix timestamp, nonce, `POST`, полный RPC-путь выше, пустое 
 - `order.updated` → `GET /api/v1/orders` и `GET /api/v1/orders/{id}` (`orders:read`).
 - `trade.created` → `GET /api/v1/trades` (`trades:read`).
 - `positions.updated` → `GET /api/v1/positions` (`positions:read`).
-- `marketdata.tick` → `GET /api/v1/market-data` (`orders:read`).
+- `marketdata.tick` → `GET /api/v1/market-data` и `GET /api/v1/market-data/{board}/{symbol}` (`orders:read`), строки QUIK `Params` в `data_json`.
 
 Успешный рыночный REST-снимок содержит только `quotes`.
 Поля котировки совпадают с gRPC: стакан, цены OHLC, средневзвешенная цена,

@@ -27,12 +27,13 @@ type marketDataPublisher interface{ Broadcast(string, any) }
 
 // The supervisor belongs to the gateway, never to a browser request. Each pass
 // reconciles the dictionary, rejects and connection state; healthy streams are
-// retained by the adapter, including quiet or closed markets.
-func syncMarketDataLoop(ctx context.Context, log *slog.Logger, manager marketDataManager, store marketDataPersistence, refs marketDataReference, hub marketDataPublisher, interval time.Duration, boards []string) {
+// retained by the adapter, including quiet or closed markets. Clients receive
+// market data from QUIK Params, not from this FIX subscription.
+func syncMarketDataLoop(ctx context.Context, log *slog.Logger, manager marketDataManager, store marketDataPersistence, refs marketDataReference, interval time.Duration, boards []string) {
 	if interval <= 0 || interval > 5*time.Second {
 		interval = 5 * time.Second
 	}
-	var lastError, lastSaved, lastState string
+	var lastError, lastSaved string
 	run := func() {
 		work, cancel := context.WithTimeout(ctx, 10*time.Second)
 		defer cancel()
@@ -55,11 +56,6 @@ func syncMarketDataLoop(ctx context.Context, log *slog.Logger, manager marketDat
 		lastError = ""
 		if err != nil {
 			lastError = err.Error()
-		}
-		stateKey := fmt.Sprintf("%s|%s|%d|%d|%s", state.AdapterID, state.Status, state.Expected, state.Confirmed, state.Error)
-		if stateKey != lastState {
-			hub.Broadcast("marketdata.tick", map[string]any{"subscription": state, "quotes": items, "replace": true})
-			lastState = stateKey
 		}
 		var received []domain.MarketQuote
 		var receivedKeys []string

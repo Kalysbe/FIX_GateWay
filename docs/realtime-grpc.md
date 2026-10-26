@@ -8,12 +8,12 @@ The gRPC runtime is pinned to stable v1.83.2, which includes the [GO-2026-6443 f
 
 1. Open `Stream` with verified TLS and Bearer metadata: API token for brokers, JWT for admins.
 2. Send `ClientMessage.subscribe` within five seconds. `event_types` empty means all events allowed for this role. Explicit forbidden or unknown topics return `PermissionDenied`.
-3. Receive `ServerMessage.ready`, then `event` messages. Subscriptions including `marketdata.tick` immediately receive the current in-memory FIX quote snapshot when available, followed by updates. The backend owns the continuous FIX subscription independently of UI clients and restores it after reconnect; UI refreshes read this subscription without replacing it. Events include sequence, timestamp, type and a Protobuf Struct containing the existing event DTO. Decimal values represented as strings remain strings; Struct numeric values use double precision.
+3. Receive `ServerMessage.ready`, then `event` messages. There is no initial snapshot: load current state over REST, then apply events. Events include sequence, timestamp, type and a Protobuf Struct containing the existing event DTO. Decimal values represented as strings remain strings; Struct numeric values use double precision.
 4. Send another subscribe to replace the subscription or ping to receive a matching pong. Space commands by at least 100 ms. Client half-close preserves server event delivery until cancellation or session termination.
 
 Events: `obs.event`, `notification.new`, `order.updated`, `trade.created`, `positions.updated`, `marketdata.tick`, `adapter.status_changed`. `obs.event` requires an audit-authorized role; READ_ONLY cannot receive it. Unknown event types default to denied.
 
-Broker `marketdata.tick` payloads contain only the market quote fields documented in the [broker API guide](broker-api-guide.md#рыночные-данные-и-стакан). Full snapshots include `replace: true` and `live`; deltas omit these flags. Adapter IDs, FIX request IDs, raw FIX fields and subscription diagnostics are excluded from initial snapshots, resubscriptions and broadcasts. Admin streams retain their diagnostic payloads.
+`marketdata.tick` carries one changed row of the QUIK `Params` table verbatim in `data_json` (`data` is empty; `removed=true` marks a row that disappeared), the same for brokers and admins. See [market data](market-data.md).
 
 Limits: incoming message 16 KiB, outgoing message 8 MiB, 128 concurrent streams per connection, 1,024 active subscriptions, queue 64 events per subscription. Slow consumers disconnect instead of blocking producers; sends have a five-second deadline. Server sends heartbeat pong every 20 seconds. There is no replay or resume guarantee. Refresh REST state after reconnect; sequence is global and role filtering can create gaps.
 

@@ -2,7 +2,6 @@ package api
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -12,7 +11,6 @@ import (
 
 	"github.com/fix-gateway/backend/internal/audit"
 	"github.com/fix-gateway/backend/internal/auth"
-	"github.com/fix-gateway/backend/internal/brokerdata"
 	"github.com/fix-gateway/backend/internal/brokers"
 	"github.com/fix-gateway/backend/internal/domain"
 	"github.com/fix-gateway/backend/internal/ratelimit"
@@ -20,17 +18,6 @@ import (
 	"github.com/getkin/kin-openapi/openapi3"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
-
-type testMarketDataReader struct {
-	quotes    []domain.MarketQuote
-	state     domain.MarketDataSubscription
-	available bool
-}
-
-func (s *testMarketDataReader) LiveQuotes() (string, []domain.MarketQuote, bool) {
-	return s.state.AdapterID, s.quotes, s.available
-}
-func (s *testMarketDataReader) MarketDataSubscription() domain.MarketDataSubscription { return s.state }
 
 func brokerDataTestServer(t *testing.T) *Server {
 	t.Helper()
@@ -47,77 +34,9 @@ func brokerDataTestServer(t *testing.T) *Server {
 	}
 }
 
-func TestBrokerMarketDataSnapshot(t *testing.T) {
-	source := &testMarketDataReader{
-		available: true,
-		state:     domain.MarketDataSubscription{AdapterID: "a1", Status: "ACTIVE", Expected: 3, Confirmed: 3, Error: "private adapter error"},
-		quotes: []domain.MarketQuote{
-			{AdapterID: "private-adapter", MDReqID: "private-request", Symbol: "TEST", SecurityID: "ISIN1", Board: "A", Currency: "KGS", Name: "Test instrument", Last: "123.4567890123456789", Open: "120", High: "125", Low: "119", Close: "122", WAPR: "123", Volume: "1000", Value: "123456.7890123456789", TradingStatus: "17", TradingSessionID: "MAIN", Bids: []domain.BookLevel{{Price: "123", Size: "10"}}, Offers: []domain.BookLevel{{Price: "124", Size: "11"}}, Entries: map[string]string{"private-tag": "private-value"}, RawFIX: "private wire message", UpdatedAt: time.Date(2026, 10, 21, 9, 0, 0, 0, time.UTC)},
-			{Symbol: "TEST", SecurityID: "ISIN1", Board: "B"},
-			{Symbol: "OTHER", SecurityID: "ISIN2", Board: "A"},
-		},
-	}
-	for _, tc := range []struct {
-		name, board, symbol string
-		count               int
-	}{
-		{"all", "", "", 3}, {"symbol", "", "TEST", 2},
-		{"security_id_and_board", "A", "ISIN1", 1}, {"unknown", "A", "MISSING", 0},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			response, available := brokerMarketDataSnapshot(source, tc.board, tc.symbol)
-			if !available || response.Quotes == nil || len(response.Quotes) != tc.count {
-				t.Fatal("incorrect snapshot", response)
-			}
-			if source.state.Expected != 3 {
-				t.Fatal("REST filter changed the global subscription")
-			}
-			encoded, err := json.Marshal(response)
-			if err != nil {
-				t.Fatal(err)
-			}
-			var envelope map[string]json.RawMessage
-			if err := json.Unmarshal(encoded, &envelope); err != nil || len(envelope) != 1 || envelope["quotes"] == nil {
-				t.Fatalf("REST must contain only quotes: %s", encoded)
-			}
-			for _, internal := range []string{"adapter_id", "md_req_id", "raw_fix", "entries", "subscription", "private"} {
-				if strings.Contains(string(encoded), internal) {
-					t.Fatalf("internal market data exposed: %s", encoded)
-				}
-			}
-			if tc.count > 0 && response.Quotes[0].Last != source.quotes[0].Last {
-				t.Fatal("decimal precision lost")
-			}
-		})
-	}
-	if source.quotes[0].RawFIX == "" {
-		t.Fatal("adapter snapshot mutated")
-	}
-	snapshot, _ := brokerMarketDataSnapshot(source, "A", "TEST")
-	quote := snapshot.Quotes[0]
-	if quote.Currency != "KGS" || quote.Name != "Test instrument" || quote.TradingSessionID != "MAIN" ||
-		quote.UpdatedAt != source.quotes[0].UpdatedAt || len(quote.Bids) != 1 || quote.Offers[0].Price != "124" {
-		t.Fatal("business market data lost", quote)
-	}
-	for _, state := range []string{"STARTING", "RETRYING", "OFFLINE", "PARTIAL"} {
-		source.state.Status = state
-		response, available := brokerMarketDataSnapshot(source, "", "")
-		if available != (state == "PARTIAL") || !available && len(response.Quotes) != 0 {
-			t.Fatal("unavailable feed exposed as a successful snapshot", response, available)
-		}
-	}
-	source.available = false
-	if response, available := brokerMarketDataSnapshot(source, "", ""); available || len(response.Quotes) != 0 {
-		t.Fatal("unavailable feed exposed stale quotes", response)
-	}
-	if response, available := brokerMarketDataSnapshot(nil, "", ""); available || response.Quotes == nil || len(response.Quotes) != 0 {
-		t.Fatal(response)
-	}
-}
-
 func TestBrokerMarketDataRequiresOrdersRead(t *testing.T) {
 	s := brokerDataTestServer(t)
-	handler := s.requirePermission(auth.PermOrdersRead)(http.HandlerFunc(s.listBrokerMarketData))
+	handler := s.requirePermission(auth.PermOrdersRead)(http.HandlerFunc(s.listMarketData))
 	for _, tc := range []struct {
 		permissions []string
 		status      int
@@ -210,30 +129,30 @@ func TestBrokerGRPCChannelsHaveRESTAndSwagger(t *testing.T) {
 			}
 		}
 	}
-	for name, value := range map[string]any{
-		"MarketQuote": brokerdata.MarketQuote{},
-		"Position":    domain.FIXPosition{}, "MarketDataResponse": brokerMarketDataResponse{},
-	} {
-		typeOf := reflect.TypeOf(value)
-		for i := 0; i < typeOf.NumField(); i++ {
-			field := strings.Split(typeOf.Field(i).Tag.Get("json"), ",")[0]
-			if field == "" || field == "-" {
-				continue
-			}
-			if doc.Components.Schemas[name].Value.Properties[field] == nil {
-				t.Errorf("%s.%s missing from broker-swagger", name, field)
-			}
+	if item := doc.Paths.Value("/api/v1/market-data/{board}/{symbol}"); item == nil || item.Get == nil {
+		t.Error("market data card missing from broker-swagger")
+	}
+	typeOf := reflect.TypeOf(domain.FIXPosition{})
+	for i := 0; i < typeOf.NumField(); i++ {
+		field := strings.Split(typeOf.Field(i).Tag.Get("json"), ",")[0]
+		if field == "" || field == "-" {
+			continue
+		}
+		if doc.Components.Schemas["Position"].Value.Properties[field] == nil {
+			t.Errorf("Position.%s missing from broker-swagger", field)
 		}
 	}
+	// Params rows are passed through: the contract is an open object, not a
+	// Gateway field list.
 	for _, contract := range []*openapi3.T{doc, general} {
-		for _, field := range []string{"adapter_id", "md_req_id", "raw_fix", "entries"} {
-			if contract.Components.Schemas["MarketQuote"].Value.Properties[field] != nil {
-				t.Errorf("internal MarketQuote.%s documented for brokers", field)
-			}
+		row := contract.Components.Schemas["MarketDataRow"]
+		if row == nil || row.Value.AdditionalProperties.Has == nil || !*row.Value.AdditionalProperties.Has {
+			t.Error("MarketDataRow must be an open object of Params columns")
 		}
-		properties := contract.Components.Schemas["MarketDataResponse"].Value.Properties
-		if len(properties) != 1 || properties["quotes"] == nil {
-			t.Error("REST market data schema must contain only quotes")
+		for _, name := range []string{"MarketQuote", "MarketDataResponse"} {
+			if contract.Components.Schemas[name] != nil {
+				t.Errorf("FIX schema %s still documented", name)
+			}
 		}
 	}
 }

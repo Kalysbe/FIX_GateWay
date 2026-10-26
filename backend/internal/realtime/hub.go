@@ -78,13 +78,11 @@ func (s *Subscription) Topics() []string {
 }
 
 type Hub struct {
-	// Set before serving subscriptions. Returns the current full quote snapshot.
-	MarketDataSnapshot func() any
-	mu                 sync.RWMutex
-	clients            map[*Subscription]bool
-	sequence           atomic.Uint64
-	revision           uint64
-	instanceID         string
+	mu         sync.RWMutex
+	clients    map[*Subscription]bool
+	sequence   atomic.Uint64
+	revision   uint64
+	instanceID string
 }
 
 func NewHub() *Hub { return &Hub{clients: make(map[*Subscription]bool), instanceID: uuid.NewString()} }
@@ -160,29 +158,6 @@ func (h *Hub) enqueueSnapshot(s *Subscription) {
 		default:
 		}
 	}
-	if !s.topics["marketdata.tick"] || h.MarketDataSnapshot == nil {
-		return
-	}
-	data := h.MarketDataSnapshot()
-	if data == nil {
-		return
-	}
-	encoded, err := json.Marshal(data)
-	if err != nil {
-		return
-	}
-	payload := new(structpb.Struct)
-	if protojson.Unmarshal(encoded, payload) != nil {
-		return
-	}
-	if s.info.BrokerID > 0 {
-		payload = brokerMarketDataPayload(payload)
-	}
-	event := &pb.Event{Sequence: h.sequence.Add(1), Type: "marketdata.tick", Data: payload, OccurredAt: timestamppb.Now()}
-	select {
-	case s.Events <- event:
-	default:
-	}
 }
 func (h *Hub) remove(s *Subscription, err error) {
 	h.mu.Lock()
@@ -211,10 +186,16 @@ func (h *Hub) BroadcastOrderForFirm(data json.RawMessage, firm string, removed b
 	h.broadcast("order.updated", data, 0, &firm, removed)
 }
 
+// BroadcastMarketData publishes one QUIK Params row verbatim to every
+// subscriber of marketdata.tick; market data is not firm-scoped.
+func (h *Hub) BroadcastMarketData(data json.RawMessage, removed bool) {
+	h.broadcast("marketdata.tick", data, 0, nil, removed)
+}
+
 func (h *Hub) broadcast(eventType string, data any, brokerID int64, firm *string, removed bool) {
 	payload := &structpb.Struct{Fields: make(map[string]*structpb.Value)}
 	rawJSON := ""
-	if firm != nil {
+	if _, raw := data.(json.RawMessage); raw || firm != nil {
 		raw, ok := data.(json.RawMessage)
 		if !ok || !json.Valid(raw) {
 			return
@@ -233,7 +214,6 @@ func (h *Hub) broadcast(eventType string, data any, brokerID int64, firm *string
 	var slow []*Subscription
 	h.mu.Lock()
 	event := &pb.Event{Sequence: h.sequence.Add(1), Type: eventType, Data: payload, DataJson: rawJSON, Removed: removed, OccurredAt: timestamppb.Now()}
-	var brokerMarketEvent *pb.Event
 	for s := range h.clients {
 		if !s.topics[eventType] {
 			continue
@@ -250,12 +230,6 @@ func (h *Hub) broadcast(eventType string, data any, brokerID int64, firm *string
 			continue
 		}
 		delivery := event
-		if s.info.BrokerID > 0 && eventType == "marketdata.tick" {
-			if brokerMarketEvent == nil {
-				brokerMarketEvent = &pb.Event{Sequence: event.Sequence, Type: event.Type, Data: brokerMarketDataPayload(payload), OccurredAt: event.OccurredAt}
-			}
-			delivery = brokerMarketEvent
-		}
 		if s.info.BrokerID > 0 && eventType == "positions.updated" {
 			// Only a trigger reaches broker streams. The service replaces it with
 			// a snapshot fetched using the authenticated token's firm scope.

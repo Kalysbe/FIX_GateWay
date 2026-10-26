@@ -14,6 +14,7 @@ info:
     Брокерские события gRPC имеют REST-источники: `order.updated` → GET `/api/v1/orders`,
     `trade.created` → GET `/api/v1/trades`, `positions.updated` → GET `/api/v1/positions`,
     `marketdata.tick` → GET `/api/v1/market-data`. REST возвращает текущие снимки,
+    рыночные данные — исходные строки таблицы QUIK `Params` (см. `MarketDataRow`),
     gRPC передаёт обновления через `fixgateway.realtime.v1.RealtimeService/Stream`.
     REST не воспроизводит последовательность пропущенных событий.
 
@@ -110,59 +111,48 @@ paths:
   /api/v1/market-data:
     get:
       tags: [Рыночные данные]
-      summary: Полный снимок текущих торгов
+      summary: Текущие торги — строки таблицы QUIK Params
       x-grpc-event: marketdata.tick
       security:
         - bearerAuth: []
       description: |
         Требует `orders:read`. REST-источник события gRPC `marketdata.tick`.
-        Возвращает все подписанные инструменты: цены, стакан, OHLC, средневзвешенную
-        цену, объём, оборот, торговый статус и время обновления.
-        Десятичные значения передаются строками. ID адаптера, ID FIX-запроса,
-        сырые FIX-поля и состояние внутренней подписки не выдаются.
+        Возвращает JSON-массив строк `quik_export2.public."Params"` как есть (`row_to_json`):
+        исходные имена колонок, числа JSON-числами с исходной точностью, строки и `null`.
+        Шлюз не добавляет, не переименовывает и не пересчитывает поля. Данные рынка
+        не зависят от фирмы токена.
 
-        Без фильтров возвращается весь рынок. Необязательные `symbol` (тикер или
-        SecurityID) и `board` ограничивают только ответ, не изменяя FIX-подписку.
-        Успешный GET всегда возвращает полный снимок выбранной выборки в `quotes`.
-        Поля `source`, `live`, `replace` и `subscription` в REST-ответе отсутствуют.
-        При недоступности потока возвращается HTTP 503 с `Retry-After`;
-        пустая успешная выборка возвращается как `quotes: []`.
-        Время получения конкретной котировки передаётся в `updated_at`;
-        подключение потока само по себе не гарантирует её свежесть или полноту.
+        `board` и `symbol` фильтруют колонки `ClassCode` и `SecCode`. Порядок —
+        `ClassCode`, `SecCode`. Пагинация — в заголовках `X-Has-More` и `X-Next-Offset`.
+        При недоступности источника — HTTP 503 с `Retry-After`; данные FIX не подставляются.
+        Пустая успешная выборка — `[]`.
       parameters:
-        - in: query
-          name: symbol
-          schema: {type: string}
-          description: Тикер или SecurityID
-          example: GBA02280810
         - in: query
           name: board
           schema: {type: string}
-          description: Код класса
+          description: Значение колонки ClassCode
           example: LIST_GBA
+        - in: query
+          name: symbol
+          schema: {type: string}
+          description: Значение колонки SecCode
+          example: GBA02280810
+        - {in: query, name: limit, schema: {type: integer, minimum: 1, maximum: 5000, default: 1000}}
+        - {in: query, name: offset, schema: {type: integer, minimum: 0, maximum: 10000000, default: 0}}
       responses:
         "200":
-          description: Текущий снимок; quotes пуст, если доступный поток не содержит совпадений с фильтром
+          description: Строки Params
+          headers:
+            X-Has-More: {schema: {type: boolean}}
+            X-Next-Offset: {schema: {type: integer}}
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/MarketDataResponse"
-              example:
-                quotes:
-                  - symbol: GBA02280810
-                    security_id: GBA02280810
-                    board: LIST_GBA
-                    currency: KGS
-                    last: "100.0"
-                    open: "99.5"
-                    high: "101.0"
-                    low: "99.0"
-                    volume: "1500"
-                    value: "150000.0"
-                    trading_status: "17"
-                    updated_at: "2026-10-21T09:00:00Z"
-                    bids: [{price: "99.5", size: "10"}]
-                    offers: [{price: "100.5", size: "12"}]
+                type: array
+                items:
+                  $ref: "#/components/schemas/MarketDataRow"
+        "400":
+          description: Неверные limit/offset
         "401":
           description: Unauthorized
         "403":
@@ -170,7 +160,32 @@ paths:
         "429":
           description: Rate limited
         "503":
-          description: Временно недоступен поток рыночных данных, авторизация или исчерпана ёмкость обработки
+          description: Источник Params недоступен, авторизация или исчерпана ёмкость обработки
+  /api/v1/market-data/{board}/{symbol}:
+    get:
+      tags: [Рыночные данные]
+      summary: Одна строка Params по ClassCode и SecCode
+      security:
+        - bearerAuth: []
+      description: Требует `orders:read`. Возвращает исходную строку или 404, если её нет в текущей таблице.
+      parameters:
+        - {in: path, name: board, required: true, schema: {type: string}, description: ClassCode}
+        - {in: path, name: symbol, required: true, schema: {type: string}, description: SecCode}
+      responses:
+        "200":
+          description: Строка Params
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MarketDataRow"
+        "401":
+          description: Unauthorized
+        "403":
+          description: Нет права orders:read или IP не в whitelist
+        "404":
+          description: Инструмента нет в Params
+        "503":
+          description: Источник Params недоступен
   /api/v1/orderbook:
     get:
       tags: [Справочники]
@@ -858,53 +873,15 @@ components:
         size:
           type: string
           example: "10"
-    MarketQuote:
+    MarketDataRow:
       type: object
-      description: Строка текущих торгов; пустая строка цены или статуса означает, что значение ещё не получено
+      additionalProperties: true
+      description: |
+        Строка `quik_export2.public."Params"` как есть (`row_to_json`). Набор колонок задаёт QUIK;
+        шлюз не добавляет и не переименовывает поля. Ниже — колонки, по которым шлюз ищет строку.
       properties:
-        symbol: {type: string}
-        security_id: {type: string}
-        board: {type: string}
-        currency: {type: string}
-        name: {type: string}
-        trade_date: {type: string}
-        trading_status: {type: string, description: Торговый статус FIX 326}
-        trading_session_id: {type: string, description: FIX 336}
-        trading_session_sub: {type: string, description: FIX 625}
-        bid: {type: string}
-        bid_size: {type: string}
-        offer: {type: string}
-        offer_size: {type: string}
-        bids:
-          type: array
-          items:
-            $ref: "#/components/schemas/BookLevel"
-        offers:
-          type: array
-          items:
-            $ref: "#/components/schemas/BookLevel"
-        last: {type: string}
-        last_size: {type: string}
-        last_time: {type: string}
-        open: {type: string}
-        high: {type: string}
-        low: {type: string}
-        close: {type: string}
-        wapr: {type: string, description: Средневзвешенная цена}
-        settle: {type: string}
-        current_price: {type: string}
-        official_price: {type: string}
-        volume: {type: string}
-        value: {type: string, description: Оборот}
-        updated_at: {type: string, format: date-time}
-    MarketDataResponse:
-      type: object
-      required: [quotes]
-      properties:
-        quotes:
-          type: array
-          items:
-            $ref: "#/components/schemas/MarketQuote"
+        ClassCode: {type: string}
+        SecCode: {type: string}
     OrderBook:
       type: object
       properties:

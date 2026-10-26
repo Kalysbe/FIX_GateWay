@@ -91,3 +91,62 @@ INSERT INTO public."Orders" VALUES
 		t.Fatal(all, err)
 	}
 }
+
+func TestQUIKParamsVerbatimFiltersAndPaging(t *testing.T) {
+	dsn := os.Getenv("QUIK_ORDERS_STORE_TEST_DATABASE_URL")
+	if dsn == "" {
+		dsn = os.Getenv("QUIK_ORDERS_TEST_DATABASE_URL")
+	}
+	if dsn == "" {
+		t.Skip("disposable QUIK_ORDERS_TEST_DATABASE_URL required")
+	}
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	var name string
+	if err := pool.QueryRow(ctx, `SELECT current_database()`).Scan(&name); err != nil || !strings.HasSuffix(name, "_test") {
+		t.Fatal("disposable database name must end in _test", name, err)
+	}
+	// char(n) columns, as QUIK exports often use, are matched after trimming.
+	_, err = pool.Exec(ctx, `CREATE TABLE public."Params" (
+"ClassCode" char(12),"SecCode" char(12),"LongName" text,"Last" numeric,"Bid" numeric,"NumTrades" numeric(19,0),"TradeDate" date,"Status" text);
+INSERT INTO public."Params" VALUES
+('LIST_GBA','GBA02280810','Облигации ГБА',123.4567890123456789,NULL,9007199254740993,'2026-10-26','торгуется'),
+('LIST_GBA','KG0105166315','Акции',10.10,10.00,5,'2026-10-26','торгуется'),
+('TQBR','SBER','Сбербанк',1,NULL,1,'2026-10-26',NULL);`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = pool.Exec(ctx, `DROP TABLE public."Params"`) })
+	readOnly, err := db.ConnectReadOnly(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer readOnly.Close()
+	s := NewStore(readOnly)
+	page, err := s.ListParams(ctx, ParamFilter{Limit: 2})
+	if err != nil || len(page.Params) != 2 || !page.HasMore || page.NextOffset != 2 {
+		t.Fatal(page, err)
+	}
+	if !bytes.Contains(page.Params[0].Raw, []byte(`"Last":123.4567890123456789`)) || !bytes.Contains(page.Params[0].Raw, []byte(`"Bid":null`)) ||
+		!bytes.Contains(page.Params[0].Raw, []byte(`"NumTrades":9007199254740993`)) || !bytes.Contains(page.Params[0].Raw, []byte(`"LongName":"Облигации ГБА"`)) {
+		t.Fatalf("row not verbatim: %s", page.Params[0].Raw)
+	}
+	page, err = s.ListParams(ctx, ParamFilter{ClassCode: "LIST_GBA", SecCode: "KG0105166315"})
+	if err != nil || len(page.Params) != 1 || page.HasMore {
+		t.Fatal(page, err)
+	}
+	p, err := s.GetParam(ctx, "TQBR", "SBER")
+	if err != nil || !bytes.Contains(p.Raw, []byte(`"Status":null`)) {
+		t.Fatal(string(p.Raw), err)
+	}
+	if _, err := s.GetParam(ctx, "TQBR", "GAZP"); !errors.Is(err, ErrParamNotFound) {
+		t.Fatal(err)
+	}
+	if _, err := s.GetParam(ctx, "TQBR", "SBER' OR '1'='1"); !errors.Is(err, ErrParamNotFound) {
+		t.Fatal("injection-like key matched", err)
+	}
+}

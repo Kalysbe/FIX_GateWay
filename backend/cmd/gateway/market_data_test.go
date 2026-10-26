@@ -70,8 +70,8 @@ func TestMarketDataSupervisorContinuesAfterSeedsAndRefreshesDictionaryWithoutUI(
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	m := &testMDManager{cancel: cancel}
-	refs, store, hub := &testMDReference{}, &testMDStore{}, &testMDHub{}
-	syncMarketDataLoop(ctx, slog.New(slog.NewTextHandler(io.Discard, nil)), m, store, refs, hub, time.Millisecond, nil)
+	refs, store := &testMDReference{}, &testMDStore{}
+	syncMarketDataLoop(ctx, slog.New(slog.NewTextHandler(io.Discard, nil)), m, store, refs, time.Millisecond, nil)
 	if m.calls != 4 {
 		t.Fatal("automatic recovery stopped on seeded or quiet rows", m.calls)
 	}
@@ -80,8 +80,5 @@ func TestMarketDataSupervisorContinuesAfterSeedsAndRefreshesDictionaryWithoutUI(
 	}
 	if store.saved != 1 {
 		t.Fatal("invalid or duplicate snapshot persisted", store.saved)
-	}
-	if hub.events < 2 {
-		t.Fatal("subscription state not published")
 	}
 }

@@ -159,24 +159,6 @@ func main() {
 		defer cancel()
 		return positionWriter.saveStream(persist, adapterID, reqID, items)
 	})
-	hub.MarketDataSnapshot = func() any {
-		_, quotes, ok := manager.LiveQuotes()
-		if !ok {
-			quotes = []domain.MarketQuote{}
-		}
-		for i := range quotes {
-			quotes[i].RawFIX = ""
-		}
-		return map[string]any{"quotes": quotes, "subscription": manager.MarketDataSubscription(), "replace": true}
-	}
-	manager.SetMarketDataListener(func(quotes []domain.MarketQuote) {
-		slim := make([]domain.MarketQuote, len(quotes))
-		for i, q := range quotes {
-			q.RawFIX = ""
-			slim[i] = q
-		}
-		hub.Broadcast("marketdata.tick", map[string]any{"quotes": slim})
-	})
 	manager.SetStatusListener(func(adapterID string, status domain.AdapterStatus) {
 		hub.Broadcast("adapter.status_changed", map[string]any{
 			"adapter_id": adapterID, "status": status,
@@ -255,6 +237,11 @@ func main() {
 		}, func(err error) {
 			log.Warn("QUIK Orders change read failed; retaining previous selection", "error", err)
 		})
+		go quikExportStore.RunParams(ctx, func(change quikexport.ParamChange) {
+			hub.BroadcastMarketData(change.Param.Raw, change.Removed)
+		}, func(err error) {
+			log.Warn("QUIK Params change read failed; retaining previous selection", "error", err)
+		})
 	}
 	admission := ratelimit.NewAdmissionWithCapacity(int64(cfg.RateLimitMaxStates))
 	rateStore := &ratelimit.Store{Pool: pool, Admission: admission, DefaultRead: cfg.DefaultRateLimitRPS, DefaultTrade: cfg.DefaultOrderRateLimit}
@@ -308,7 +295,7 @@ func main() {
 		go positionSubscriptionLoop(ctx, log, manager, hub, 5*time.Second)
 	}
 	go positionSnapshotLoop(ctx, log, manager, positionWriter, cfg.PositionSyncInterval)
-	go syncMarketDataLoop(ctx, log, manager, marketdata.NewStore(pool), refStore, hub, cfg.MarketDataSyncInterval, cfg.MarketDataBoards)
+	go syncMarketDataLoop(ctx, log, manager, marketdata.NewStore(pool), refStore, cfg.MarketDataSyncInterval, cfg.MarketDataBoards)
 
 	worker := outbox.NewWorker(outboxStore, orderStore, manager, log, cfg.WorkerID, cfg.OutboxPollInterval, cfg.OutboxBatchSize)
 	worker.SetObserver(obs)

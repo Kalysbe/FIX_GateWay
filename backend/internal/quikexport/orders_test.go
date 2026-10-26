@@ -98,3 +98,41 @@ func TestOrderFeedDoesNotReplayInitialSelection(t *testing.T) {
 		t.Fatal("only the row added after the baseline must be published", changes)
 	}
 }
+
+func TestParamRowsStayVerbatimAndFeedPublishesOnlyChanges(t *testing.T) {
+	raw := json.RawMessage(`{"ClassCode":"LIST_GBA","SecCode":"GBA02280810","Last":123.4567890123456789,"Bid":null,"NumTrades":9007199254740993,"FutureColumn":"  x  "}`)
+	p := Param{Raw: raw}
+	encoded, err := json.Marshal([]Param{p})
+	if err != nil || string(encoded) != "["+string(raw)+"]" {
+		t.Fatalf("row changed: %s %v", encoded, err)
+	}
+	if p.Key() != "LIST_GBA\x00GBA02280810" {
+		t.Fatalf("key %q", p.Key())
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ticked := Param{Raw: json.RawMessage(`{"ClassCode":"LIST_GBA","SecCode":"GBA02280810","Last":124,"Bid":null}`)}
+	other := Param{Raw: json.RawMessage(`{"ClassCode":"TQBR","SecCode":"SBER","Last":1}`)}
+	calls, failures := 0, 0
+	var changes []ParamChange
+	runParamFeed(ctx, func(context.Context, ParamFilter) (ParamPage, error) {
+		calls++
+		switch calls {
+		case 1:
+			return ParamPage{Params: []Param{p, other}}, nil // baseline, not published
+		case 2:
+			return ParamPage{}, errors.New("database offline") // not an empty table
+		case 3:
+			return ParamPage{Params: []Param{ticked, other}}, nil
+		default:
+			cancel()
+			return ParamPage{Params: []Param{ticked}}, nil
+		}
+	}, time.Millisecond, func(c ParamChange) { changes = append(changes, c) }, func(error) { failures++ })
+	if failures != 1 || len(changes) != 2 {
+		t.Fatal(calls, failures, changes)
+	}
+	if changes[0].Removed || !bytes.Equal(changes[0].Param.Raw, ticked.Raw) || !changes[1].Removed || !bytes.Equal(changes[1].Param.Raw, other.Raw) {
+		t.Fatal("unexpected changes", changes)
+	}
+}

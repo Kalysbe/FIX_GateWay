@@ -16,7 +16,7 @@
 
 | Каталог | Файлы / требования |
 |---|---|
-| `GATEWAY_SECRETS_DIR` | `database-url`, `quik-export-database-url`, `jwt-secret`, `api-token-pepper`, `admin-password`; по одному значению в файле, без внутреннего перевода строки. `quik-export-database-url` — PostgreSQL URL источника текущих заявок `quik_export2` под ролью только с `SELECT` на `public."Orders"`; без него запуск завершается ошибкой. JWT/pepper ≥32 байт; случайные независимые значения. Пароль 12–72 байта. |
+| `GATEWAY_SECRETS_DIR` | `database-url`, `quik-export-database-url`, `jwt-secret`, `api-token-pepper`, `admin-password`; по одному значению в файле, без внутреннего перевода строки. `quik-export-database-url` — PostgreSQL URL источника текущих заявок `quik_export2` под ролью только с `SELECT` на `public."Orders"` и `public."Params"` (PostgreSQL QUIK на `172.23.10.84`); без него запуск завершается ошибкой. JWT/pepper ≥32 байт; случайные независимые значения. Пароль 12–72 байта. |
 | `GATEWAY_PKI_DIR` | `database-ca.crt`, `server.crt`, `server.key`, `ca.crt`. gRPC server SAN совпадает с `GRPC_SERVER_NAME`; `ca.crt` проверяет сервер во внутреннем bridge. При включённом mTLS также нужны `bridge.crt` / `bridge.key` с clientAuth. |
 | `EDGE_TLS_DIR` | `tls.crt`, `tls.key` для публичного HTTPS, включая нужную цепочку. |
 | `FIX_CONFIG_DIR` | `transport.json`, venue dictionary, client certificate/key, venue CA, реальное свидетельство UAT. Начать с `deploy/production/fix-transport.example.json`; ключи объекта — реальные ID адаптеров. |
