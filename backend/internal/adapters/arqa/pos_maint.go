@@ -112,7 +112,7 @@ func (a *sessionApp) handleFIXReject(msg *quickfix.Message) {
 		}
 	}
 	if a.onExec != nil && (refType == "" || refType == "D" || refType == "F" || refType == "G") {
-		a.onExec(domain.ExecutionReport{AdapterID: a.adapterID, ProtocolReject: true, RefMessageType: refType, RefSeqNum: seq, ClOrdID: ref, Text: text, RawFIX: formatWireFIX(msg)})
+		a.onExec(domain.ExecutionReport{AdapterID: a.adapterID, ProtocolReject: true, RefMessageType: refType, RefSeqNum: seq, ClOrdID: ref, Text: decodeFIXText(text), RawFIX: decodeFIXText(formatWireFIX(msg))})
 	} else if a.onExec != nil {
 		a.log.Warn("fix reject of a non-trading message; trading not paused",
 			"adapter_id", a.adapterID, "ref_msg_type", refType, "ref_seq_num", seq, "text", text)

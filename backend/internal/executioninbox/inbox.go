@@ -3,6 +3,7 @@
 package executioninbox
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -17,6 +18,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/fix-gateway/backend/internal/domain"
 	"github.com/google/uuid"
@@ -203,7 +205,7 @@ func (in *Inbox) read(name string) (Entry, int64, error) {
 	if e.ID == uuid.Nil || e.ReceivedAt.IsZero() || !strings.HasSuffix(name, "_"+e.ID.String()+".json") {
 		return e, 0, fmt.Errorf("incomplete inbox entry %s", name)
 	}
-	if e.Checksum == "" || e.Checksum != entryChecksum(e) {
+	if e.Checksum == "" || (e.Checksum != entryChecksum(e) && e.Checksum != legacyEntryChecksum(e)) {
 		return e, 0, fmt.Errorf("execution inbox checksum mismatch: %s", name)
 	}
 	return e, int64(len(raw)), nil
@@ -212,8 +214,43 @@ func (in *Inbox) read(name string) (Entry, int64, error) {
 func entryChecksum(e Entry) string {
 	e.Checksum = ""
 	raw, _ := json.Marshal(e)
+	return checksumOf(raw)
+}
+
+// legacyEntryChecksum verifies entries written before Append normalized
+// reports: their checksum covered text with invalid UTF-8 (Windows-1251 from
+// QUIK), which encoding/json writes as an escape (backslash-u-fffd), while the decoded
+// entry holds U+FFFD, which it writes as UTF-8. Restoring the escape gives the
+// bytes that were hashed, so a changed file still fails.
+func legacyEntryChecksum(e Entry) string {
+	e.Checksum = ""
+	raw, _ := json.Marshal(e)
+	if !bytes.ContainsRune(raw, utf8.RuneError) {
+		return ""
+	}
+	return checksumOf(bytes.ReplaceAll(raw, []byte(string(utf8.RuneError)), jsonRuneErrorEscape))
+}
+
+// jsonRuneErrorEscape is the six bytes backslash, "u", "fffd" that
+// encoding/json writes for invalid UTF-8.
+var jsonRuneErrorEscape = []byte{'\\', 'u', 'f', 'f', 'f', 'd'}
+
+func checksumOf(raw []byte) string {
 	sum := sha256.Sum256(raw)
 	return hex.EncodeToString(sum[:])
+}
+
+// normalizeEntry gives the entry the form it has after it is read back:
+// encoding/json replaces invalid UTF-8, so the checksum must cover the
+// replaced text, not the bytes received.
+func normalizeEntry(e Entry) (Entry, error) {
+	raw, err := json.Marshal(e)
+	if err != nil {
+		return e, err
+	}
+	var out Entry
+	err = json.Unmarshal(raw, &out)
+	return out, err
 }
 
 // Append fsyncs the content, atomically publishes the file and fsyncs the parent
@@ -221,7 +258,10 @@ func entryChecksum(e Entry) string {
 func (in *Inbox) Append(report domain.ExecutionReport) error {
 	in.mu.Lock()
 	defer in.mu.Unlock()
-	e := Entry{ID: uuid.New(), ReceivedAt: time.Now().UTC(), Report: report}
+	e, err := normalizeEntry(Entry{ID: uuid.New(), ReceivedAt: time.Now().UTC(), Report: report})
+	if err != nil {
+		return err
+	}
 	e.Checksum = entryChecksum(e)
 	raw, err := json.Marshal(e)
 	if err != nil {

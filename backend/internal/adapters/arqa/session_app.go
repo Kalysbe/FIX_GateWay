@@ -263,6 +263,8 @@ func (a *sessionApp) handleExecutionReport(msg *quickfix.Message) {
 		}
 		return v
 	}
+	// QUIK sends display text such as the instrument name (55) in Windows-1251;
+	// reports are kept as JSON in the execution inbox, so text is decoded here.
 	a.onExec(domain.ExecutionReport{
 		AdapterID:     a.adapterID,
 		ClOrdID:       get(tag.ClOrdID),
@@ -280,9 +282,9 @@ func (a *sessionApp) handleExecutionReport(msg *quickfix.Message) {
 		LastPx:        get(tag.LastPx),
 		CumQty:        get(tag.CumQty),
 		LeavesQty:     get(tag.LeavesQty),
-		Text:          get(tag.Text),
+		Text:          decodeFIXText(get(tag.Text)),
 		OrdRejReason:  get(tag.OrdRejReason),
-		RawFIX:        formatWireFIX(msg),
+		RawFIX:        decodeFIXText(formatWireFIX(msg)),
 	})
 }
 
@@ -311,10 +313,10 @@ func (a *sessionApp) handleOrderCancelReject(msg *quickfix.Message) {
 		ClOrdID:      get(tag.ClOrdID),
 		OrigClOrdID:  get(tag.OrigClOrdID),
 		OrderID:      get(tag.OrderID),
-		Text:         get(tag.Text),
+		Text:         decodeFIXText(get(tag.Text)),
 		CxlRejReason: get(tag.CxlRejReason),
 		CancelReject: true,
-		RawFIX:       formatWireFIX(msg),
+		RawFIX:       decodeFIXText(formatWireFIX(msg)),
 	})
 }
 
