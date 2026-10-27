@@ -343,7 +343,7 @@ func (s *Server) createOrder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ip, _ := s.clientIP(r)
-	order, idempotent, err := s.orders.Create(r.Context(), b, ip, req, tok.QuikFirm)
+	order, idempotent, err := s.orders.Create(r.Context(), b, ip, req, tok.QuikFirm, r.Header.Get("Idempotency-Key"))
 	if err != nil {
 		var risk *orders.RiskRejected
 		if errors.As(err, &risk) {
@@ -357,7 +357,7 @@ func (s *Server) createOrder(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if errors.Is(err, orders.ErrPersistenceUnavailable) {
-			writeErr(w, http.StatusServiceUnavailable, "order storage unavailable; verify result and retry with the same client_order_id")
+			writeErr(w, http.StatusServiceUnavailable, "order storage unavailable; verify result and retry with the same Idempotency-Key")
 			return
 		}
 		observability.AnnotateError(r, "ORDER_CREATE_FAILED", err.Error(), "order_service")

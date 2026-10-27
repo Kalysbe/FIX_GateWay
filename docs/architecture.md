@@ -14,7 +14,7 @@ Broker → REST API → Order Service → PostgreSQL (+ outbox) → Worker
 1. **Adapter replaceability** — business logic depends only on `adapters.Adapter`.
 2. **No hard-coded adapter count** — pool is loaded from DB/config.
 3. **Consistency first** — order create and outbox insert share one DB transaction.
-4. **No duplicate orders** — unique `(broker_id, client_order_id)`, stable `fix_cl_ord_id`, send guards.
+4. **No duplicate orders** — gateway-generated `client_order_id`, unique `(broker_id, idempotency_key)` from the optional `Idempotency-Key` header, stable `fix_cl_ord_id`, send guards.
 5. **Stateless process** — durable state in PostgreSQL; multiple Gateway instances can share the outbox via `FOR UPDATE SKIP LOCKED`.
 
 ## Components

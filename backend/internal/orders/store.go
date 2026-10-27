@@ -23,9 +23,9 @@ var ErrNotFound = errors.New("order not found")
 var ErrInvalidCancel = errors.New("invalid cancel")
 var ErrInstrumentNotFound = errors.New("instrument not found")
 
-// ErrIdempotencyConflict means client_order_id is already used by an order
+// ErrIdempotencyConflict means the Idempotency-Key is already used by an order
 // with different parameters. The existing order is not returned as a replay.
-var ErrIdempotencyConflict = errors.New("client_order_id already used with different order parameters")
+var ErrIdempotencyConflict = errors.New("Idempotency-Key already used with different order parameters")
 
 type Store struct {
 	pool *pgxpool.Pool
@@ -98,20 +98,22 @@ func (s *Store) scanOrder(row pgx.Row) (domain.Order, error) {
 }
 
 type CreateInput struct {
-	BrokerID      int64
-	FixAccount    string
-	ClientCode    string // FIX tag 109 вЂ” arbitrary broker client code
-	QuikFirm      string // FIX tag 5018 вЂ” from API token
-	ClientOrderID string
-	InstrumentID  int64
-	Board         string
-	Side          domain.Side
-	OrderType     domain.OrderType
-	TimeInForce   string
-	Quantity      decimal.Decimal
-	Price         *decimal.Decimal
-	RequestID     string
-	TraceID       string
+	BrokerID   int64
+	FixAccount string
+	ClientCode string // FIX tag 109 вЂ” arbitrary broker client code
+	QuikFirm   string // FIX tag 5018 вЂ” from API token
+	// IdempotencyKey is the optional Idempotency-Key header; empty means every
+	// request creates a new order. client_order_id is always generated.
+	IdempotencyKey string
+	InstrumentID   int64
+	Board          string
+	Side           domain.Side
+	OrderType      domain.OrderType
+	TimeInForce    string
+	Quantity       decimal.Decimal
+	Price          *decimal.Decimal
+	RequestID      string
+	TraceID        string
 }
 
 func (s *Store) CreateWithOutbox(ctx context.Context, in CreateInput) (domain.Order, bool, error) {
@@ -125,19 +127,21 @@ func (s *Store) CreateWithOutbox(ctx context.Context, in CreateInput) (domain.Or
 		return domain.Order{}, false, err
 	}
 
-	existingID, same, err := findReplay(ctx, tx, in)
-	if err == nil {
-		if err := tx.Commit(ctx); err != nil {
+	if in.IdempotencyKey != "" {
+		existingID, same, err := findReplay(ctx, tx, in)
+		if err == nil {
+			if err := tx.Commit(ctx); err != nil {
+				return domain.Order{}, false, err
+			}
+			if !same {
+				return domain.Order{}, false, ErrIdempotencyConflict
+			}
+			o, err := s.Get(ctx, existingID)
+			return o, true, err
+		}
+		if !errors.Is(err, pgx.ErrNoRows) {
 			return domain.Order{}, false, err
 		}
-		if !same {
-			return domain.Order{}, false, ErrIdempotencyConflict
-		}
-		o, err := s.Get(ctx, existingID)
-		return o, true, err
-	}
-	if !errors.Is(err, pgx.ErrNoRows) {
-		return domain.Order{}, false, err
 	}
 	if err := checkTradingLimits(ctx, tx, in, policies); err != nil {
 		return domain.Order{}, false, err
@@ -148,16 +152,18 @@ func (s *Store) CreateWithOutbox(ctx context.Context, in CreateInput) (domain.Or
 		INSERT INTO orders (
 			id, broker_id, account_id, client_order_id, instrument_id, side, order_type,
 			time_in_force, quantity, price, status, fix_cl_ord_id, board, fix_account,
-			fix_client_id, fix_firm, request_id, trace_id
-		) VALUES ($1,$2,NULL,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)`,
-		id, in.BrokerID, in.ClientOrderID, in.InstrumentID, in.Side, in.OrderType,
+			fix_client_id, fix_firm, request_id, trace_id, idempotency_key
+		) VALUES ($1,$2,NULL,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)`,
+		id, in.BrokerID, id.String(), in.InstrumentID, in.Side, in.OrderType,
 		in.TimeInForce, in.Quantity, in.Price, domain.OrderQueued,
 		fmt.Sprintf("G%s", id.String()[:32]), in.Board, in.FixAccount,
 		in.ClientCode, in.QuikFirm, nullIfEmpty(in.RequestID), nullIfEmpty(in.TraceID),
+		nullIfEmpty(in.IdempotencyKey),
 	)
 	if err != nil {
 		_ = tx.Rollback(ctx)
-		if isUniqueViolation(err) {
+		// A concurrent request with the same Idempotency-Key won the insert.
+		if in.IdempotencyKey != "" && isUniqueViolation(err) {
 			existingID, same, gerr := findReplay(ctx, s.pool, in)
 			if gerr != nil {
 				return domain.Order{}, false, gerr
@@ -204,7 +210,7 @@ func (s *Store) CreateWithOutbox(ctx context.Context, in CreateInput) (domain.Or
 	return o, false, err
 }
 
-// findReplay looks up an order with the same client_order_id and reports
+// findReplay looks up an order with the same Idempotency-Key and reports
 // whether its parameters match the request (a retry rather than a new order).
 func findReplay(ctx context.Context, q interface {
 	QueryRow(context.Context, string, ...any) pgx.Row
@@ -214,8 +220,8 @@ func findReplay(ctx context.Context, q interface {
 	err := q.QueryRow(ctx, `SELECT id, instrument_id=$3 AND COALESCE(board,'')=$4 AND side=$5 AND order_type=$6
  AND COALESCE(time_in_force,'')=$7 AND quantity=$8 AND price IS NOT DISTINCT FROM $9::numeric
  AND COALESCE(fix_account,'')=$10 AND COALESCE(fix_client_id,'')=$11 AND COALESCE(fix_firm,'')=$12
- FROM orders WHERE broker_id=$1 AND client_order_id=$2`,
-		in.BrokerID, in.ClientOrderID, in.InstrumentID, in.Board, in.Side, in.OrderType, in.TimeInForce,
+ FROM orders WHERE broker_id=$1 AND idempotency_key=$2`,
+		in.BrokerID, in.IdempotencyKey, in.InstrumentID, in.Board, in.Side, in.OrderType, in.TimeInForce,
 		in.Quantity, in.Price, in.FixAccount, in.ClientCode, in.QuikFirm).Scan(&id, &same)
 	return id, same, err
 }

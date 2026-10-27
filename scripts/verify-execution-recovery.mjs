@@ -25,7 +25,7 @@ const {token:admin}=await call('/api/v1/admin/login','','POST',{email:'admin@loc
 const {broker}=await call('/api/v1/admin/brokers',admin,'POST',{code:`RECOVERY-${randomUUID()}`,name:'Execution journal recovery test'},201);
 const {token}=await call(`/api/v1/admin/brokers/${broker.id}/tokens`,admin,'POST',{name:'Recovery',quik_firm:'SIM',expires_in_days:30,permissions:['orders:create','orders:read']},201);
 for(const restart of [false,true]){
- const {order}=await call('/api/v1/orders',token,'POST',{account_id:'RECOVERY',client_code:'RECOVERY',client_order_id:randomUUID(),symbol:'SBER',board:'TQBR',side:'BUY',order_type:'LIMIT',quantity:'1',price:'100'},201);
+ const {order}=await call('/api/v1/orders',token,'POST',{account_id:'RECOVERY',client_code:'RECOVERY',symbol:'SBER',board:'TQBR',side:'BUY',order_type:'LIMIT',quantity:'1',price:'100'},201);
  await until(async()=>localOrder(order.id).status==='ACKNOWLEDGED');
  let stopped=false;
  try{

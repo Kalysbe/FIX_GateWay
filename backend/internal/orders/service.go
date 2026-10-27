@@ -45,17 +45,26 @@ func (s *Service) SetObserver(obs observability.Emitter) { s.obs = obs }
 // Configure before serving requests. Notifications never replace durable enqueueing.
 func (s *Service) SetQueueNotifier(fn func()) { s.onQueued = fn }
 
+// CreateOrderRequest has no client_order_id: the gateway always generates it.
+// Retries are protected by the optional Idempotency-Key header instead.
 type CreateOrderRequest struct {
-	AccountID     string           `json:"account_id"`  // торговый код → FIX tag 1
-	ClientCode    string           `json:"client_code"` // произвольный код клиента → FIX tag 109
-	ClientOrderID string           `json:"client_order_id"`
-	Symbol        string           `json:"symbol"`
-	Board         string           `json:"board"` // код класса → FIX tag 100 ExDestination
-	Side          domain.Side      `json:"side"`
-	OrderType     domain.OrderType `json:"order_type"`
-	TimeInForce   string           `json:"time_in_force"`
-	Quantity      decimal.Decimal  `json:"quantity"`
-	Price         *decimal.Decimal `json:"price"`
+	AccountID   string           `json:"account_id"`  // торговый код → FIX tag 1
+	ClientCode  string           `json:"client_code"` // произвольный код клиента → FIX tag 109
+	Symbol      string           `json:"symbol"`
+	Board       string           `json:"board"` // код класса → FIX tag 100 ExDestination
+	Side        domain.Side      `json:"side"`
+	OrderType   domain.OrderType `json:"order_type"`
+	TimeInForce string           `json:"time_in_force"`
+	Quantity    decimal.Decimal  `json:"quantity"`
+	Price       *decimal.Decimal `json:"price"`
+}
+
+// MaxIdempotencyKeyLen bounds the Idempotency-Key header.
+const MaxIdempotencyKeyLen = 255
+
+// ValidateIdempotencyKey accepts an empty key (no retry protection).
+func ValidateIdempotencyKey(key string) error {
+	return domain.CheckFIXText("Idempotency-Key", key, MaxIdempotencyKeyLen)
 }
 
 // ValidateCreateRequest returns a field-specific error for bad order payloads.
@@ -65,9 +74,6 @@ func ValidateCreateRequest(req CreateOrderRequest) error {
 	}
 	if req.ClientCode == "" || req.ClientCode == "string" {
 		return fmt.Errorf("client_code обязателен: произвольный код клиента → FIX tag 109 ClientID")
-	}
-	if req.ClientOrderID == "" || req.ClientOrderID == "string" {
-		return fmt.Errorf("client_order_id обязателен (уникальный id заявки брокера, → FIX tag 11)")
 	}
 	if req.Symbol == "" || req.Symbol == "string" {
 		return fmt.Errorf("symbol обязателен: инструмент (тикер/ISIN) → FIX tag 48 SecurityID")
@@ -92,22 +98,21 @@ func ValidateCreateRequest(req CreateOrderRequest) error {
 	default:
 		return fmt.Errorf("time_in_force: допустимо DAY, IOC, FOK, GTC (по умолчанию DAY)")
 	}
-	for _, f := range []struct{ name, value string }{
-		{"account_id", req.AccountID}, {"client_code", req.ClientCode}, {"symbol", req.Symbol}, {"board", req.Board},
-	} {
-		if err := domain.CheckFIXText(f.name, f.value, domain.MaxFIXTextLen); err != nil {
-			return err
-		}
-	}
-	// client_order_id never reaches the wire (tag 11 is generated), so only control characters are rejected.
-	return domain.CheckFIXText("client_order_id", req.ClientOrderID, 0)
+	return domain.CheckFIXTexts("account_id", req.AccountID, "client_code", req.ClientCode,
+		"symbol", req.Symbol, "board", req.Board)
 }
 
-func (s *Service) Create(ctx context.Context, broker domain.Broker, ip string, req CreateOrderRequest, quikFirm string) (domain.Order, bool, error) {
-	if err := ValidateCreateRequest(req); err != nil {
+// Create stores the order with a gateway-generated client_order_id. A non-empty
+// idempotencyKey makes a retry with the same parameters return the original order.
+func (s *Service) Create(ctx context.Context, broker domain.Broker, ip string, req CreateOrderRequest, quikFirm, idempotencyKey string) (domain.Order, bool, error) {
+	err := ValidateCreateRequest(req)
+	if err == nil {
+		err = ValidateIdempotencyKey(idempotencyKey)
+	}
+	if err != nil {
 		s.emit(ctx, observability.Event{
 			Type: observability.TypeError, Subtype: observability.ErrValidation, BrokerID: &broker.ID,
-			BrokerCode: broker.Code, BrokerName: broker.Name, ClientOrderID: req.ClientOrderID,
+			BrokerCode: broker.Code, BrokerName: broker.Name,
 			ErrorCode: "VALIDATION_ERROR", ErrorMessage: err.Error(), FailureStage: "validation",
 			Message: err.Error(), AccountID: req.AccountID, Instrument: req.Symbol, Side: string(req.Side),
 		})
@@ -138,7 +143,7 @@ func (s *Service) Create(ctx context.Context, broker domain.Broker, ip string, r
 		msg := fmt.Errorf("account_id %q не найден в QUIK Trdaccs для фирмы %q", req.AccountID, firm)
 		s.emit(ctx, observability.Event{
 			Type: observability.TypeError, Subtype: observability.ErrValidation, BrokerID: &broker.ID,
-			BrokerCode: broker.Code, BrokerName: broker.Name, ClientOrderID: req.ClientOrderID,
+			BrokerCode: broker.Code, BrokerName: broker.Name,
 			ErrorCode: "ACCOUNT_NOT_ALLOWED", ErrorMessage: msg.Error(), FailureStage: "validation",
 			Message: msg.Error(), AccountID: req.AccountID, Instrument: req.Symbol, Side: string(req.Side),
 		})
@@ -163,26 +168,26 @@ func (s *Service) Create(ctx context.Context, broker domain.Broker, ip string, r
 
 	order, idempotent, err := s.store.CreateWithOutbox(ctx, CreateInput{
 		BrokerID: broker.ID, FixAccount: fixAccount, ClientCode: req.ClientCode, QuikFirm: strings.TrimSpace(quikFirm),
-		ClientOrderID: req.ClientOrderID,
-		InstrumentID:  instr.ID, Board: req.Board, Side: req.Side, OrderType: req.OrderType,
+		IdempotencyKey: idempotencyKey,
+		InstrumentID:   instr.ID, Board: req.Board, Side: req.Side, OrderType: req.OrderType,
 		TimeInForce: req.TimeInForce, Quantity: req.Quantity, Price: req.Price,
 		RequestID: observability.RequestIDFrom(ctx), TraceID: observability.TraceIDFrom(ctx),
 	})
 	if errors.Is(err, ErrIdempotencyConflict) {
 		s.emit(ctx, observability.Event{Type: observability.TypeError, Subtype: observability.ErrValidation, BrokerID: &broker.ID,
-			ClientOrderID: req.ClientOrderID, ErrorCode: "IDEMPOTENCY_CONFLICT", ErrorMessage: err.Error(), FailureStage: "validation", Message: err.Error()})
+			ErrorCode: "IDEMPOTENCY_CONFLICT", ErrorMessage: err.Error(), FailureStage: "validation", Message: err.Error()})
 		return order, false, err
 	}
 	if err != nil {
 		var risk *RiskRejected
 		if errors.As(err, &risk) {
 			s.emit(ctx, observability.Event{Type: observability.TypeError, Subtype: observability.ErrValidation, BrokerID: &broker.ID,
-				ClientOrderID: req.ClientOrderID, ErrorCode: risk.Code, ErrorMessage: risk.Message, FailureStage: "risk", Message: risk.Message})
+				ErrorCode: risk.Code, ErrorMessage: risk.Message, FailureStage: "risk", Message: risk.Message})
 			return order, false, err
 		}
 		s.emit(ctx, observability.Event{
 			Type: observability.TypeError, Subtype: observability.ErrDatabase, BrokerID: &broker.ID,
-			BrokerCode: broker.Code, BrokerName: broker.Name, ClientOrderID: req.ClientOrderID,
+			BrokerCode: broker.Code, BrokerName: broker.Name,
 			ErrorCode: "ORDER_PERSIST_FAILED", ErrorMessage: err.Error(), FailureStage: "order_service", Message: err.Error(),
 		})
 		return order, false, fmt.Errorf("%w: %w", ErrPersistenceUnavailable, err)
@@ -193,7 +198,7 @@ func (s *Service) Create(ctx context.Context, broker domain.Broker, ip string, r
 	_ = s.audit.Write(ctx, audit.Entry{
 		ActorType: "broker", ActorID: fmt.Sprintf("%d", broker.ID), BrokerID: &broker.ID,
 		Action: "ORDER_CREATE", EntityType: "order", EntityID: order.ID.String(),
-		IP: ip, ClientOrderID: req.ClientOrderID, InternalOrderID: order.ID.String(),
+		IP: ip, ClientOrderID: order.ClientOrderID, InternalOrderID: order.ID.String(),
 		RequestPayload: req, Result: "ok",
 	})
 	if !idempotent {

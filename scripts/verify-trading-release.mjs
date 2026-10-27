@@ -30,7 +30,7 @@ const localStatus=id=>sql(`SELECT status FROM orders WHERE id='${id}'`);
 const {token:admin}=await call('/api/v1/admin/login','','POST',{email:'admin@localhost',password:'admin123'});
 const {broker}=await call('/api/v1/admin/brokers',admin,'POST',{code:`VERIFY-${randomUUID()}`,name:'Release verification'},201);
 const {token}=await call(`/api/v1/admin/brokers/${broker.id}/tokens`,admin,'POST',{name:'Verification',quik_firm:'SIM',expires_in_days:30,permissions:['orders:create','orders:read']},201);
-const payload={account_id:'VERIFY',client_code:'VERIFY',client_order_id:randomUUID(),symbol:'SBER',board:'TQBR',side:'BUY',order_type:'LIMIT',quantity:'1',price:'100'};
+const payload={account_id:'VERIFY',client_code:'VERIFY',symbol:'SBER',board:'TQBR',side:'BUY',order_type:'LIMIT',quantity:'1',price:'100'};
 const {order}=await call('/api/v1/orders',token,'POST',payload,201);
 await until(async()=>localStatus(order.id)==='ACKNOWLEDGED');
 // Deterministic crash-window injection: venue ACK was received, but queue completion
@@ -46,7 +46,7 @@ const replay=await call('/api/v1/orders',token,'POST',payload);assert.equal(repl
 // emits the retained ACK after reconnect. Durable crash-window state is injected
 // separately so both the unconfirmed and confirmed reconciliation paths run.
 sql("INSERT INTO instruments(internal_symbol,quik_symbol,board,currency) VALUES('FAULT_RECOVER','FAULT_RECOVER','TQBR','RUB') ON CONFLICT(internal_symbol) DO NOTHING;");
-const fault=await call('/api/v1/orders',token,'POST',{...payload,symbol:'FAULT_RECOVER',client_order_id:randomUUID()},201);
+const fault=await call('/api/v1/orders',token,'POST',{...payload,symbol:'FAULT_RECOVER'},201);
 const clOrdID=sql(`SELECT fix_cl_ord_id FROM orders WHERE id='${fault.order.id}'`);
 await until(()=>command(['logs','--no-color','fixsimulator']).includes(`FAULT_RECEIVED ${clOrdID}`));
 sql(`UPDATE outbox_events SET status='PROCESSING',locked_by='fault-window',locked_at=now()-interval '5 minutes' WHERE aggregate_id='${fault.order.id}' AND event_type='ORDER_SEND';`);
@@ -56,7 +56,7 @@ assert.equal(sql(`SELECT attempts FROM outbox_events WHERE aggregate_id='${fault
 const logs=command(['logs','--no-color','fixsimulator']);
 assert.equal(logs.split(`FAULT_RECEIVED ${clOrdID}`).length-1,1,'uncertain order was transmitted more than once');
 await call('/api/v1/admin/trading-limits',admin,'PUT',{broker_id:broker.id,paused:true,max_quantity:'2',max_open_orders:3,revision:0,reason:'Release verification pause'});
-const rejected=await call('/api/v1/orders',token,'POST',{...payload,client_order_id:randomUUID()},422);assert.equal(rejected.code,'TRADING_PAUSED');
+const rejected=await call('/api/v1/orders',token,'POST',payload,422);assert.equal(rejected.code,'TRADING_PAUSED');
 const history=await call(`/api/v1/admin/trading-limits/history?broker_id=${broker.id}`,admin);assert.equal(history.history[0].after.paused,true);
 command(['restart','gateway']);
 await until(async()=>{const value=await call('/api/v1/admin/trading-limits',admin);return value.policies.some(p=>p.broker_id===broker.id && p.paused);});

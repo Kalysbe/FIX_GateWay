@@ -31,7 +31,7 @@ func writeErrDetails(w http.ResponseWriter, status int, msg string, details any)
 
 func (s *Server) writeInternal(w http.ResponseWriter, err error) {
 	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
-		writeErr(w, http.StatusServiceUnavailable, "request interrupted; verify result and retry with the same client_order_id")
+		writeErr(w, http.StatusServiceUnavailable, "request interrupted; verify result and retry with the same Idempotency-Key")
 		return
 	}
 	if s != nil && s.log != nil && err != nil {

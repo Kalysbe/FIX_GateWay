@@ -334,7 +334,18 @@ paths:
         - `account_id` → FIX tag 1 Account
         - `client_code` → FIX tag 109 ClientID
 
-        Идемпотентность: повтор с тем же `client_order_id` возвращает `200` + существующую заявку.
+        `client_order_id` создаёт шлюз (совпадает с `id` заявки); передавать его в теле нельзя — ответ `400`.
+
+        Идемпотентность: необязательный заголовок `Idempotency-Key`. Повтор с тем же ключом и теми же параметрами возвращает `200` + существующую заявку. Без заголовка каждый запрос создаёт новую заявку.
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: false
+          description: "Ваш уникальный ключ запроса (до 255 символов, без управляющих символов). Повторяйте его при таймауте или сетевой ошибке; для новой заявки нужен новый ключ."
+          schema:
+            type: string
+            maxLength: 255
+          example: "ORD-20260818-0001"
       requestBody:
         required: true
         content:
@@ -344,7 +355,6 @@ paths:
             example:
               account_id: "1-3101-006"
               client_code: "006"
-              client_order_id: "ORD-20260818-0001"
               symbol: "KG0105166315"
               board: "LISTEDSTOCKK"
               side: "BUY"
@@ -366,7 +376,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/CreateOrderResponse"
         "409":
-          description: client_order_id уже использован заявкой с другими параметрами (инструмент, board, сторона, тип, срок, количество, цена, счёт, код клиента, фирма). Заявка не создаётся; для новой заявки нужен новый client_order_id.
+          description: Idempotency-Key уже использован заявкой с другими параметрами (инструмент, board, сторона, тип, срок, количество, цена, счёт, код клиента, фирма). Заявка не создаётся; для новой заявки нужен новый ключ.
           content:
             application/json:
               schema:
@@ -626,7 +636,8 @@ components:
           type: object
     CreateOrderRequest:
       type: object
-      required: [account_id, client_code, client_order_id, symbol, board, side, order_type, quantity]
+      required: [account_id, client_code, symbol, board, side, order_type, quantity]
+      additionalProperties: false
       properties:
         account_id:
           type: string
@@ -636,10 +647,6 @@ components:
           type: string
           example: "006"
           description: "Код клиента → FIX tag 109 ClientID"
-        client_order_id:
-          type: string
-          example: "ORD-20260818-0001"
-          description: "Ваш уникальный ID заявки (идемпотентность) → FIX tag 11"
         symbol:
           type: string
           example: "KG0105166315"
@@ -686,7 +693,7 @@ components:
         id: {type: string, format: uuid}
         broker_id: {type: integer, format: int64}
         account_id: {type: string, description: Торговый код счёта}
-        client_order_id: {type: string}
+        client_order_id: {type: string, description: "ID заявки, созданный шлюзом; для новых заявок равен id"}
         instrument_id: {type: integer, format: int64}
         symbol: {type: string}
         board: {type: string}

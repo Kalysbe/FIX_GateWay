@@ -105,7 +105,7 @@ INSERT INTO public."Firms" VALUES ('KSE','2040','Сенти',NULL,1),('KSE','999
 		}
 		return strings.TrimSpace(w.Body.String())
 	}
-	order := map[string]any{"account_id": "1-3001-71", "client_code": "C1", "client_order_id": uuid.NewString(), "symbol": "X", "board": "Y",
+	order := map[string]any{"account_id": "1-3001-71", "client_code": "C1", "symbol": "X", "board": "Y",
 		"side": "BUY", "order_type": "LIMIT", "quantity": "1", "price": "1"}
 	// Without the QUIK source nothing can be confirmed.
 	call("GET", "/api/v1/accounts", token.Raw, nil, 503)

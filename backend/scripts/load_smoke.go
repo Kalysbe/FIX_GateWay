@@ -45,10 +45,10 @@ func main() {
 			client := &http.Client{Timeout: 10 * time.Second}
 			for i := range jobs {
 				body, _ := json.Marshal(map[string]any{
-					"account_id": *account, "client_code": *clientCode, "client_order_id": fmt.Sprintf("%s-%d", runPrefix, i),
+					"account_id": *account, "client_code": *clientCode,
 					"symbol": "SBER", "board": "TQBR", "side": "BUY", "order_type": "LIMIT", "quantity": "1", "price": "100",
 				})
-				if err := createSmokeOrder(client, base, *token, body); err != nil {
+				if err := createSmokeOrder(client, base, *token, fmt.Sprintf("%s-%d", runPrefix, i), body); err != nil {
 					fail.Add(1)
 				} else {
 					ok.Add(1)
@@ -76,13 +76,14 @@ func normalizeGatewayURL(raw string) (string, error) {
 	return strings.TrimRight(u.String(), "/"), nil
 }
 
-func createSmokeOrder(client *http.Client, base, token string, body []byte) error {
+func createSmokeOrder(client *http.Client, base, token, idempotencyKey string, body []byte) error {
 	req, err := http.NewRequest(http.MethodPost, base+"/api/v1/orders", bytes.NewReader(body))
 	if err != nil {
 		return err
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Idempotency-Key", idempotencyKey)
 	resp, err := client.Do(req)
 	if err != nil {
 		return err

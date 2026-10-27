@@ -274,6 +274,18 @@ paths:
         - **Торговый счёт** → `account_id` (например `1-3101-006`) → FIX tag **1**
         - **Код клиента** → `client_code` (произвольная строка) → FIX tag **109** ClientID
         - **Код фирмы** → `quik_firm` **API-токена** → FIX tag **5018** (не из body)
+        - **ID заявки** → `client_order_id` создаёт шлюз (равен `id`); в body не передаётся
+
+        Защита от дублей — необязательный заголовок `Idempotency-Key`.
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: false
+          description: "Ключ повтора (до 255 символов). Повтор с тем же ключом и параметрами возвращает исходную заявку; без заголовка каждый запрос создаёт новую."
+          schema:
+            type: string
+            maxLength: 255
+          example: "TEST0003"
       requestBody:
         required: true
         content:
@@ -283,7 +295,6 @@ paths:
             example:
               account_id: "1-3101-006"
               client_code: "006"
-              client_order_id: "TEST0003"
               symbol: "KG0105166315"
               board: "LISTEDSTOCKK"
               side: "BUY"
@@ -297,7 +308,7 @@ paths:
         "201":
           description: Created
         "409":
-          description: client_order_id already used with different order parameters (code IDEMPOTENCY_CONFLICT)
+          description: Idempotency-Key already used with different order parameters (code IDEMPOTENCY_CONFLICT)
         "401":
           description: Unauthorized
         "403":
@@ -1816,11 +1827,11 @@ components:
   schemas:
     CreateOrderRequest:
       type: object
-      required: [account_id, client_code, client_order_id, symbol, board, side, order_type, quantity]
+      required: [account_id, client_code, symbol, board, side, order_type, quantity]
+      additionalProperties: false
       example:
         account_id: "1-3101-006"
         client_code: "006"
-        client_order_id: "TEST0003"
         symbol: "KG0105166315"
         board: "LISTEDSTOCKK"
         side: "BUY"
@@ -1837,10 +1848,6 @@ components:
           type: string
           example: "006"
           description: "Произвольный код клиента. FIX tag 109 ClientID"
-        client_order_id:
-          type: string
-          example: "TEST0003"
-          description: "Уникальный ID заявки у брокера (идемпотентность). FIX tag 11"
         symbol:
           type: string
           example: "KG0105166315"

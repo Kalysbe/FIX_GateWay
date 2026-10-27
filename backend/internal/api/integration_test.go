@@ -83,25 +83,44 @@ func TestOrderIdempotencyIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	body := map[string]any{
-		"account_id": "ACC1", "client_code": "006", "client_order_id": "IDEM-1", "symbol": "SBER", "board": "TQBR",
-		"side": "BUY", "order_type": "LIMIT", "quantity": "10", "price": "250",
+	callCreate := func(body map[string]any, key string) *httptest.ResponseRecorder {
+		payload, err := json.Marshal(body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		r := httptest.NewRequest(http.MethodPost, "/api/v1/orders", bytes.NewReader(payload))
+		r.Header.Set("Authorization", "Bearer "+tok.Raw)
+		r.Header.Set("Content-Type", "application/json")
+		if key != "" {
+			r.Header.Set("Idempotency-Key", key)
+		}
+		rr := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(rr, r)
+		return rr
 	}
-	payload, _ := json.Marshal(body)
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/orders", bytes.NewReader(payload))
-	req.Header.Set("Authorization", "Bearer "+tok.Raw)
-	req.Header.Set("Content-Type", "application/json")
-	rr := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(rr, req)
-	if rr.Code != http.StatusCreated && rr.Code != http.StatusOK {
-		t.Fatalf("first create status %d body %s", rr.Code, rr.Body.String())
+	decodeOrder := func(rr *httptest.ResponseRecorder) map[string]any {
+		var resp map[string]any
+		_ = json.Unmarshal(rr.Body.Bytes(), &resp)
+		order, _ := resp["order"].(map[string]any)
+		return order
 	}
 
-	req2 := httptest.NewRequest(http.MethodPost, "/api/v1/orders", bytes.NewReader(payload))
-	req2.Header.Set("Authorization", "Bearer "+tok.Raw)
-	req2.Header.Set("Content-Type", "application/json")
-	rr2 := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(rr2, req2)
+	body := map[string]any{
+		"account_id": "ACC1", "client_code": "006", "symbol": "SBER", "board": "TQBR",
+		"side": "BUY", "order_type": "LIMIT", "quantity": "10", "price": "250",
+	}
+	idemKey := "IDEM-" + uuid.NewString()
+	rr := callCreate(body, idemKey)
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("first create status %d body %s", rr.Code, rr.Body.String())
+	}
+	first := decodeOrder(rr)
+	// client_order_id is assigned by the gateway, not taken from the broker.
+	if first["client_order_id"] != first["id"] {
+		t.Fatalf("client_order_id must be generated as the order id: %#v", first)
+	}
+
+	rr2 := callCreate(body, idemKey)
 	if rr2.Code != http.StatusOK {
 		t.Fatalf("idempotent create status %d", rr2.Code)
 	}
@@ -111,21 +130,30 @@ func TestOrderIdempotencyIntegration(t *testing.T) {
 		t.Fatalf("expected idempotent true: %#v", resp)
 	}
 	orderID := resp["order"].(map[string]any)["id"].(string)
+	if orderID != first["id"] {
+		t.Fatalf("replay must return the original order: %s != %v", orderID, first["id"])
+	}
 	for field, value := range map[string]any{"quantity": "11", "price": "251", "side": "SELL", "client_code": "007"} {
 		changed := map[string]any{}
 		for k, v := range body {
 			changed[k] = v
 		}
 		changed[field] = value
-		payload, _ := json.Marshal(changed)
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/orders", bytes.NewReader(payload))
-		req.Header.Set("Authorization", "Bearer "+tok.Raw)
-		req.Header.Set("Content-Type", "application/json")
-		rr := httptest.NewRecorder()
-		srv.Handler().ServeHTTP(rr, req)
-		if rr.Code != http.StatusConflict {
-			t.Fatalf("reused client_order_id with different %s: status %d body %s", field, rr.Code, rr.Body.String())
+		if rr := callCreate(changed, idemKey); rr.Code != http.StatusConflict {
+			t.Fatalf("reused Idempotency-Key with different %s: status %d body %s", field, rr.Code, rr.Body.String())
 		}
+	}
+	// Without the header every request is a new order.
+	noKey1, noKey2 := callCreate(body, ""), callCreate(body, "")
+	if noKey1.Code != http.StatusCreated || noKey2.Code != http.StatusCreated || decodeOrder(noKey1)["id"] == decodeOrder(noKey2)["id"] {
+		t.Fatalf("requests without Idempotency-Key must create distinct orders: %d %d", noKey1.Code, noKey2.Code)
+	}
+	withID := map[string]any{"client_order_id": "BROKER-1"}
+	for k, v := range body {
+		withID[k] = v
+	}
+	if rr := callCreate(withID, ""); rr.Code != http.StatusBadRequest {
+		t.Fatalf("broker client_order_id must be refused: %d %s", rr.Code, rr.Body.String())
 	}
 	var queued int
 	if err := pool.QueryRow(ctx, `SELECT count(*) FROM outbox_events WHERE aggregate_id=$1 AND event_type='ORDER_SEND' AND status='PENDING'`, orderID).Scan(&queued); err != nil || queued != 1 {
@@ -151,19 +179,7 @@ func TestOrderIdempotencyIntegration(t *testing.T) {
 	if err := orderStore.UpdateTradingLimit(ctx, policy, "integration-operator", "test quantity limit"); err != nil {
 		t.Fatal(err)
 	}
-	callCreate := func(body map[string]any) *httptest.ResponseRecorder {
-		payload, err := json.Marshal(body)
-		if err != nil {
-			t.Fatal(err)
-		}
-		r := httptest.NewRequest(http.MethodPost, "/api/v1/orders", bytes.NewReader(payload))
-		r.Header.Set("Authorization", "Bearer "+tok.Raw)
-		rr := httptest.NewRecorder()
-		srv.Handler().ServeHTTP(rr, r)
-		return rr
-	}
-	body["client_order_id"] = "RISK-QUANTITY"
-	riskResponse := callCreate(body)
+	riskResponse := callCreate(body, "")
 	if riskResponse.Code != http.StatusUnprocessableEntity || !bytes.Contains(riskResponse.Body.Bytes(), []byte("MAX_ORDER_QUANTITY")) {
 		t.Fatalf("risk rejection must be 422, not storage failure: %d %s", riskResponse.Code, riskResponse.Body.String())
 	}
@@ -171,13 +187,13 @@ func TestOrderIdempotencyIntegration(t *testing.T) {
 	if err := orderStore.UpdateTradingLimit(ctx, policy, "integration-operator", "test broker pause"); err != nil {
 		t.Fatal(err)
 	}
-	body["client_order_id"], body["quantity"] = "RISK-PAUSED", "1"
-	riskResponse = callCreate(body)
+	body["quantity"] = "1"
+	riskResponse = callCreate(body, "")
 	if riskResponse.Code != http.StatusUnprocessableEntity || !bytes.Contains(riskResponse.Body.Bytes(), []byte("TRADING_PAUSED")) {
 		t.Fatalf("pause rejection: %d %s", riskResponse.Code, riskResponse.Body.String())
 	}
-	body["client_order_id"], body["quantity"] = "IDEM-1", "10"
-	if replay := callCreate(body); replay.Code != http.StatusOK {
+	body["quantity"] = "10"
+	if replay := callCreate(body, idemKey); replay.Code != http.StatusOK {
 		t.Fatalf("paused replay: %d %s", replay.Code, replay.Body.String())
 	}
 }

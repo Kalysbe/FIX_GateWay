@@ -35,7 +35,7 @@ func TestExecutionReplayDoesNotChangeOrderTotals(t *testing.T) {
 		t.Fatal(err)
 	}
 	store := NewStore(pool)
-	order, _, err := store.CreateWithOutbox(ctx, CreateInput{BrokerID: broker, InstrumentID: instrument, ClientOrderID: uuid.NewString(), Quantity: decimal.NewFromInt(10), Side: domain.SideBuy, OrderType: domain.OrderTypeMarket, TimeInForce: "DAY"})
+	order, _, err := store.CreateWithOutbox(ctx, CreateInput{BrokerID: broker, InstrumentID: instrument, IdempotencyKey: uuid.NewString(), Quantity: decimal.NewFromInt(10), Side: domain.SideBuy, OrderType: domain.OrderTypeMarket, TimeInForce: "DAY"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -109,7 +109,7 @@ func TestAveragePriceUsesRecordedFillsWhenCumQtyJumps(t *testing.T) {
 		t.Fatal(err)
 	}
 	store := NewStore(pool)
-	order, _, err := store.CreateWithOutbox(ctx, CreateInput{BrokerID: broker, InstrumentID: instrument, ClientOrderID: uuid.NewString(), Quantity: decimal.NewFromInt(10), Side: domain.SideBuy, OrderType: domain.OrderTypeMarket, TimeInForce: "DAY"})
+	order, _, err := store.CreateWithOutbox(ctx, CreateInput{BrokerID: broker, InstrumentID: instrument, IdempotencyKey: uuid.NewString(), Quantity: decimal.NewFromInt(10), Side: domain.SideBuy, OrderType: domain.OrderTypeMarket, TimeInForce: "DAY"})
 	if err != nil {
 		t.Fatal(err)
 	}

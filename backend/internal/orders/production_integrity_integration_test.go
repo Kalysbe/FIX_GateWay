@@ -38,7 +38,7 @@ func productionOrdersFixture(t *testing.T) (context.Context, *Store, *pgxpool.Po
 	}
 	store := NewStore(pool)
 	create := func(adapter string) domain.Order {
-		o, _, err := store.CreateWithOutbox(ctx, CreateInput{BrokerID: broker, InstrumentID: instrument, ClientOrderID: uuid.NewString(), Quantity: decimal.NewFromInt(10), Side: domain.SideBuy, OrderType: domain.OrderTypeMarket, TimeInForce: "GTC"})
+		o, _, err := store.CreateWithOutbox(ctx, CreateInput{BrokerID: broker, InstrumentID: instrument, IdempotencyKey: uuid.NewString(), Quantity: decimal.NewFromInt(10), Side: domain.SideBuy, OrderType: domain.OrderTypeMarket, TimeInForce: "GTC"})
 		if err != nil {
 			t.Fatal(err)
 		}

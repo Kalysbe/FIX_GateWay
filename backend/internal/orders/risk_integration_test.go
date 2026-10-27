@@ -51,7 +51,7 @@ func TestTradingLimitsIntegration(t *testing.T) {
 		t.Fatalf("revision protection: %v", err)
 	}
 	input := func(key string, qty int64) CreateInput {
-		return CreateInput{BrokerID: brokerID, InstrumentID: instrumentID, ClientOrderID: key, Quantity: decimal.NewFromInt(qty), Side: domain.SideBuy, OrderType: domain.OrderTypeMarket, TimeInForce: "DAY", Board: "TEST", FixAccount: "ACCOUNT"}
+		return CreateInput{BrokerID: brokerID, InstrumentID: instrumentID, IdempotencyKey: key, Quantity: decimal.NewFromInt(qty), Side: domain.SideBuy, OrderType: domain.OrderTypeMarket, TimeInForce: "DAY", Board: "TEST", FixAccount: "ACCOUNT"}
 	}
 	assertRisk := func(err error, code string) {
 		t.Helper()
@@ -97,7 +97,7 @@ func TestTradingLimitsIntegration(t *testing.T) {
 	}
 	var firstID uuid.UUID
 	var firstKey string
-	err = pool.QueryRow(ctx, `SELECT id,client_order_id FROM orders WHERE broker_id=$1 ORDER BY id LIMIT 1`, brokerID).Scan(&firstID, &firstKey)
+	err = pool.QueryRow(ctx, `SELECT id,idempotency_key FROM orders WHERE broker_id=$1 ORDER BY id LIMIT 1`, brokerID).Scan(&firstID, &firstKey)
 	if err != nil {
 		t.Fatal(err)
 	}
