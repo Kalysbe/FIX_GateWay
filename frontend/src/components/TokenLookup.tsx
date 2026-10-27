@@ -11,7 +11,7 @@ import { ErrorBanner, PageSpinner } from "./feedback";
 const permissionLabels: Record<string, string> = {
   "orders:create": "Создание заявок", "orders:read": "Просмотр заявок и рынка",
   "orders:cancel": "Снятие заявок", "orders:replace": "Изменение заявок",
-  "trades:read": "Просмотр сделок", "positions:read": "Просмотр позиций", "positions:write": "Изменение позиций",
+  "trades:read": "Просмотр сделок", "positions:read": "Просмотр позиций",
 };
 
 function Field({ label, children, mono = false }: { label: string; children: ReactNode; mono?: boolean }) {

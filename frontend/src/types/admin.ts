@@ -242,7 +242,6 @@ export const ALL_PERMS = [
   "orders:replace",
   "trades:read",
   "positions:read",
-  "positions:write",
 ] as const;
 
 export const READ_ONLY_PERMS = ["orders:read", "trades:read", "positions:read"];

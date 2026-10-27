@@ -1153,117 +1153,6 @@ paths:
       responses:
         "200":
           description: OK
-    put:
-      tags: [Admin]
-      summary: Set cash and/or securities positions
-      security:
-        - bearerAuth: []
-      description: |
-        SUPER_ADMIN / ADMIN. Отправляет `35=AL` в QUIK через FIX-адаптер и обновляет снимок `AN`/`AP`.
-        Фирма задаётся через `firm_id` или `broker_id`.
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/SetPositionsRequest"
-      responses:
-        "200":
-          description: OK
-        "400":
-          description: Validation error
-  /api/v1/admin/positions/cash:
-    put:
-      tags: [Admin]
-      summary: Set a cash (money) position
-      security:
-        - bearerAuth: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/SetCashRequest"
-      responses:
-        "200":
-          description: OK
-    delete:
-      tags: [Admin]
-      summary: Clear a manual cash position
-      security:
-        - bearerAuth: []
-      parameters:
-        - in: query
-          name: firm_id
-          schema:
-            type: string
-        - in: query
-          name: broker_id
-          schema:
-            type: integer
-        - in: query
-          name: client_code
-          required: true
-          schema:
-            type: string
-        - in: query
-          name: currency
-          required: true
-          schema:
-            type: string
-        - in: query
-          name: tag
-          schema:
-            type: string
-      responses:
-        "200":
-          description: Cleared
-  /api/v1/admin/positions/instruments:
-    put:
-      tags: [Admin]
-      summary: Set a securities position
-      security:
-        - bearerAuth: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/SetInstrumentRequest"
-      responses:
-        "200":
-          description: OK
-    delete:
-      tags: [Admin]
-      summary: Clear a manual securities position
-      security:
-        - bearerAuth: []
-      parameters:
-        - in: query
-          name: firm_id
-          schema:
-            type: string
-        - in: query
-          name: broker_id
-          schema:
-            type: integer
-        - in: query
-          name: client_code
-          required: true
-          schema:
-            type: string
-        - in: query
-          name: symbol
-          required: true
-          schema:
-            type: string
-        - in: query
-          name: board
-          schema:
-            type: string
-      responses:
-        "200":
-          description: Cleared
   /api/v1/admin/positions/sync:
     post:
       tags: [Admin]
@@ -1974,7 +1863,7 @@ components:
           enum: [0, 30, 90, 180, 365]
         permissions:
           type: array
-          description: "Omitted or empty grants read-only access (orders:read, trades:read, positions:read). Trading and positions:write must be listed explicitly."
+          description: "Omitted or empty grants read-only access (orders:read, trades:read, positions:read). Trading permissions must be listed explicitly."
           items:
             type: string
             enum:
@@ -1984,7 +1873,6 @@ components:
               - "orders:replace"
               - "trades:read"
               - "positions:read"
-              - "positions:write"
     QuikTradingAccountRow:
       type: object
       additionalProperties: true
@@ -2231,107 +2119,6 @@ components:
         note:
           type: string
           description: Пояснение, если снимка ещё нет
-    SetCashRequest:
-      type: object
-      required: [client_code, currency, amount]
-      properties:
-        firm_id:
-          type: string
-          description: Код фирмы. У брокера необязателен (берётся из токена).
-        broker_id:
-          type: integer
-          description: Только admin — альтернатива firm_id
-        client_code:
-          type: string
-          example: kalys
-        account_code:
-          type: string
-        currency:
-          type: string
-          example: KGS
-        tag:
-          type: string
-          description: Ключ денежной позиции (EQTV). Если пусто — currency.
-          example: EQTV
-        amount:
-          oneOf:
-            - type: string
-            - type: number
-          description: CUR_BAL
-          example: "1500000"
-        open_bal:
-          oneOf:
-            - type: string
-            - type: number
-        limit:
-          oneOf:
-            - type: string
-            - type: number
-          description: CUR_LIM
-        locked:
-          oneOf:
-            - type: string
-            - type: number
-    SetInstrumentRequest:
-      type: object
-      required: [client_code, symbol]
-      properties:
-        firm_id:
-          type: string
-        broker_id:
-          type: integer
-        client_code:
-          type: string
-        account_code:
-          type: string
-        symbol:
-          type: string
-          example: KG0105166315
-        security_id:
-          type: string
-        board:
-          type: string
-          example: LISTEDSTOCKK
-        currency:
-          type: string
-        quantity:
-          oneOf:
-            - type: string
-            - type: number
-          description: Нетто. Если нет — long_qty минус short_qty.
-          example: "100"
-        long_qty:
-          oneOf:
-            - type: string
-            - type: number
-        short_qty:
-          oneOf:
-            - type: string
-            - type: number
-        settl_price:
-          oneOf:
-            - type: string
-            - type: number
-    SetPositionsRequest:
-      type: object
-      required: [client_code]
-      properties:
-        firm_id:
-          type: string
-        broker_id:
-          type: integer
-        client_code:
-          type: string
-        account_code:
-          type: string
-        cash:
-          type: array
-          items:
-            $ref: "#/components/schemas/SetCashRequest"
-        instruments:
-          type: array
-          items:
-            $ref: "#/components/schemas/SetInstrumentRequest"
     EmitentOrdersResponse:
       type: object
       properties:

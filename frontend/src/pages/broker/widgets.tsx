@@ -20,7 +20,6 @@ export const PERM_ICON: Record<string, (p: { size?: number; className?: string }
   "orders:replace": Icons.refresh,
   "trades:read": Icons.book,
   "positions:read": Icons.chart,
-  "positions:write": Icons.edit,
 };
 
 export function SummaryChip({ label, value }: { label: string; value: string }) {

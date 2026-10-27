@@ -7,9 +7,8 @@ const (
 	PermOrdersRead    = "orders:read"
 	PermOrdersCancel  = "orders:cancel"
 	PermOrdersReplace = "orders:replace"
-	PermTradesRead     = "trades:read"
-	PermPositionsRead  = "positions:read"
-	PermPositionsWrite = "positions:write"
+	PermTradesRead    = "trades:read"
+	PermPositionsRead = "positions:read"
 )
 
 var AllPermissions = []string{
@@ -19,7 +18,6 @@ var AllPermissions = []string{
 	PermOrdersReplace,
 	PermTradesRead,
 	PermPositionsRead,
-	PermPositionsWrite,
 }
 
 var ReadOnlyPermissions = []string{
@@ -33,7 +31,7 @@ func IsValidPermission(p string) bool {
 }
 
 // NormalizePermissions validates a token permission list. An omitted list
-// grants read-only access: trading and positions:write (35=AL) must be explicit.
+// grants read-only access: trading permissions must be explicit.
 func NormalizePermissions(in []string) ([]string, bool) {
 	if len(in) == 0 {
 		out := make([]string, len(ReadOnlyPermissions))

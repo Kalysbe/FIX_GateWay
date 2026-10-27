@@ -39,10 +39,13 @@ func TestPermissions(t *testing.T) {
 	if !ok || len(p) != len(ReadOnlyPermissions) {
 		t.Fatalf("default perms: %#v", p)
 	}
-	for _, write := range []string{PermOrdersCreate, PermOrdersCancel, PermOrdersReplace, PermPositionsWrite} {
+	for _, write := range []string{PermOrdersCreate, PermOrdersCancel, PermOrdersReplace} {
 		if HasPermission(p, write) {
 			t.Fatalf("omitted permissions must not grant %s", write)
 		}
+	}
+	if _, ok := NormalizePermissions([]string{"positions:write"}); ok {
+		t.Fatal("removed positions:write must be rejected")
 	}
 	if !HasPermission(ReadOnlyPermissions, PermOrdersRead) {
 		t.Fatal("readonly should have orders:read")
