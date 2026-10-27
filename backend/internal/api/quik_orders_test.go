@@ -90,19 +90,31 @@ func TestBrokerOrdersUseAuthenticatedFirmBeforePagination(t *testing.T) {
 	if f := source.filter; w.Code != 200 || f.State != "Активна" || !f.Today || f.Firm != nil || f.ClassCode != "LISTBND" || f.SecCode != "GBA1" {
 		t.Fatal(w.Code, w.Body.String(), source.filter)
 	}
-	// Broker quotes: the same rows; neither the token's firm nor firm_id/broker_id narrows them.
+	// Broker quotes: every firm's rows of one instrument, reduced to side,
+	// price, remaining quantity and volume; nothing identifies the participant.
+	quote := `{"OrderNum":7412,"FirmId":"SENTI2004","ClientCode":"006","Account":"1-3101-006","Operation":"Продажа","State":"Активна","Price":100.50000000,"Qty":10,"Balance":4,"Value":1005}`
+	brokerSource := &testOrderSource{order: quikexport.Order{Raw: json.RawMessage(quote)}}
+	bs := &Server{quikOrders: brokerSource}
 	w = httptest.NewRecorder()
-	s.listBrokerQuotes(w, brokerOrderRequest("/api/v1/quotes?board=LISTBND&symbol=GBA1&firm_id=9999&broker_id=99&limit=3&offset=6"))
-	if f := source.filter; w.Code != 200 || f.State != "Активна" || !f.Today || f.Firm != nil || f.ClassCode != "LISTBND" || f.SecCode != "GBA1" || f.Limit != 3 || f.Offset != 6 {
-		t.Fatal(w.Code, w.Body.String(), source.filter)
+	bs.listBrokerQuotes(w, brokerOrderRequest("/api/v1/quotes?board=LISTBND&symbol=GBA1&firm_id=9999&broker_id=99&limit=3&offset=6"))
+	if f := brokerSource.filter; w.Code != 200 || f.State != "Активна" || !f.Today || f.Firm != nil || f.ClassCode != "LISTBND" || f.SecCode != "GBA1" || f.Limit != 3 || f.Offset != 6 {
+		t.Fatal(w.Code, w.Body.String(), brokerSource.filter)
 	}
-	if strings.TrimSpace(w.Body.String()) != "["+raw+"]" {
-		t.Fatal("broker quotes added or changed fields", w.Body.String())
+	if got := strings.TrimSpace(w.Body.String()); got != `[{"side":"SELL","price":100.50000000,"quantity":4,"volume":402}]` {
+		t.Fatal("broker quote must carry only side, price, quantity and volume:", got)
 	}
+	brokerSource.order = quikexport.Order{Raw: json.RawMessage(`{"FirmId":"X","Operation":"?","Price":null,"Balance":3}`)}
 	w = httptest.NewRecorder()
-	s.listBrokerQuotes(w, brokerOrderRequest("/api/v1/quotes?limit=1001"))
-	if w.Code != http.StatusBadRequest {
-		t.Fatal("limit above 1000 must be rejected", w.Code)
+	bs.listBrokerQuotes(w, brokerOrderRequest("/api/v1/quotes?board=LISTBND&symbol=GBA1"))
+	if got := strings.TrimSpace(w.Body.String()); got != `[{"side":null,"price":null,"quantity":3,"volume":null}]` {
+		t.Fatal(got)
+	}
+	for _, path := range []string{"/api/v1/quotes", "/api/v1/quotes?board=LISTBND", "/api/v1/quotes?symbol=GBA1", "/api/v1/quotes?board=LISTBND&symbol=GBA1&limit=1001"} {
+		w = httptest.NewRecorder()
+		bs.listBrokerQuotes(w, brokerOrderRequest(path))
+		if w.Code != http.StatusBadRequest {
+			t.Fatal(path, "must be rejected", w.Code)
+		}
 	}
 	r.SetPathValue("id", "quik-20261022-LIST_GBA-1")
 	w = httptest.NewRecorder()

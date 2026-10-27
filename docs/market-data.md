@@ -60,7 +60,7 @@
 | `GET /api/v1/admin/classes` | `ClassCode` и `ClassName` из QUIK `Classes` |
 | `GET /api/v1/admin/market-data/{board}/{symbol}/details` | Страница инструмента: вся строка `Params` за сегодня, строки `Securities` и `Classes`, котировки |
 | `GET /api/v1/admin/quotes` | Котировки: сегодняшние строки `Orders` с `State` = `Активна` всех фирм |
-| `GET /api/v1/quotes` (брокер, `orders:read`) | Те же котировки всех фирм, не только фирмы токена; те же фильтры и пагинация |
+| `GET /api/v1/quotes?board=&symbol=` (брокер, `orders:read`) | Котировки одного инструмента всех участников без их раскрытия: только `side`, `price`, `quantity` (`Balance`), `volume` = `price` × `quantity` |
 | gRPC/SSE `marketdata.tick` | Одна изменённая строка на событие |
 
 `board` и `symbol` фильтруют `ClassCode` и `SecCode` (с обрезкой пробелов

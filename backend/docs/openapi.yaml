@@ -472,24 +472,28 @@ paths:
   /api/v1/quotes:
     get:
       tags: [Broker]
-      summary: Quotes — today's active QUIK orders of every firm
+      summary: Quotes of one instrument without participants
       security:
         - bearerAuth: []
       description: |
-        Requires `orders:read`. The rows of GET /api/v1/admin/quotes: quik_export2.public."Orders"
-        with State = "Активна" and TradeDate of today (Bishkek, UTC+6) of every firm, as stored.
-        Not limited to the token's firm; firm_id and broker_id are ignored. Order is OrderNum
-        descending; paging is in X-Has-More and X-Next-Offset.
+        Requires `orders:read`. Today's (Bishkek, UTC+6) "Активна" Orders rows of every firm for
+        one instrument (board = ClassCode and symbol = SecCode are required), reduced to
+        side (BUY/SELL), price, quantity (Balance) and volume (price × quantity). Order numbers,
+        firms, accounts and client codes are never sent. Newest first; paging is in X-Has-More
+        and X-Next-Offset.
       parameters:
-        - {in: query, name: board, schema: {type: string}, description: ClassCode}
-        - {in: query, name: symbol, schema: {type: string}, description: SecCode}
+        - {in: query, name: board, required: true, schema: {type: string}, description: ClassCode}
+        - {in: query, name: symbol, required: true, schema: {type: string}, description: SecCode}
         - {in: query, name: limit, schema: {type: integer, minimum: 1, maximum: 1000, default: 200}}
         - {in: query, name: offset, schema: {type: integer, minimum: 0, maximum: 10000000, default: 0}}
       responses:
         "200":
-          description: Active Orders rows
+          description: Quotes
+          content:
+            application/json:
+              example: [{side: SELL, price: 100.5, quantity: 4, volume: 402}]
         "400":
-          description: Invalid limit or offset
+          description: Missing board or symbol, invalid limit or offset
         "401":
           description: Unauthorized
         "503":
