@@ -609,7 +609,7 @@ func mapPositionsResponse(sn positions.Snapshot, items []domain.FIXPosition) map
 		cash = []domain.FIXPosition{}
 	}
 	resp := map[string]any{
-		"source":      positionsResponseSource(sn, items),
+		"source":      "fix",
 		"instruments": instruments,
 		"cash":        cash,
 	}

@@ -55,34 +55,3 @@ func CheckMarketDataQueryText(q MarketDataQuery) error {
 	}
 	return nil
 }
-
-// CheckPositionMaintainText applies CheckFIXText to every string that 35=AL carries.
-func CheckPositionMaintainText(req PositionMaintainRequest) error {
-	for _, f := range []struct{ name, value string }{
-		{"firm_id", req.Firm}, {"client_code", req.ClientCode}, {"account", req.Account},
-		{"clearing_business_date", req.ClearingBusinessDate}, {"action", req.Action}, {"trans_type", req.TransType},
-	} {
-		if err := CheckFIXText(f.name, f.value, MaxFIXTextLen); err != nil {
-			return err
-		}
-	}
-	for _, b := range req.Blocks {
-		if err := CheckFIXText("pos_type", b.PosType, MaxFIXTextLen); err != nil {
-			return err
-		}
-		if err := CheckFIXText("update_action", b.UpdateAction, MaxFIXTextLen); err != nil {
-			return err
-		}
-		for _, m := range []map[string]string{b.Keys, b.Items} {
-			for k, v := range m {
-				if err := CheckFIXText("position key", k, MaxFIXTextLen); err != nil {
-					return err
-				}
-				if err := CheckFIXText(k, v, MaxFIXTextLen); err != nil {
-					return err
-				}
-			}
-		}
-	}
-	return nil
-}

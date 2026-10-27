@@ -42,7 +42,6 @@ type sessionApp struct {
 
 	posMu       sync.Mutex
 	posWait     *posWaiter
-	maintWait   *maintWaiter
 	posStream   *positionStream
 	posRetryAt  time.Time
 	posError    string
@@ -235,8 +234,6 @@ func (a *sessionApp) FromApp(msg *quickfix.Message, sessionID quickfix.SessionID
 		a.handlePositionReport(msg)
 	case string(enum.MsgType_REQUEST_FOR_POSITIONS_ACK):
 		a.handleRequestForPositionsAck(msg)
-	case string(enum.MsgType_POSITION_MAINTENANCE_REPORT):
-		a.handlePositionMaintenanceReport(msg)
 	case string(enum.MsgType_MARKET_DATA_SNAPSHOT_FULL_REFRESH):
 		a.handleMarketDataSnapshot(msg)
 	case string(enum.MsgType_MARKET_DATA_INCREMENTAL_REFRESH):
@@ -245,9 +242,6 @@ func (a *sessionApp) FromApp(msg *quickfix.Message, sessionID quickfix.SessionID
 		a.handleMarketDataReject(msg)
 	default:
 		a.log.Debug("unhandled fix app message", "adapter_id", a.adapterID, "msg_type", msgType, "wire", sanitizeFIX(msg))
-		if msgType == "AM" {
-			a.handlePositionMaintenanceReport(msg)
-		}
 	}
 	return nil
 }

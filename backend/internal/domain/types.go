@@ -290,28 +290,6 @@ type PositionQuery struct {
 	ClearingBusinessDate string // metadata only — not sent on ARQA AN
 }
 
-// PositionBlock is one ML/DL block for Position Maintenance Request (35=AL),
-// same PosKey/PosItem layout as Position Report (35=AP), ARQA §2.33.
-type PositionBlock struct {
-	PosType      string            // ML | DL
-	UpdateAction string            // 5024: 0 New / 1 Change / 2 Delete
-	Keys         map[string]string // 5026/5027
-	Items        map[string]string // 5029/5030
-	LongQty      decimal.Decimal
-	ShortQty     decimal.Decimal
-}
-
-// PositionMaintainRequest is sent to QUIK via FIX adapter (35=AL).
-type PositionMaintainRequest struct {
-	Firm                 string
-	ClientCode           string
-	Account              string
-	ClearingBusinessDate string
-	Action               string // 712 PosMaintAction: 1 New, 2 Replace, 3 Cancel
-	TransType            string // 709 PosTransType: 3 Position Adjustment
-	Blocks               []PositionBlock
-}
-
 // FIXPosition is one position block from Position Report (35=AP), ARQA §2.33.
 // Spot money = PosType ML; spot instrument = DL; futures limit/pos = FL/FP.
 type FIXPosition struct {

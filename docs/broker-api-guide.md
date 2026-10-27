@@ -207,7 +207,7 @@ REST-фильтры: `?board=<ClassCode>&symbol=<SecCode>`, оба необяз�
 | `GET /api/v1/positions` | Последние позиции своей фирмы | `{source, firm_id, cash: [Position], instruments: [Position]}`; при наличии — `snapshot`, `note` | `positions:read` |
 | gRPC `positions.updated` | Получать полные снимки позиций своей фирмы | `event.data = {source: "fix", firm_id, cash, instruments}`; без `snapshot` и `raw_fix` | `positions:read` |
 
-`cash` — деньги; `instruments` — бумаги и фьючерсы. REST `source`: `fix`, `manual` или `mixed`. gRPC отправляет полный снимок после `ready` и при обновлениях. Каждый снимок полностью заменяет оба массива. При отсутствии позиций массивы пустые. REST-фильтров по клиенту или инструменту нет.
+`cash` — деньги; `instruments` — бумаги и фьючерсы. REST `source` всегда `fix`. gRPC отправляет полный снимок после `ready` и при обновлениях. Каждый снимок полностью заменяет оба массива. При отсутствии позиций массивы пустые. REST-фильтров по клиенту или инструменту нет.
 
 ### Position: поля строки
 

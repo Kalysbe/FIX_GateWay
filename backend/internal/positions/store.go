@@ -186,6 +186,22 @@ func (s *Store) ListFromLatestByFirms(ctx context.Context, firms []string, kind 
 	return sn, out, rows.Err()
 }
 
+// ListMergedByFirms returns the latest FIX snapshot (QUIK is the source of truth).
+// Missing snapshot is not an error: sn.ID == 0 and items is empty.
+func (s *Store) ListMergedByFirms(ctx context.Context, firms []string, kind string) (Snapshot, []domain.FIXPosition, error) {
+	sn, items, err := s.ListFromLatestByFirms(ctx, firms, kind)
+	if err != nil {
+		if !IsNoSnapshot(err) {
+			return sn, nil, err
+		}
+		return Snapshot{}, []domain.FIXPosition{}, nil
+	}
+	if items == nil {
+		items = []domain.FIXPosition{}
+	}
+	return sn, items, nil
+}
+
 func IsNoSnapshot(err error) bool {
 	return err == pgx.ErrNoRows
 }

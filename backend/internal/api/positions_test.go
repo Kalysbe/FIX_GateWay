@@ -11,11 +11,11 @@ import (
 func TestMapPositionsResponseSplitsAndSource(t *testing.T) {
 	sn := positions.Snapshot{ID: 7, Status: "OK"}
 	items := []domain.FIXPosition{
-		{Kind: "CASH", FirmID: "2040", ClientCode: "a", NetQty: decimal.NewFromInt(1), Source: positions.SourceFIX},
-		{Kind: "INSTRUMENT", FirmID: "2040", ClientCode: "a", Symbol: "SBER", Source: positions.SourceManual},
+		{Kind: "CASH", FirmID: "2040", ClientCode: "a", NetQty: decimal.NewFromInt(1), Source: "fix"},
+		{Kind: "INSTRUMENT", FirmID: "2040", ClientCode: "a", Symbol: "SBER", Source: "fix"},
 	}
 	resp := mapPositionsResponse(sn, items)
-	if resp["source"] != "mixed" {
+	if resp["source"] != "fix" {
 		t.Fatalf("source %v", resp["source"])
 	}
 	cash, _ := resp["cash"].([]domain.FIXPosition)

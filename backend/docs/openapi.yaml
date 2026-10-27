@@ -2062,8 +2062,8 @@ components:
           type: string
         source:
           type: string
-          enum: [fix, manual]
-          description: fix — из снимка QUIK; manual — задано через API
+          enum: [fix]
+          description: fix — из снимка QUIK
         keys:
           type: object
           additionalProperties:
@@ -2100,7 +2100,7 @@ components:
       properties:
         source:
           type: string
-          enum: [fix, manual, mixed]
+          enum: [fix]
           example: fix
         firm_id:
           type: string

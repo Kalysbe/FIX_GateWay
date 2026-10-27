@@ -37,7 +37,7 @@ IP, token or connection. Rates, bursts and concurrency are independent values.
 Increasing a rate may briefly retain debt accumulated at the previous rate;
 configuration refresh never resets an exhausted bucket.
 
-Broker categories: Trading (SubmitOrder, CancelOrder, MaintainPositions), Queries (GetOrder,
+Broker categories: Trading (SubmitOrder, CancelOrder), Queries (GetOrder,
 GetOrders, GetSecurities, GetPositions, GetAccounts, GetTrades, GetOrderBook, OtherQuery), System (GetFirm). Actual HTTP
 route names are mapped to bounded operation names, never arbitrary URLs. There
 is no ReplaceOrder route to integrate in this repository. Add future route/RPC
