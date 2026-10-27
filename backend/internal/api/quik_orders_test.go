@@ -90,6 +90,20 @@ func TestBrokerOrdersUseAuthenticatedFirmBeforePagination(t *testing.T) {
 	if f := source.filter; w.Code != 200 || f.State != "Активна" || !f.Today || f.Firm != nil || f.ClassCode != "LISTBND" || f.SecCode != "GBA1" {
 		t.Fatal(w.Code, w.Body.String(), source.filter)
 	}
+	// Broker quotes: the same rows; neither the token's firm nor firm_id/broker_id narrows them.
+	w = httptest.NewRecorder()
+	s.listBrokerQuotes(w, brokerOrderRequest("/api/v1/quotes?board=LISTBND&symbol=GBA1&firm_id=9999&broker_id=99&limit=3&offset=6"))
+	if f := source.filter; w.Code != 200 || f.State != "Активна" || !f.Today || f.Firm != nil || f.ClassCode != "LISTBND" || f.SecCode != "GBA1" || f.Limit != 3 || f.Offset != 6 {
+		t.Fatal(w.Code, w.Body.String(), source.filter)
+	}
+	if strings.TrimSpace(w.Body.String()) != "["+raw+"]" {
+		t.Fatal("broker quotes added or changed fields", w.Body.String())
+	}
+	w = httptest.NewRecorder()
+	s.listBrokerQuotes(w, brokerOrderRequest("/api/v1/quotes?limit=1001"))
+	if w.Code != http.StatusBadRequest {
+		t.Fatal("limit above 1000 must be rejected", w.Code)
+	}
 	r.SetPathValue("id", "quik-20261022-LIST_GBA-1")
 	w = httptest.NewRecorder()
 	s.getBrokerOrder(w, r)

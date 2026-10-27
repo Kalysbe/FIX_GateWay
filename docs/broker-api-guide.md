@@ -179,6 +179,7 @@ gRPC не отправляет начальный список сделок.
 |---|---|---|
 | `GET /api/v1/market-data` | Текущие торги | JSON-массив инструментов (8 полей, см. ниже); при недоступности источника — HTTP 503 |
 | `GET /api/v1/market-data/{board}/{symbol}` | Один инструмент | Строка по `ClassCode` и `SecCode`; 404, если её нет за сегодня или класс не выбран |
+| `GET /api/v1/quotes` | Котировки: сегодняшние активные заявки всех фирм | JSON-массив исходных строк QUIK `Orders` (см. ниже) |
 | `GET /api/v1/orderbook` | Стаканы: спрос и предложение рынка (FIX) | `{source: "live", live, books: [OrderBook]}`; без доступных данных — `live: false`, `books: []`, `note` |
 | gRPC `marketdata.tick` | Изменения строк `Params` | `event.data_json` — исходная строка, `event.removed` — строка исчезла |
 
@@ -191,6 +192,16 @@ gRPC не отправляет начальный список сделок.
 REST-фильтры: `?board=<ClassCode>&symbol=<SecCode>`, оба необязательны; `limit` (1–5000, по умолчанию 1000) и `offset`, продолжение — в заголовках `X-Has-More` и `X-Next-Offset`. Если источник недоступен, ответ — HTTP 503 с `{"error":"market data unavailable"}` и `Retry-After`; пустая успешная выборка — `[]`.
 
 В gRPC снимка при подписке нет: загрузите текущие строки через REST и применяйте события по ключу `ClassCode` + `SecCode`. Таблица опрашивается раз в секунду; событие приходит только для изменившейся строки.
+
+### Котировки
+
+`GET /api/v1/quotes` возвращает строки `quik_export2.public."Orders"` с `State` = `Активна` и `TradeDate` = сегодня по Бишкеку (UTC+6) всех фирм, а не только фирмы токена: те же строки, что страница «Котировки» в админке. Строки в исходном виде, как в `GET /api/v1/orders`; цена, сторона и остаток — колонки `Price`, `Operation`, `Balance`. `OrderNum` может иметь 19 знаков — разбирайте JSON с сохранением точности.
+
+```json
+[{"OrderNum":7412,"ClassCode":"LISTBND","TradeDate":"2026-10-27T00:00:00","SecCode":"GBA02270915","FirmId":"SENTI2004","Operation":"Купля","State":"Активна","Qty":10,"Balance":10,"Price":100}]
+```
+
+Фильтры `?board=<ClassCode>&symbol=<SecCode>` необязательны и применяются в БД до пагинации; `firm_id` и `broker_id` игнорируются. `limit` 1–1000 (по умолчанию 200), `offset` 0–10 000 000; иначе HTTP 400. Порядок — `TradeDate`, `OrderNum` по убыванию, затем `ClassCode`. Продолжение — заголовки `X-Has-More` и `X-Next-Offset`: следующую страницу запрашивайте с `offset` = `X-Next-Offset`, пока `X-Has-More` не станет `false`. Страницы не являются снимком: если заявки меняются между запросами, строки на границе могут повториться или пропасть — устраняйте повторы по `ClassCode` + `OrderNum`. Лимит частоты — операция `GetOrders`. Источник недоступен — HTTP 503.
 
 `OrderBook` содержит только `symbol`, `security_id`, `board`, `currency`, `name`, `last`, `last_size`, `last_time`, `bid`, `bid_size`, `offer`, `offer_size`, `bids`, `offers`, `updated_at`. Массивы уровней в REST-стакане присутствуют всегда, в том числе пустые.
 
