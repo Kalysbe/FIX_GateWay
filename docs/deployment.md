@@ -75,13 +75,13 @@ password: admin123
 | `ADMIN_EMAIL` / `ADMIN_PASSWORD` | Bootstrap admin |
 | `LB_STRATEGY` | `least_connections` (default), `round_robin`, `weighted_round_robin` |
 | `CORS_ORIGINS` | Comma-separated origins |
-| `QUIK_API_BASE_URL` | Default origin of the internal QUIK Module API (`http://192.168.0.89:5000`). Operators can override it from the admin UI |
+| `QUIK_EXPORT_DATABASE_URL` | Read-only QUIK database: `Orders`, `Params`, `Trdaccs`, `Firms` and `Trades` (trade reconciliation). The QUIK Module API is not used |
 
 Adapter secrets (username/password) are referenced by env var **names** stored in DB (`username_env`, `password_env`), never returned to the frontend.
 
 For the local Compose stack, set `QUIK_EXPORT_DATABASE_URL` in the root `.env`
 (or `deploy/.env` when starting from `deploy/`). The QUIK export database on
-`192.168.0.89:5432` is `quik_export2`; the maintenance database `postgres` has no
+`172.23.10.84:5432` is `quik_export` (192.168.0.89 is no longer used); the maintenance database `postgres` has no
 QUIK tables. Apply a connection change with
 `docker compose up -d --no-deps gateway`, then check the startup message
 `quik export database connected` and authenticated
@@ -104,9 +104,9 @@ VPN-only broker access, strong secrets, and production certificates. Setting
 
 ### Сервер 172.23.10.96 и production QUIK
 
-Для существующего стенда на `172.23.10.96` используется пара `deploy/docker-compose.yml` + `deploy/docker-compose.override.yml`. Override задаёт `ADAPTER_HOST_OVERRIDE=172.23.10.84` для всех FIX-сессий, включая резервную, и `QUIK_API_BASE_URL=http://172.23.10.85:5000` для истории. Админка остаётся на `5173`, API — на `8081`. Локальный тестовый стенд без этого override использует `192.168.0.89`.
+Для существующего стенда на `172.23.10.96` используется пара `deploy/docker-compose.yml` + `deploy/docker-compose.override.yml`. Override задаёт `ADAPTER_HOST_OVERRIDE=172.23.10.84` для всех FIX-сессий, включая резервную. Админка остаётся на `5173`, API — на `8081`. БД QUIK для всех стендов — `172.23.10.84`; `192.168.0.89` не используется.
 
-В существующей БД `adapters.host=172.23.10.84` для QUIK-адаптеров, а `gateway_settings.quik_api_base_url=http://172.23.10.85:5000`: сохранённый origin API имеет приоритет над env. Источник текущих заявок и текущих торгов — PostgreSQL `172.23.10.84:5432/quik_export`, таблицы `public."Orders"`, `public."Params"`, `public."Trdaccs"` и `public."Firms"`. Его DSN задаётся через `QUIK_EXPORT_DATABASE_URL` в приватном `deploy/.env` сервера; учётные данные не хранить в репозитории. Подключение работает только на чтение. Основная БД самого gateway остаётся отдельной.
+В существующей БД `adapters.host=172.23.10.84` для QUIK-адаптеров. Источник текущих заявок, текущих торгов и сделок — PostgreSQL `172.23.10.84:5432/quik_export`, таблицы `public."Orders"`, `public."Params"`, `public."Trdaccs"`, `public."Firms"` и `public."Trades"`. QUIK Module API (`172.23.10.85:5000`) не используется; миграция 37 удаляет `gateway_settings.quik_api_base_url`. Его DSN задаётся через `QUIK_EXPORT_DATABASE_URL` в приватном `deploy/.env` сервера; учётные данные не хранить в репозитории. Подключение работает только на чтение. Основная БД самого gateway остаётся отдельной.
 
 ```bash
 docker compose -p deploy -f deploy/docker-compose.yml -f deploy/docker-compose.override.yml up -d --build

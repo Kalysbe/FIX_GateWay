@@ -116,8 +116,6 @@ func fieldHint(field string) string {
 		return `tag — ключ денежной позиции (например EQTV); если пусто, берётся currency`
 	case strings.Contains(f, "firm"):
 		return `firm_id — код фирмы / код брокера (например 2040)`
-	case strings.Contains(f, "base_url"):
-		return `base_url — адрес QUIK Module API, например http://192.168.0.89:5000`
 	default:
 		return `см. схему CreateOrderRequest: symbol→инструмент; board→код класса (FIX 100); фирма→quik_firm (FIX 5018)`
 	}

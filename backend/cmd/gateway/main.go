@@ -232,7 +232,7 @@ func main() {
 	})
 	go server.RunDashboardRefresh(ctx)
 	if os.Getenv("TRADE_RECONCILIATION_ENABLED") == "true" {
-		go server.RunTradeReconciliation(ctx)
+		go server.RunTradeReconciliation(ctx, quikExportStore)
 	}
 	marketClasses := quikexport.NewClassSettings(pool)
 	server.SetMarketDataClasses(marketClasses)

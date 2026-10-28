@@ -35,11 +35,9 @@ const quote = '{"OrderNum":7412,"ClassCode":"LIST_GD","TradeDate":"2026-10-26T00
 test('quotes come from QUIK Orders rows and link to the order and the instrument', () => {
   const page = load('pages/QuotesPage.tsx', { ...common,
     '@tanstack/react-query': {
-      useQuery: ({ queryKey }) => ({ data: queryKey[0] === 'admin-quotes' ? raw.parseDBJSON('[' + quote + ']') : { base_url: 'http://x', default_base_url: 'http://x' }, isLoading: false, isFetching: false, refetch() {} }),
-      useMutation: () => ({ isPending: false, mutate() {} }), useQueryClient: () => ({ invalidateQueries() {} }),
+      useQuery: ({ queryKey }) => ({ data: queryKey[0] === 'admin-quotes' ? raw.parseDBJSON('[' + quote + ']') : undefined, isLoading: false, isFetching: false, refetch() {} }),
     },
-    '../api': { api() { throw Error('unexpected request'); }, apiWithHeaders() { throw Error('unexpected request'); }, getSessionUser: () => ({ role: 'ADMIN' }) },
-    '../components/Toast': { useToast: () => ({ push() {} }) },
+    '../api': { apiWithHeaders() { throw Error('unexpected request'); } },
   });
   const html = renderToStaticMarkup(React.createElement(page.default));
   assert.match(html, /Сегодняшние активные заявки QUIK · таблица Orders, State = «Активна»/);
@@ -48,7 +46,8 @@ test('quotes come from QUIK Orders rows and link to the order and the instrument
   assert.match(html, /SENTI2004/);
   assert.match(html, /<b>Остаток<\/b>/);
   assert.match(html, /2026-10-26/);
-  assert.match(html, /история сделок/);
+  // The QUIK Module API address field is gone: trades come from the QUIK database.
+  assert.doesNotMatch(html, /QUIK API|:5000/);
 });
 
 test('the instrument page shows every stored column of Params, Securities and Classes and its quotes', () => {

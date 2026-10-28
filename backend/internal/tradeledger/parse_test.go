@@ -40,7 +40,20 @@ func TestExchangeIdentityUsesTradeNumAndPreservesRealSides(t *testing.T) {
 	}
 }
 
-// The QUIK API on 172.23.10.85 sends the local trading date as a UTC instant.
+// row_to_json of public."Trades" gives numbers as JSON numbers and TradeDate
+// as a timestamp without zone, which is the local trading date.
+func TestQUIKDatabaseRowIsParsed(t *testing.T) {
+	row := `{"TradeNum":11094,"Operation":"Купля","TradeDate":"2026-10-06T00:00:00","ClassCode":"LIST_GBA","SecCode":"GBA02280810","OrderNum":22450,"Price":99.00000000,"Qty":201,"ClientCode":"Kalys","FirmId":"2040","Account":"1-3101-2040","CanceledDateTime":null}`
+	q, err := ParseQUIK(json.RawMessage(row))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if q.Match != "261006-LIST_GBA-11094" || q.Number != "11094" || q.OrderNumber != "22450" || q.Side != "BUY" || q.Qty.String() != "201" || q.Price.String() != "99" {
+		t.Fatal(q)
+	}
+}
+
+// Saved QUIK API evidence (172.23.10.85) holds the local trading date as a UTC instant.
 // TradeNum 26092500000001 (YYMMDD 260925) arrived as 2026-09-24T18:00:00.000Z.
 func TestQUIKISOTradeDateIsReadInExchangeZone(t *testing.T) {
 	for in, want := range map[string]string{

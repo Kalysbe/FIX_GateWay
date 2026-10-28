@@ -5,8 +5,6 @@ package tradeledger
 import (
 	"context"
 	"encoding/json"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"strings"
 	"sync/atomic"
@@ -42,26 +40,30 @@ func fixture(t *testing.T) (context.Context, *Store) {
 	return ctx, NewStore(pool)
 }
 
+// fakeQUIK stands in for public."Trades": a JSON array of rows, or an error.
+type fakeQUIK struct{ rows atomic.Value }
+
+func (f *fakeQUIK) Trades(context.Context) ([]json.RawMessage, error) {
+	var out []json.RawMessage
+	if err := json.Unmarshal([]byte(f.rows.Load().(string)), &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func TestSnapshotIdentityCoverageCannotRegressAtSameCount(t *testing.T) {
 	ctx, s := fixture(t)
 	sell := strings.Replace(strings.Replace(sampleQUIK, `"Купля"`, `"Продажа"`, 1), `"22450"`, `"19358"`, 1)
 	pair := sampleQUIK + "," + sell
 	first := "[" + pair + "," + strings.ReplaceAll(pair, "11094", "11095") + "]"
-	var response atomic.Value
-	response.Store(first)
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != "GET" || r.URL.Path != "/api/trades" {
-			t.Error("unexpected trading operation", r.Method, r.URL.Path)
-		}
-		_, _ = w.Write([]byte(response.Load().(string)))
-	}))
-	defer server.Close()
-	if _, err := s.Sync(ctx, server.URL); err != nil {
+	src := &fakeQUIK{}
+	src.rows.Store(first)
+	if _, err := s.Sync(ctx, src); err != nil {
 		t.Fatal(err)
 	}
 	for _, bad := range []string{"[]", "[" + pair + "]", "[" + pair + "," + strings.ReplaceAll(pair, "11094", "11096") + "]", "[" + sampleQUIK} {
-		response.Store(bad)
-		if _, err := s.Sync(ctx, server.URL); err == nil {
+		src.rows.Store(bad)
+		if _, err := s.Sync(ctx, src); err == nil {
 			t.Fatal("incomplete source coverage accepted", bad)
 		}
 		h, err := s.Health(ctx)
@@ -69,8 +71,8 @@ func TestSnapshotIdentityCoverageCannotRegressAtSameCount(t *testing.T) {
 			t.Fatal("failure did not preserve health evidence", h, err)
 		}
 	}
-	response.Store("[" + pair + "," + strings.ReplaceAll(pair, "11094", "11095") + "," + strings.ReplaceAll(pair, "11094", "11096") + "]")
-	if _, err := s.Sync(ctx, server.URL); err != nil {
+	src.rows.Store("[" + pair + "," + strings.ReplaceAll(pair, "11094", "11095") + "," + strings.ReplaceAll(pair, "11094", "11096") + "]")
+	if _, err := s.Sync(ctx, src); err != nil {
 		t.Fatal("complete retry did not recover", err)
 	}
 	h, err := s.Health(ctx)
@@ -122,12 +124,9 @@ func TestLedgerRestoresActualBuyerWithoutInventingLocalOrders(t *testing.T) {
 	}
 }
 
-func TestLedgerRejectsTruncatedSnapshotAndRetainsSingleReportedSide(t *testing.T) {
+func TestLedgerRejectsOneSidedSnapshotAndRetainsSingleReportedSide(t *testing.T) {
 	ctx, s := fixture(t)
-	if _, _, err := s.Import(ctx, strings.NewReader("["+sampleQUIK)); err == nil {
-		t.Fatal("truncated history accepted")
-	}
-	if n, _, err := s.Import(ctx, strings.NewReader("["+sampleQUIK+"]")); err == nil || n != 1 {
+	if n, _, err := s.Import(ctx, []json.RawMessage{json.RawMessage(sampleQUIK)}); err == nil || n != 1 {
 		t.Fatal("one-sided source claimed complete", n, err)
 	}
 	var sides int

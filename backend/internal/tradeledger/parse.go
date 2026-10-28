@@ -174,17 +174,21 @@ func ParseQUIK(raw json.RawMessage) (Input, error) {
 // zone avoids depending on tzdata in the container image.
 var exchangeZone = time.FixedZone("Asia/Bishkek", 6*60*60)
 
-// quikTradeDate accepts both QUIK API date forms. Some instances send
-// "DD-MM-YYYY"; others serialize the local trading date as a UTC instant, e.g.
-// 25.09 becomes "2026-09-24T18:00:00.000Z". Cutting the first ten characters
-// would book that trade on the previous day, so instants are read in the
-// exchange zone (verified against YYMMDD-prefixed TradeNum on 172.23.10.85).
+// quikTradeDate accepts the QUIK date forms. row_to_json of the QUIK table
+// gives "TradeDate" timestamp without zone ("2026-10-06T00:00:00"): that is
+// already the local trading date. Older saved evidence holds "DD-MM-YYYY" or
+// the local date serialized as a UTC instant, e.g. 25.09 as
+// "2026-09-24T18:00:00.000Z"; instants are read in the exchange zone so the
+// trade is not booked on the previous day.
 func quikTradeDate(s string) (time.Time, error) {
 	if d, err := time.Parse("02-01-2006", s); err == nil {
 		return d, nil
 	}
 	if d, err := time.Parse(time.DateOnly, s); err == nil {
 		return d, nil
+	}
+	if t, err := time.Parse("2006-01-02T15:04:05.999999999", s); err == nil {
+		return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, time.UTC), nil
 	}
 	t, err := time.Parse(time.RFC3339Nano, s)
 	if err != nil {

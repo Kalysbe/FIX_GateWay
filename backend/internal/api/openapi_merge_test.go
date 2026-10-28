@@ -102,10 +102,3 @@ func TestMergeOpenAPIBrokerOnlyHidesAdmin(t *testing.T) {
 		t.Fatalf("admin route leaked into broker spec:\n%s", text)
 	}
 }
-
-func TestAutoTagQuikAPI(t *testing.T) {
-	t.Parallel()
-	if got := autoTag("/api/v1/admin/quik-api/quotes"); got != "QUIK API" {
-		t.Fatalf("got %q", got)
-	}
-}

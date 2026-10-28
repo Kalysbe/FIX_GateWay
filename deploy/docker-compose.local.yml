@@ -94,7 +94,6 @@ services:
       MIGRATIONS_PATH: /app/migrations
       FIX_SESSION_DIR: /app/fix-sessions
       ADAPTER_HOST_OVERRIDE: fixsimulator
-      QUIK_API_BASE_URL: http://127.0.0.1:1
       # SELECT-only role on the simulator's Orders table (see local-quik-export.sql).
       QUIK_EXPORT_DATABASE_URL: postgres://quik_reader:local-simulator-only@postgres:5432/quik_export_local?sslmode=disable
       POSITION_SYNC_INTERVAL: "0s"

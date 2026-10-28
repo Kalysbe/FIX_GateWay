@@ -38,7 +38,6 @@ type Config struct {
 	GRPCServerName           string
 	DatabaseURL              string
 	QuikExportDatabaseURL    string
-	QuikAPIBaseURL           string
 	JWTSecret                string
 	APITokenPepper           string
 	AdminEmail               string
@@ -122,7 +121,6 @@ func Load() Config {
 		GRPCServerName:           getEnv("GRPC_SERVER_NAME", "localhost"),
 		DatabaseURL:              getEnv("DATABASE_URL", "postgres://postgres:123@localhost:5432/fix_gateway?sslmode=disable"),
 		QuikExportDatabaseURL:    getEnv("QUIK_EXPORT_DATABASE_URL", ""),
-		QuikAPIBaseURL:           getEnv("QUIK_API_BASE_URL", "http://192.168.0.89:5000"),
 		JWTSecret:                getEnv("JWT_SECRET", "dev-jwt-secret-change-me"),
 		APITokenPepper:           getEnv("API_TOKEN_PEPPER", "dev-token-pepper-change-me"),
 		AdminEmail:               getEnv("ADMIN_EMAIL", "admin@localhost"),

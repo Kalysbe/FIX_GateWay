@@ -170,8 +170,6 @@ func autoTag(path string) string {
 	switch {
 	case path == "/health" || path == "/ready" || path == "/metrics":
 		return "Ops"
-	case strings.Contains(path, "/quik-api"):
-		return "QUIK API"
 	case strings.HasPrefix(path, "/api/v1/admin"):
 		return "Admin"
 	case strings.HasPrefix(path, "/api/v1/orders"):

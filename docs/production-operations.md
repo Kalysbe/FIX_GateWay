@@ -30,7 +30,7 @@ Gateway и backup работают как UID/GID `10001:10001`, frontend Nginx 
 
 Брокеры используют VPN + TLS + API-токен для REST и gRPC. По умолчанию `HMAC_REQUIRED=false`, `GRPC_MTLS_REQUIRED=false`. Доступ через VPN ограничивается интерфейсами хоста и firewall; приложение не проверяет наличие туннеля. mTLS и HMAC можно включить отдельно.
 
-`FIX_CREDENTIAL_ENV_FILE` — операторский env-файл с именами credentials, например `ARQA_USERNAME_FILE=/run/fix/username` и `ARQA_PASSWORD_FILE=/run/fix/password`. `UsernameEnv`/`PasswordEnv` конкретного адаптера должны ссылаться на `ARQA_USERNAME`/`ARQA_PASSWORD`. Содержимое credentials не помещается в env-файл. При необходимости отдельный QUIK API указывается явно через `QUIK_API_BASE_URL`; другие проекты не должны обнаруживаться автоматически.
+`FIX_CREDENTIAL_ENV_FILE` — операторский env-файл с именами credentials, например `ARQA_USERNAME_FILE=/run/fix/username` и `ARQA_PASSWORD_FILE=/run/fix/password`. `UsernameEnv`/`PasswordEnv` конкретного адаптера должны ссылаться на `ARQA_USERNAME`/`ARQA_PASSWORD`. Содержимое credentials не помещается в env-файл. Данные QUIK (заявки, текущие торги, счета, сделки) читаются только из БД QUIK через `QUIK_EXPORT_DATABASE_URL`; QUIK Module API не используется. Другие проекты не должны обнаруживаться автоматически.
 
 ## Production env и первый запуск
 
@@ -55,12 +55,11 @@ GRPC_PORT=8443
 HMAC_REQUIRED=false
 GRPC_MTLS_REQUIRED=false
 QUIK_FIX_HOST=172.23.10.84
-QUIK_API_BASE_URL=http://172.23.10.84:5000
 ```
 
-Тестовый QUIK расположен на `192.168.0.89`, production QUIK — на `172.23.10.84`. Production Compose задаёт `ADAPTER_HOST_OVERRIDE` из `QUIK_FIX_HOST`, поэтому тестовый host из исторических миграций не используется для FIX-соединений. Порты и CompID берутся из записей адаптеров; подтвердить их по production-контракту, а также TLS identity в `transport.json`. На тестовом стенде используются FIX `15101`/`15102` и QUIK API `5000`; доступность этих портов в production не проверялась.
+QUIK расположен на `172.23.10.84` (`192.168.0.89` больше не используется). Production Compose задаёт `ADAPTER_HOST_OVERRIDE` из `QUIK_FIX_HOST`, поэтому тестовый host из исторических миграций не используется для FIX-соединений. Порты и CompID берутся из записей адаптеров; подтвердить их по production-контракту, а также TLS identity в `transport.json`. БД QUIK — `172.23.10.84:5432/quik_export`; чтение `Trades` с сервера `172.23.10.96` проверено 28.10.2026.
 
-После миграций и до запуска production gateway применить `deploy/production/quik-endpoint.sql` **только к production БД FIX_GateWay**. Он задаёт production host, выключает simulator-адаптеры, отключает ResetOnLogon и сохраняет production origin QUIK API. Это необходимо и для БД, перенесённой с тестового стенда: сохранённый `gateway_settings.quik_api_base_url` имеет приоритет над `QUIK_API_BASE_URL`. Если production API использует другой порт/HTTPS origin, изменить этот origin в SQL и env согласованно до применения. Скрипт не меняет порты, CompID и credentials и не заменяет подготовку PKI/UAT.
+После миграций и до запуска production gateway применить `deploy/production/quik-endpoint.sql` **только к production БД FIX_GateWay**. Он задаёт production host, выключает simulator-адаптеры и отключает ResetOnLogon. Это необходимо и для БД, перенесённой с тестового стенда. Скрипт не меняет порты, CompID и credentials и не заменяет подготовку PKI/UAT.
 
 Заменить примеры реальными значениями. Для удалённых брокеров задать `HTTPS_BIND_IP` и `GRPC_BIND_IP` адресом интерфейса хоста, доступным через VPN; loopback из примера допускает только локальные подключения. Firewall разрешает эти порты только VPN-адресам брокеров. Проверить отсутствие конфликта `GATEWAY_SUBNET` (по умолчанию `10.89.0.0/24`); `EDGE_IPV4` должен находиться в этой сети. Gateway доверяет forwarded headers только точному IP edge. Edge сам завершает TLS и перезаписывает X-Forwarded-*; публичные `/health`, `/ready`, `/metrics`, Swagger/OpenAPI закрыты.
 

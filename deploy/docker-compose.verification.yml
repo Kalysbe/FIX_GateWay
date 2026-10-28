@@ -3,9 +3,9 @@
 services:
   gateway:
     environment:
+      # The local QUIK stand-in has no "Trades" table: the failing history
+      # source exercises Gateway notifications.
       TRADE_RECONCILIATION_ENABLED: "true"
-      # Loopback-only unavailable history source exercises Gateway notifications.
-      QUIK_API_BASE_URL: http://127.0.0.1:1
   access:
     ports: !override
       - "127.0.0.1:38080:8080"

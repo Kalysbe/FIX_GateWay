@@ -85,10 +85,9 @@ services:
       REQUIRE_HTTPS: ${REQUIRE_HTTPS:-false}
       HMAC_REQUIRED: ${HMAC_REQUIRED:-false}
       OPERATIONS_ADDR: ":9080"
-      # Test QUIK is 192.168.0.89; simulator adapters remain disabled in the UAT DB.
+      # QUIK is 172.23.10.84; simulator adapters remain disabled in the UAT DB.
       ADAPTER_HOST_OVERRIDE: ${ADAPTER_HOST_OVERRIDE:-}
       MARKET_DATA_BOARDS: ${MARKET_DATA_BOARDS:-LISTEDSTOCKK,LIST_GBA}
-      QUIK_API_BASE_URL: ${QUIK_API_BASE_URL:-http://192.168.0.89:5000}
       TRADE_RECONCILIATION_ENABLED: ${TRADE_RECONCILIATION_ENABLED:-true}
     ports:
       - "127.0.0.1:8080:8080"

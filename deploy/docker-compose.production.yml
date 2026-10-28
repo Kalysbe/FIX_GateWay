@@ -56,7 +56,6 @@ services:
       GRPC_TARGET: localhost:8443
       GRPC_SERVER_NAME: ${GRPC_SERVER_NAME:?provide certificate DNS identity}
       PROMETHEUS_URL: http://prometheus:9090
-      QUIK_API_BASE_URL: ${QUIK_API_BASE_URL:-http://172.23.10.84:5000}
       OBS_FIX_RAW_LOGS: "false"
       OBS_SKIP_ORIGINS: ""
       WORKER_ID: gateway-production-1

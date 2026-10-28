@@ -28,7 +28,6 @@ import (
 	"github.com/fix-gateway/backend/internal/orders"
 	"github.com/fix-gateway/backend/internal/outbox"
 	"github.com/fix-gateway/backend/internal/positions"
-	"github.com/fix-gateway/backend/internal/quikapi"
 	"github.com/fix-gateway/backend/internal/quikexport"
 	"github.com/fix-gateway/backend/internal/ratelimit"
 	"github.com/fix-gateway/backend/internal/realtime"
@@ -64,7 +63,6 @@ type Server struct {
 	quikParams         quikParamReader
 	quikRefs           quikRefReader
 	marketClasses      *quikexport.ClassSettings
-	quikAPI            *quikapi.Client
 	obs                *observability.Pipeline
 	realtimeClient     pb.RealtimeServiceClient
 	ratePolicies       *ratelimit.Store
@@ -91,7 +89,6 @@ func NewServer(
 		refdata:         refdata.NewStore(pool),
 		positions:       positions.NewStore(pool),
 		tradeLedger:     tradeledger.NewStore(pool),
-		quikAPI:         quikapi.NewClient(quikapi.NewStore(pool, cfg.QuikAPIBaseURL), nil),
 		obs:             obs,
 		trusted:         observability.ParseTrustedProxies(cfg.TrustedProxies),
 		hmacNonces:      auth.NewNonceCache(10 * time.Minute),
@@ -247,9 +244,6 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/v1/admin/market-data/settings", s.adminRO(s.getMarketDataSettings))
 	mux.Handle("PATCH /api/v1/admin/market-data/settings", s.adminOps(s.patchMarketDataSettings))
 	mux.Handle("GET /api/v1/admin/classes", s.adminRO(s.listQuikClasses))
-	mux.Handle("GET /api/v1/admin/quik-api/settings", s.adminRO(s.getQuikAPISettings))
-	mux.Handle("PATCH /api/v1/admin/quik-api/settings", s.adminOps(s.patchQuikAPISettings))
-	mux.Handle("GET /api/v1/admin/quik-api/quotes", s.adminRO(s.listQuikAPIQuotes))
 	mux.Handle("GET /api/v1/admin/adapters", s.adminRO(s.listAdapters))
 	mux.Handle("POST /api/v1/admin/adapters", s.adminWrite(s.createAdapter))
 	mux.Handle("PATCH /api/v1/admin/adapters/{id}", s.adminWrite(s.patchAdapter))

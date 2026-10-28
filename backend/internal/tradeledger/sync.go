@@ -4,32 +4,28 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
-	"strings"
 	"time"
 )
 
+// MaxSnapshotRows bounds one QUIK trade snapshot.
+const MaxSnapshotRows = 200000
+
+// SourceLabel names the QUIK trade table in trade_sync_runs.
+const SourceLabel = `quik_db:public."Trades"`
+
+// Source returns the complete QUIK trade history, one JSON object per row.
+type Source interface {
+	Trades(ctx context.Context) ([]json.RawMessage, error)
+}
+
 // Import keeps each source record even on validation failure. It does not invent
 // local orders or update their fills from a historical snapshot.
-func (s *Store) Import(ctx context.Context, reader io.Reader) (int, int, error) {
-	dec := json.NewDecoder(io.LimitReader(reader, 128<<20))
-	token, err := dec.Token()
-	if err != nil {
-		return 0, 0, err
-	}
-	if token != json.Delim('[') {
-		return 0, 0, fmt.Errorf("QUIK trades must be a JSON array")
-	}
+func (s *Store) Import(ctx context.Context, records []json.RawMessage) (int, int, error) {
 	count, failures := 0, 0
 	seen := make(map[string]int)
-	for dec.More() {
-		var raw json.RawMessage
-		if err := dec.Decode(&raw); err != nil {
-			return count, failures, err
-		}
+	for _, raw := range records {
 		count++
-		if count > 200000 {
+		if count > MaxSnapshotRows {
 			return count, failures, fmt.Errorf("QUIK trade snapshot exceeds record limit")
 		}
 		p, parseErr := ParseQUIK(raw)
@@ -48,13 +44,6 @@ func (s *Store) Import(ctx context.Context, reader io.Reader) (int, int, error) 
 			failures++
 		}
 	}
-	if _, err := dec.Token(); err != nil {
-		return count, failures, err
-	}
-	var extra any
-	if err := dec.Decode(&extra); err != io.EOF {
-		return count, failures, fmt.Errorf("unexpected trailing QUIK content: %v", err)
-	}
 	if failures > 0 {
 		return count, failures, fmt.Errorf("%d source records need reconciliation; see trade_reports", failures)
 	}
@@ -70,7 +59,7 @@ func (s *Store) Import(ctx context.Context, reader io.Reader) (int, int, error) 
 	if unpaired > 0 {
 		return count, unpaired, snapshotError(unpaired)
 	}
-	// A syntactically valid array of complete pairs can still omit whole trades.
+	// A complete-looking set of pairs can still omit whole trades.
 	// Compare identities, not just counts: an omitted old pair must not be hidden
 	// by a newly added pair. Every previously observed QUIK side remains required.
 	rows, err := s.Pool.Query(ctx, `SELECT t.trade_match_id,t.symbol,t.board,s.side
@@ -102,30 +91,19 @@ FROM trade_sides s JOIN trades t ON t.id=s.trade_id WHERE s.has_quik_record`)
 	return count, 0, nil
 }
 
-func (s *Store) Sync(ctx context.Context, base string) (int, error) {
-	id, err := s.StartRun(ctx, base)
+// Sync reads the QUIK trade table directly (read-only) and reconciles it.
+func (s *Store) Sync(ctx context.Context, src Source) (int, error) {
+	id, err := s.StartRun(ctx, SourceLabel)
 	if err != nil {
 		return 0, err
 	}
 	records, failures := 0, 0
 	runErr := func() error {
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(base, "/")+"/api/trades", nil)
+		rows, err := src.Trades(ctx)
 		if err != nil {
 			return err
 		}
-		req.Header.Set("Accept", "application/json")
-		client := &http.Client{Timeout: 3 * time.Minute, CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			return fmt.Errorf("QUIK trade redirects are not allowed")
-		}}
-		res, err := client.Do(req)
-		if err != nil {
-			return err
-		}
-		defer res.Body.Close()
-		if res.StatusCode != http.StatusOK {
-			return fmt.Errorf("QUIK trades HTTP %d", res.StatusCode)
-		}
-		records, failures, err = s.Import(ctx, res.Body)
+		records, failures, err = s.Import(ctx, rows)
 		return err
 	}()
 	// Preserve failure evidence even when the request context expired.

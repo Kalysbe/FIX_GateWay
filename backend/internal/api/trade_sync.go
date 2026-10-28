@@ -5,12 +5,15 @@ import (
 	"time"
 
 	"github.com/fix-gateway/backend/internal/metrics"
+	"github.com/fix-gateway/backend/internal/quikexport"
 )
 
-// RunTradeReconciliation restores local evidence, then compares with the
-// explicitly configured, read-only QUIK trade source on startup and every minute.
+// RunTradeReconciliation restores local evidence, then compares with the QUIK
+// trade table public."Trades", read directly over the read-only QUIK database
+// connection, on startup and every minute.
 // Failures remain visible in trade_sync_runs and the admin coverage response.
-func (s *Server) RunTradeReconciliation(ctx context.Context) {
+// Without the QUIK connection each run fails visibly (ErrNotConfigured).
+func (s *Server) RunTradeReconciliation(ctx context.Context, quik *quikexport.Store) {
 	if s.tradeLedger == nil || s.tradeLedger.Pool == nil {
 		return
 	}
@@ -26,10 +29,7 @@ func (s *Server) RunTradeReconciliation(ctx context.Context) {
 	defer ticker.Stop()
 	for {
 		work, stop := context.WithTimeout(ctx, 4*time.Minute)
-		base, _, problem := s.quikAPI.Settings(work)
-		if problem == nil {
-			_, problem = s.tradeLedger.Sync(work, base)
-		}
+		_, problem := s.tradeLedger.Sync(work, quik)
 		stop()
 		if problem != nil {
 			s.log.Error("QUIK trade reconciliation failed; source evidence retained", "error", problem)

@@ -8,13 +8,15 @@ import (
 	"os"
 	"time"
 
+	"github.com/fix-gateway/backend/internal/platform/db"
 	"github.com/fix-gateway/backend/internal/platform/migrate"
+	"github.com/fix-gateway/backend/internal/quikexport"
 	"github.com/fix-gateway/backend/internal/tradeledger"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 func main() {
-	file := flag.String("quik-file", "", "saved read-only QUIK /api/trades response")
+	quik := flag.Bool("quik", false, `reconcile with QUIK public."Trades" over read-only QUIK_EXPORT_DATABASE_URL`)
 	backfill := flag.Bool("backfill", true, "restore ledger from persisted FIX reports")
 	applyMigrations := flag.Bool("migrate", false, "apply forward migrations before reconciliation")
 	flag.Parse()
@@ -38,20 +40,13 @@ func main() {
 		}
 		fmt.Printf("FIX source reports: %d; errors: %d\n", n, bad)
 	}
-	if *file != "" {
-		f, err := os.Open(*file)
+	if *quik {
+		quikPool, err := db.OpenReadOnly(ctx, os.Getenv("QUIK_EXPORT_DATABASE_URL"))
 		if err != nil {
 			fail(err)
 		}
-		defer f.Close()
-		id, err := store.StartRun(ctx, "file:"+*file)
-		if err != nil {
-			fail(err)
-		}
-		n, bad, problem := store.Import(ctx, f)
-		if err := store.FinishRun(ctx, id, n, bad, problem); err != nil {
-			fail(err)
-		}
+		defer quikPool.Close()
+		n, problem := store.Sync(ctx, quikexport.NewStore(quikPool))
 		if problem != nil {
 			fail(problem)
 		}
