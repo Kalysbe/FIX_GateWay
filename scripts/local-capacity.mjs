@@ -56,9 +56,9 @@ async function stage(mode,rate,duration=seconds,warmup=false){
   const start=performance.now();let next=0,finished=false,samplingError;
   const sampling=(async()=>{while(!finished){await sleep(2000);if(finished)break;const s=await stats(id);result.samples.push({seconds:(performance.now()-start)/1000,...s});}})().catch(e=>{samplingError=e;});
   const submit=async n=>{try{
-    const r=await request('/api/v1/orders',token,'POST',{account_id:'CAPACITY',client_code:'CAPACITY',symbol:'SBER',board:'TQBR',side:n%2?'SELL':'BUY',order_type:'LIMIT',time_in_force:'DAY',quantity:'1',price:'100'},`${id}-${n}`);
+    const r=await request('/api/v1/orders',token,'POST',{ClassCode:'TQBR',SecCode:'SBER',Operation:n%2?'Продажа':'Купля',Price:100,Qty:1,Account:'CAPACITY',ClientCode:'CAPACITY'},`${id}-${n}`);
     result.statuses[r.status]=(result.statuses[r.status]||0)+1;
-    if(r.status===201||r.status===200){accepted.add(r.data.order.id);latencies.push(r.ms);}
+    if([200,201,202].includes(r.status)){accepted.add(r.data.id);latencies.push(r.ms);}
     else assert.ok([429,503].includes(r.status),JSON.stringify(r.data));
   }catch(e){result.statuses.network=(result.statuses.network||0)+1;result.lastError=e.message;}};
   while(performance.now()-start<duration*1000){

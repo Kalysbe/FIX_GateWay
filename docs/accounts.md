@@ -7,7 +7,7 @@
 
 Используемые колонки (остальные передаются как есть):
 
-- `Trdaccs`: `TrdAccId` — торговый счёт (`account_id` заявки, FIX tag 1),
+- `Trdaccs`: `TrdAccId` — торговый счёт (`Account` заявки, FIX tag 1),
   `FirmId` — фирма. Также `Type`, `LoadDate`, `Description`, `BankAccId`,
   `Status`, `DepAccId`, `TrdAccType`, `MainTrdAccId`, `FirmUse`,
   `FullCoveredSell`, `BankIdT0`, `BankIdTPlus`, `DepUnitId`, `Flags`.
@@ -15,10 +15,10 @@
 
 ## Проверка заявки
 
-`account_id` принимается, если в `Trdaccs` есть строка с `TrdAccId` = `account_id`
+`Account` принимается, если в `Trdaccs` есть строка с `TrdAccId` = `Account`
 и `FirmId` = `quik_firm` токена (сравнение после обрезки пробелов, с учётом
 регистра). Значение `TrdAccId` из БД уходит в FIX tag 1. Иначе — 400
-`account_id … не найден в QUIK Trdaccs для фирмы …` (событие
+`Account … не найден в QUIK Trdaccs для фирмы …` (событие
 `ACCOUNT_NOT_ALLOWED`). Недоступность QUIK — 503, заявка не создаётся.
 Колонка `Status` пока не проверяется: значения статусов не согласованы.
 

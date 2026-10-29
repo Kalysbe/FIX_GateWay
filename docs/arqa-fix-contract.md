@@ -62,16 +62,16 @@ Minimum concurrent instances in MVP: **2**.
 | 21 | HandlInst | Y | `1` (automated, no broker intervention) |
 | 54 | Side | Y | 1=Buy, 2=Sell |
 | 60 | TransactTime | Y | UTC, seconds precision (`YYYYMMDD-HH:MM:SS`) |
-| 40 | OrdType | Y | 1=Market, 2=Limit |
+| 40 | OrdType | Y | 2=Limit if the request has `Price`, else 1=Market |
 | 44 | Price | C | Required for Limit (as supplied, no forced scale) |
 | 38 | OrderQty | Y | As supplied |
-| 1 | Account | Y | Торговый код из `account_id` заявки |
+| 1 | Account | Y | Торговый счёт из `Account` заявки |
 | 22 | SecurityIDSource | Y | Always `8`=Exchange Symbol (confirmed against ARQA sample) |
-| 48 | SecurityID | Y | Instrument code / ISIN from `symbol` |
-| 100 | ExDestination | Y | Код класса (`board` из заявки), e.g. `LISTEDSTOCKK` |
+| 48 | SecurityID | Y | Instrument code / ISIN from `SecCode` |
+| 100 | ExDestination | Y | Код класса (`ClassCode` из заявки), e.g. `LIST_GBA` |
 | 15 | Currency | N | If mapped |
-| 59 | TimeInForce | N | Default Day (0) |
-| 109 | ClientID | Y | Произвольный `client_code` из body заявки |
+| 59 | TimeInForce | N | Always Day (0) |
+| 109 | ClientID | Y | `ClientCode` из body заявки |
 | 5018 | Firm (custom) | Y | `quik_firm` с API-токена (не из body) |
 
 Not sent: `55` Symbol, `207` SecurityExchange (class code is tag **100** only).

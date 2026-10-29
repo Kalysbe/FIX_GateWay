@@ -42,19 +42,20 @@ const timings=[];
 let token,admin,tokenId;
 let simulatorStopped=false;
 let databaseStopped=false;
-const payload={account_id:'RELIABILITY',client_code:'RELIABILITY',symbol:'SBER',board:'TQBR',
-  side:'BUY',order_type:'LIMIT',time_in_force:'DAY',quantity:'1',price:'100'};
+const payload={ClassCode:'TQBR',SecCode:'SBER',Operation:'Купля',Price:100,Qty:1,
+  Account:'RELIABILITY',ClientCode:'RELIABILITY'};
 async function submit(index) {
   const clientId=`${prefix}-${index}`;
-  const body={...payload,side:index%2 ? 'SELL':'BUY'};
+  const body={...payload,Operation:index%2 ? 'Продажа':'Купля'};
   const deadline=Date.now()+60000;
   while(Date.now()<deadline) {
     let result;
     try { result=await call('/api/v1/orders',token,'POST',body,clientId); }
     catch { await delay(500); continue; } // same idempotency key on uncertain HTTP result
-    if(result.status===200 || result.status===201) {
-      assert.match(result.body.order.id,/^[0-9a-f-]{36}$/i);
-      accepted.set(clientId,result.body.order.id);
+    // 202: stored and sent, QUIK has not answered yet (e.g. FIX outage).
+    if([200,201,202].includes(result.status)) {
+      assert.match(result.body.id,/^[0-9a-f-]{36}$/i);
+      accepted.set(clientId,result.body.id);
       timings.push(result.ms);
       return;
     }
@@ -100,7 +101,7 @@ async function main() {
   const created=await expect(`/api/v1/admin/brokers/${broker.id}/tokens`,admin,'POST',{name:'Reliability',quik_firm:'SIM',expires_in_days:30,permissions:['orders:create','orders:read']},201);
   token=created.token; tokenId=created.id;
   try {
-    const invalid=await call('/api/v1/orders',token,'POST',{...payload,symbol:'NO_SUCH_RELIABILITY_INSTRUMENT'},`${prefix}-invalid`);
+    const invalid=await call('/api/v1/orders',token,'POST',{...payload,SecCode:'NO_SUCH_RELIABILITY_INSTRUMENT'},`${prefix}-invalid`);
     assert.equal(invalid.status,400,'validation errors must remain permanent 400 responses');
     await batch(0,100);
     await waitFilled(100); verifyRetained(100);

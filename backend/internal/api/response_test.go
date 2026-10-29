@@ -71,6 +71,26 @@ func TestWriteOrderAnswer(t *testing.T) {
 	}
 }
 
+// POST /orders/{id}/cancel replies with the QUIK outcome of the cancel.
+func TestWriteCancelAnswer(t *testing.T) {
+	for _, tc := range []struct {
+		status domain.OrderStatus
+		code   int
+		want   string
+	}{
+		{domain.OrderCancelled, 200, `"State":"Снята"`},
+		{domain.OrderCancelPending, 202, "QUIK_ANSWER_PENDING"},
+		{domain.OrderAcknowledged, 409, "CANCEL_REJECTED"},
+		{domain.OrderFilled, 409, `"State":"Исполнена"`},
+	} {
+		w := httptest.NewRecorder()
+		writeCancelAnswer(w, domain.Order{Status: tc.status})
+		if w.Code != tc.code || !strings.Contains(w.Body.String(), tc.want) {
+			t.Fatalf("%s: %d %s", tc.status, w.Code, w.Body.String())
+		}
+	}
+}
+
 // The reply uses QUIK Orders names and JSON numbers, like an Orders row.
 func TestOrderReplyQUIKNames(t *testing.T) {
 	price, num := decimal.RequireFromString("400.5"), "26102912345"

@@ -14,7 +14,7 @@ assert.equal(config.networks.default.internal,true);
 assert.equal(config.services.gateway.environment.ADAPTER_HOST_OVERRIDE,'fixsimulator');
 assert.equal(config.services.fixsimulator.environment.SIM_FILL_DELAY,'30s');
 async function call(path,token='',method='GET',body,expected=200){
- const r=await fetch('http://127.0.0.1:38080'+path,{method,headers:{...(token?{Authorization:`Bearer ${token}`} : {}),...(body?{'Content-Type':'application/json'}:{})},body:body?JSON.stringify(body):undefined,signal:AbortSignal.timeout(5000)});
+ const r=await fetch('http://127.0.0.1:38080'+path,{method,headers:{...(token?{Authorization:`Bearer ${token}`} : {}),...(body?{'Content-Type':'application/json'}:{})},body:body?JSON.stringify(body):undefined,signal:AbortSignal.timeout(15000)});
  const result=await r.json();assert.equal(r.status,expected,`${method} ${path}: ${JSON.stringify(result)}`);return result;
 }
 function sql(statement){return command(['exec','-T','postgres','psql','-U','gateway','-d','fix_gateway_local','-v','ON_ERROR_STOP=1','-At','-c',statement]).trim();}
@@ -25,7 +25,7 @@ const {token:admin}=await call('/api/v1/admin/login','','POST',{email:'admin@loc
 const {broker}=await call('/api/v1/admin/brokers',admin,'POST',{code:`RECOVERY-${randomUUID()}`,name:'Execution journal recovery test'},201);
 const {token}=await call(`/api/v1/admin/brokers/${broker.id}/tokens`,admin,'POST',{name:'Recovery',quik_firm:'SIM',expires_in_days:30,permissions:['orders:create','orders:read']},201);
 for(const restart of [false,true]){
- const {order}=await call('/api/v1/orders',token,'POST',{account_id:'RECOVERY',client_code:'RECOVERY',symbol:'SBER',board:'TQBR',side:'BUY',order_type:'LIMIT',quantity:'1',price:'100'},201);
+ const order=await call('/api/v1/orders',token,'POST',{ClassCode:'TQBR',SecCode:'SBER',Operation:'Купля',Price:100,Qty:1,Account:'RECOVERY',ClientCode:'RECOVERY'},201);
  await until(async()=>localOrder(order.id).status==='ACKNOWLEDGED');
  let stopped=false;
  try{

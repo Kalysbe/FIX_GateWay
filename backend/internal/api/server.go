@@ -369,7 +369,7 @@ func (s *Server) createOrder(w http.ResponseWriter, r *http.Request) {
 	}
 	observability.AnnotateOrder(r, order.ID, order.ClientOrderID, req.AccountID, order.Symbol, string(order.Side), qty, price)
 	metrics.OrdersReceived.Inc()
-	order, err = s.awaitOrderAnswer(r.Context(), order)
+	order, err = s.awaitOrderAnswer(r.Context(), order, orders.AwaitingVenue)
 	if err != nil {
 		observability.AnnotateError(r, "ORDER_STATUS_UNAVAILABLE", err.Error(), "order_service")
 		body := orderReply(order)
@@ -380,9 +380,9 @@ func (s *Server) createOrder(w http.ResponseWriter, r *http.Request) {
 	writeOrderAnswer(w, order, idempotent)
 }
 
-// awaitOrderAnswer holds the reply until QUIK accepts or rejects the order,
+// awaitOrderAnswer holds the reply until QUIK answers the order or cancel,
 // leaving the request a margin to write the reply before its deadline.
-func (s *Server) awaitOrderAnswer(ctx context.Context, order domain.Order) (domain.Order, error) {
+func (s *Server) awaitOrderAnswer(ctx context.Context, order domain.Order, pending func(domain.OrderStatus) bool) (domain.Order, error) {
 	wait := s.cfg.OrderAnswerTimeout
 	if wait <= 0 {
 		return order, nil
@@ -392,7 +392,7 @@ func (s *Server) awaitOrderAnswer(ctx context.Context, order domain.Order) (doma
 	}
 	ctx, cancel := context.WithTimeout(ctx, wait)
 	defer cancel()
-	return s.orders.AwaitVenueAnswer(ctx, order)
+	return s.orders.AwaitVenueAnswer(ctx, order, pending)
 }
 
 // writeOrderAnswer: 201/200 accepted by QUIK, 422 rejected by QUIK, 502 not
@@ -493,7 +493,7 @@ func (s *Server) cancelBrokerOrder(w http.ResponseWriter, r *http.Request) {
 	}
 	state := strings.ToUpper(current.Text("State"))
 	if state == "СНЯТА" || state == "CANCELLED" || state == "CANCELED" {
-		writeJSON(w, http.StatusOK, map[string]any{"order": current})
+		writeJSON(w, http.StatusOK, current)
 		return
 	}
 	if state != "АКТИВНА" && state != "ACTIVE" {
@@ -521,7 +521,28 @@ func (s *Server) cancelBrokerOrder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	observability.AnnotateOrder(r, order.ID, order.ClientOrderID, order.TradingAccount, order.Symbol, string(order.Side), order.Quantity.String(), "")
-	writeJSON(w, http.StatusOK, map[string]any{"order": orderDTO(order)})
+	if waited, err := s.awaitOrderAnswer(r.Context(), order, orders.AwaitingCancel); err == nil {
+		order = waited
+	}
+	writeCancelAnswer(w, order)
+}
+
+// writeCancelAnswer: 200 cancelled by QUIK, 409 QUIK refused the cancel (the
+// order stays active or was filled), 202 QUIK has not answered in time.
+func writeCancelAnswer(w http.ResponseWriter, order domain.Order) {
+	body := orderReply(order)
+	switch order.Status {
+	case domain.OrderCancelled, domain.OrderExpired:
+		writeJSON(w, http.StatusOK, body)
+	case domain.OrderCancelPending:
+		body["code"] = "QUIK_ANSWER_PENDING"
+		body["error"] = "QUIK has not answered the cancel yet; check GET /api/v1/orders/{id}"
+		writeJSON(w, http.StatusAccepted, body)
+	default:
+		body["code"] = "CANCEL_REJECTED"
+		body["error"] = "QUIK did not cancel the order"
+		writeJSON(w, http.StatusConflict, body)
+	}
 }
 
 func (s *Server) listInstruments(w http.ResponseWriter, r *http.Request) {
@@ -1475,29 +1496,6 @@ func orderFieldHints() map[string]string {
 		"ClientCode": "код клиента → FIX tag 109 ClientID",
 		"FirmId":     "не в body — quik_firm API-токена → FIX tag 5018",
 	}
-}
-
-func orderDTO(o domain.Order) map[string]any {
-	return map[string]any{
-		"id": o.ID, "broker_id": o.BrokerID, "account_id": o.TradingAccount,
-		"client_order_id": o.ClientOrderID, "instrument_id": o.InstrumentID,
-		"symbol": o.Symbol, "board": o.Board, "currency": o.Currency,
-		"side": o.Side, "order_type": o.OrderType,
-		"time_in_force": o.TimeInForce, "quantity": o.Quantity, "price": o.Price,
-		"filled_quantity": o.FilledQuantity, "avg_price": o.AvgPrice, "status": o.Status,
-		"adapter_id": o.AdapterID, "fix_cl_ord_id": o.FixClOrdID, "quik_order_id": o.QuikOrderID,
-		"client_code": o.ClientCode, "quik_firm": o.QuikFirm, "firm_name": o.FirmName,
-		"reject_reason": o.RejectReason, "created_at": o.CreatedAt, "updated_at": o.UpdatedAt,
-		"request_id": o.RequestID, "trace_id": o.TraceID,
-	}
-}
-
-func mapOrders(list []domain.Order) []map[string]any {
-	out := make([]map[string]any, 0, len(list))
-	for _, o := range list {
-		out = append(out, orderDTO(o))
-	}
-	return out
 }
 
 func tradeDTO(t domain.Trade) map[string]any {

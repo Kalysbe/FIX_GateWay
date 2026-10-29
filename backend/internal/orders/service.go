@@ -268,13 +268,16 @@ func AwaitingVenue(st domain.OrderStatus) bool {
 
 const venueAnswerPoll = 50 * time.Millisecond
 
-// AwaitVenueAnswer polls the order until QUIK answers it (execution report or
-// reject) or ctx ends. The outbox worker sends it; the DB stays authoritative,
-// so the wait never changes the order, it only delays the reply.
-func (s *Service) AwaitVenueAnswer(ctx context.Context, order domain.Order) (domain.Order, error) {
+// AwaitingCancel reports a cancel request that QUIK has not answered yet.
+func AwaitingCancel(st domain.OrderStatus) bool { return st == domain.OrderCancelPending }
+
+// AwaitVenueAnswer polls the order while pending(status) holds, i.e. until QUIK
+// answers the new order or cancel request, or ctx ends. The outbox worker sends
+// it; the DB stays authoritative, so the wait never changes the order.
+func (s *Service) AwaitVenueAnswer(ctx context.Context, order domain.Order, pending func(domain.OrderStatus) bool) (domain.Order, error) {
 	t := time.NewTicker(venueAnswerPoll)
 	defer t.Stop()
-	for AwaitingVenue(order.Status) {
+	for pending(order.Status) {
 		select {
 		case <-ctx.Done():
 			return order, nil

@@ -355,7 +355,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/CreateOrderResponse"
+                $ref: "#/components/schemas/Order"
               example:
                 OrderNum: 26102912345
                 State: "Активна"
@@ -375,19 +375,19 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/CreateOrderResponse"
+                $ref: "#/components/schemas/Order"
         "202":
           description: QUIK не ответил за время ожидания (`QUIK_ANSWER_PENDING`). Заявка не отменена; итог — через GET /api/v1/orders/{id}.
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/CreateOrderResponse"
+                $ref: "#/components/schemas/Order"
         "502":
           description: Заявку не удалось передать в QUIK (`ORDER_FAILED`)
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/CreateOrderResponse"
+                $ref: "#/components/schemas/Order"
         "409":
           description: Idempotency-Key уже использован заявкой с другими параметрами (ClassCode, SecCode, Operation, Price, Qty, Account, ClientCode, фирма). Заявка не создаётся; для новой заявки нужен новый ключ.
           content:
@@ -405,7 +405,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/CreateOrderResponse"
+                $ref: "#/components/schemas/Order"
               example:
                 code: "ORDER_REJECTED"
                 error: "rejected by QUIK"
@@ -542,8 +542,11 @@ paths:
       description: |
         Требует `orders:cancel`. Тело не нужно. UUID шлюза или ключ `quik-ГГГГММДД-КЛАСС-НОМЕР`.
         Снять можно активную строку QUIK `Orders`, выставленную через шлюз.
-        Ответ `200` подтверждает приём команды, а не результат на бирже: дождитесь
-        изменения `State` строки в `Orders`. Если строка уже снята, возвращается `{"order": <строка>}`.
+        Шлюз отправляет снятие в QUIK и отвечает после ответа QUIK (ожидание до 10 с):
+        - `200` — QUIK снял заявку: заявка в именах колонок `Orders` с `State` = `Снята`;
+          если строка уже была снята — сама строка `Orders`;
+        - `409` `CANCEL_REJECTED` — QUIK не снял заявку (она осталась активной или исполнилась);
+        - `202` `QUIK_ANSWER_PENDING` — QUIK не ответил за время ожидания; итог — через `GET /api/v1/orders/{id}`.
       parameters:
         - in: path
           name: id
@@ -552,7 +555,17 @@ paths:
             type: string
       responses:
         "200":
-          description: Запрос на снятие принят
+          description: QUIK снял заявку
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Order"
+        "202":
+          description: QUIK ещё не ответил на снятие (`QUIK_ANSWER_PENDING`)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Order"
         "400":
           description: Неверный ключ или команду нельзя выполнить
           content:
@@ -564,7 +577,13 @@ paths:
         "404":
           description: Строки нет в Orders или она другой фирмы
         "409":
-          description: Заявка не активна в QUIK или выставлена не через шлюз
+          description: |
+            QUIK не снял заявку (`CANCEL_REJECTED`, ответ — заявка с `code`/`error`),
+            заявка не активна в QUIK или выставлена не через шлюз.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Order"
         "503":
           description: Источник QUIK Orders или хранилище шлюза недоступны
   /api/v1/trades:
@@ -695,11 +714,11 @@ components:
           type: string
           example: "006"
           description: "Код клиента → FIX tag 109 ClientID"
-    CreateOrderResponse:
+    Order:
       type: object
       description: |
         Заявка в именах колонок QUIK `Orders`. `FirmId` — `quik_firm` токена.
-        `id` — номер заявки в шлюзе: им можно пользоваться в GET и отмене, пока QUIK не дал `OrderNum`.
+        `id` — номер заявки в шлюзе: передавайте его в `GET /api/v1/orders/{id}` и в отмену.
       properties:
         OrderNum: {type: integer, format: int64, nullable: true, description: "Номер заявки в QUIK; null, пока QUIK не принял заявку"}
         State: {type: string, nullable: true, description: "Активна, Исполнена, Снята или Отклонена; null, пока QUIK не ответил"}
@@ -716,43 +735,11 @@ components:
         id: {type: string, format: uuid}
         code:
           type: string
-          enum: [ORDER_REJECTED, ORDER_FAILED, QUIK_ANSWER_PENDING, QUIK_ANSWER_UNKNOWN, TRADING_PAUSED, MAX_ORDER_QUANTITY, MAX_OPEN_ORDERS]
-          description: Только в ответах 202/422/502
+          enum: [ORDER_REJECTED, ORDER_FAILED, QUIK_ANSWER_PENDING, QUIK_ANSWER_UNKNOWN, CANCEL_REJECTED, TRADING_PAUSED, MAX_ORDER_QUANTITY, MAX_OPEN_ORDERS]
+          description: Только в ответах 202/409/422/502
         error:
           type: string
           description: Только в ответах 202/422/502
-    Order:
-      type: object
-      properties:
-        id: {type: string, format: uuid}
-        broker_id: {type: integer, format: int64}
-        account_id: {type: string, description: Торговый код счёта}
-        client_order_id: {type: string, description: "ID заявки, созданный шлюзом; для новых заявок равен id"}
-        instrument_id: {type: integer, format: int64}
-        symbol: {type: string}
-        board: {type: string}
-        currency: {type: string}
-        side: {type: string, enum: [BUY, SELL]}
-        order_type: {type: string, enum: [MARKET, LIMIT]}
-        time_in_force: {type: string}
-        quantity: {type: string}
-        price: {type: string, nullable: true}
-        filled_quantity: {type: string}
-        avg_price: {type: string}
-        status:
-          type: string
-          enum: [RECEIVED, VALIDATING, VALIDATED, QUEUED, ROUTING, SENT, ACKNOWLEDGED, PARTIALLY_FILLED, FILLED, CANCEL_PENDING, CANCELLED, REJECTED, EXPIRED, FAILED]
-        adapter_id: {type: string, nullable: true}
-        fix_cl_ord_id: {type: string, nullable: true}
-        quik_order_id: {type: string, nullable: true}
-        client_code: {type: string}
-        quik_firm: {type: string}
-        firm_name: {type: string}
-        reject_reason: {type: string, nullable: true}
-        created_at: {type: string, format: date-time}
-        updated_at: {type: string, format: date-time}
-        request_id: {type: string}
-        trace_id: {type: string}
     QuikOrderRow:
       type: object
       additionalProperties: true

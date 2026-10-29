@@ -355,7 +355,7 @@ paths:
       summary: Cancel order
       security:
         - bearerAuth: []
-      description: Requires orders:cancel and an active current QUIK Orders row. Accepts a Gateway UUID or QUIK key with a matching original local request. An external order without a local request returns 409. The HTTP result acknowledges the command, not the venue outcome.
+      description: Requires orders:cancel and an active current QUIK Orders row. Accepts a Gateway UUID or QUIK key with a matching original local request. An external order without a local request returns 409. Waits up to ORDER_ANSWER_TIMEOUT for QUIK - 200 cancelled (order in QUIK Orders names, State Снята), 409 CANCEL_REJECTED, 202 QUIK_ANSWER_PENDING.
       parameters:
         - in: path
           name: id
@@ -371,7 +371,7 @@ paths:
       summary: Trading accounts of the token firm — rows of QUIK Trdaccs
       security:
         - bearerAuth: []
-      description: Requires `orders:read`. JSON array of quik_export2.public."Trdaccs" rows whose FirmId is the token firm, as stored. An order's account_id must be the TrdAccId of one of them.
+      description: Requires `orders:read`. JSON array of quik_export2.public."Trdaccs" rows whose FirmId is the token firm, as stored. An order's Account must be the TrdAccId of one of them.
       responses:
         "200":
           description: Trdaccs rows
