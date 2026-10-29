@@ -277,6 +277,8 @@ paths:
         - **ID заявки** → `client_order_id` создаёт шлюз (равен `id`); в body не передаётся
 
         Защита от дублей — необязательный заголовок `Idempotency-Key`.
+
+        Шлюз отправляет заявку в QUIK и отвечает после ответа QUIK (ожидание до `ORDER_ANSWER_TIMEOUT`, 10 с).
       parameters:
         - name: Idempotency-Key
           in: header
@@ -304,9 +306,15 @@ paths:
               price: "400"
       responses:
         "200":
-          description: Idempotent existing order
+          description: Idempotent existing order, accepted by QUIK
         "201":
-          description: Created
+          description: Sent to QUIK and accepted (quik_order_id set)
+        "202":
+          description: QUIK did not answer within ORDER_ANSWER_TIMEOUT (code QUIK_ANSWER_PENDING); the order is live, check GET /api/v1/orders/{id}
+        "422":
+          description: Rejected by QUIK (code ORDER_REJECTED, reason in error and order.reject_reason) or by gateway risk limits
+        "502":
+          description: Not delivered to QUIK (code ORDER_FAILED)
         "409":
           description: Idempotency-Key already used with different order parameters (code IDEMPOTENCY_CONFLICT)
         "401":

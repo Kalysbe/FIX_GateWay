@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/fix-gateway/backend/internal/audit"
 	"github.com/fix-gateway/backend/internal/brokers"
@@ -225,6 +226,42 @@ func (s *Service) Create(ctx context.Context, broker domain.Broker, ip string, r
 		}
 	}
 	return order, idempotent, nil
+}
+
+// AwaitingVenue reports an order that QUIK has not answered yet.
+func AwaitingVenue(st domain.OrderStatus) bool {
+	switch st {
+	case domain.OrderReceived, domain.OrderValidating, domain.OrderValidated,
+		domain.OrderQueued, domain.OrderRouting, domain.OrderSent:
+		return true
+	}
+	return false
+}
+
+const venueAnswerPoll = 50 * time.Millisecond
+
+// AwaitVenueAnswer polls the order until QUIK answers it (execution report or
+// reject) or ctx ends. The outbox worker sends it; the DB stays authoritative,
+// so the wait never changes the order, it only delays the reply.
+func (s *Service) AwaitVenueAnswer(ctx context.Context, order domain.Order) (domain.Order, error) {
+	t := time.NewTicker(venueAnswerPoll)
+	defer t.Stop()
+	for AwaitingVenue(order.Status) {
+		select {
+		case <-ctx.Done():
+			return order, nil
+		case <-t.C:
+		}
+		next, err := s.store.Get(ctx, order.ID)
+		if err != nil {
+			if ctx.Err() != nil {
+				return order, nil
+			}
+			return order, err
+		}
+		order = next
+	}
+	return order, nil
 }
 
 func (s *Service) GetForBroker(ctx context.Context, brokerID int64, id uuid.UUID) (domain.Order, error) {

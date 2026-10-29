@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/fix-gateway/backend/internal/domain"
 	"github.com/fix-gateway/backend/internal/orders"
 )
 
@@ -28,6 +29,31 @@ func TestDecodeJSONBody_UnknownField(t *testing.T) {
 	err := decodeJSONBody(r, &req)
 	if err == nil || !strings.Contains(err.Error(), "неизвестное поле") {
 		t.Fatalf("expected unknown field error, got %v", err)
+	}
+}
+
+// POST /orders replies with the QUIK outcome, not with the queued order.
+func TestWriteOrderAnswer(t *testing.T) {
+	reason := "Недостаточно средств"
+	for _, tc := range []struct {
+		status     domain.OrderStatus
+		reason     *string
+		idempotent bool
+		code       int
+		want       string
+	}{
+		{domain.OrderAcknowledged, nil, false, 201, `"status":"ACKNOWLEDGED"`},
+		{domain.OrderFilled, nil, true, 200, `"idempotent":true`},
+		{domain.OrderRejected, &reason, false, 422, "rejected by QUIK: " + reason},
+		{domain.OrderFailed, nil, false, 502, "ORDER_FAILED"},
+		{domain.OrderQueued, nil, false, 202, "QUIK_ANSWER_PENDING"},
+		{domain.OrderSent, nil, true, 202, "QUIK_ANSWER_PENDING"},
+	} {
+		w := httptest.NewRecorder()
+		writeOrderAnswer(w, domain.Order{Status: tc.status, RejectReason: tc.reason}, tc.idempotent)
+		if w.Code != tc.code || !strings.Contains(w.Body.String(), tc.want) {
+			t.Fatalf("%s: %d %s", tc.status, w.Code, w.Body.String())
+		}
 	}
 }
 

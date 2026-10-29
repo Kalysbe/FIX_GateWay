@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -40,6 +41,8 @@ func TestOrderIdempotencyIntegration(t *testing.T) {
 	cfg := config.Load()
 	cfg.DatabaseURL = dsn
 	cfg.MigrationsPath = "../../migrations"
+	// No outbox worker runs here, so QUIK never answers: every create ends in 202.
+	cfg.OrderAnswerTimeout = 100 * time.Millisecond
 	if err := migrate.Up(dsn, cfg.MigrationsPath); err != nil {
 		t.Fatal(err)
 	}
@@ -111,7 +114,7 @@ func TestOrderIdempotencyIntegration(t *testing.T) {
 	}
 	idemKey := "IDEM-" + uuid.NewString()
 	rr := callCreate(body, idemKey)
-	if rr.Code != http.StatusCreated {
+	if rr.Code != http.StatusAccepted || !strings.Contains(rr.Body.String(), "QUIK_ANSWER_PENDING") {
 		t.Fatalf("first create status %d body %s", rr.Code, rr.Body.String())
 	}
 	first := decodeOrder(rr)
@@ -121,7 +124,7 @@ func TestOrderIdempotencyIntegration(t *testing.T) {
 	}
 
 	rr2 := callCreate(body, idemKey)
-	if rr2.Code != http.StatusOK {
+	if rr2.Code != http.StatusAccepted {
 		t.Fatalf("idempotent create status %d", rr2.Code)
 	}
 	var resp map[string]any
@@ -145,7 +148,7 @@ func TestOrderIdempotencyIntegration(t *testing.T) {
 	}
 	// Without the header every request is a new order.
 	noKey1, noKey2 := callCreate(body, ""), callCreate(body, "")
-	if noKey1.Code != http.StatusCreated || noKey2.Code != http.StatusCreated || decodeOrder(noKey1)["id"] == decodeOrder(noKey2)["id"] {
+	if noKey1.Code != http.StatusAccepted || noKey2.Code != http.StatusAccepted || decodeOrder(noKey1)["id"] == decodeOrder(noKey2)["id"] {
 		t.Fatalf("requests without Idempotency-Key must create distinct orders: %d %d", noKey1.Code, noKey2.Code)
 	}
 	withID := map[string]any{"client_order_id": "BROKER-1"}

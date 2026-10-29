@@ -326,7 +326,13 @@ paths:
 
         `client_order_id` создаёт шлюз (совпадает с `id` заявки); передавать его в теле нельзя — ответ `400`.
 
-        Идемпотентность: необязательный заголовок `Idempotency-Key`. Повтор с тем же ключом и теми же параметрами возвращает `200` + существующую заявку. Без заголовка каждый запрос создаёт новую заявку.
+        Шлюз сразу отправляет заявку в QUIK и отвечает, когда QUIK её принял или отклонил (обычно меньше секунды, ожидание — до 10 с):
+        - `201` — QUIK принял заявку, `order.quik_order_id` — номер заявки в QUIK;
+        - `422` `ORDER_REJECTED` — QUIK отклонил заявку, причина в `error` и `order.reject_reason`;
+        - `502` `ORDER_FAILED` — заявку не удалось передать в QUIK;
+        - `202` `QUIK_ANSWER_PENDING` — QUIK не ответил за время ожидания. Заявка не отменена и может быть принята позже: узнайте итог через `GET /api/v1/orders/{id}`, не отправляйте её заново.
+
+        Идемпотентность: необязательный заголовок `Idempotency-Key`. Повтор с тем же ключом и теми же параметрами возвращает существующую заявку с её текущим итогом (`200`, если QUIK её принял) и `idempotent: true`. Без заголовка каждый запрос создаёт новую заявку.
       parameters:
         - name: Idempotency-Key
           in: header
@@ -354,13 +360,25 @@ paths:
               price: "400"
       responses:
         "201":
-          description: Заявка создана
+          description: QUIK принял заявку
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/CreateOrderResponse"
         "200":
-          description: Идемпотентный повтор — заявка уже существует
+          description: Идемпотентный повтор — заявка уже существует и принята QUIK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CreateOrderResponse"
+        "202":
+          description: QUIK не ответил за время ожидания (`QUIK_ANSWER_PENDING`). Заявка не отменена; итог — через GET /api/v1/orders/{id}.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CreateOrderResponse"
+        "502":
+          description: Заявку не удалось передать в QUIK (`ORDER_FAILED`)
           content:
             application/json:
               schema:
@@ -376,7 +394,9 @@ paths:
                   error: {type: string}
                   code: {type: string, enum: [IDEMPOTENCY_CONFLICT]}
         "422":
-          description: Торговая пауза или превышение quantity/open-order лимита. Отказ не создаёт заявку; идемпотентный повтор принятой заявки сохраняет доступность.
+          description: |
+            QUIK отклонил заявку (`ORDER_REJECTED`, ответ содержит `order` с `reject_reason`)
+            или шлюз не создал её: торговая пауза, превышение quantity/open-order лимита.
           content:
             application/json:
               schema:
@@ -384,7 +404,9 @@ paths:
                 required: [error, code]
                 properties:
                   error: {type: string}
-                  code: {type: string, enum: [TRADING_PAUSED, MAX_ORDER_QUANTITY, MAX_OPEN_ORDERS]}
+                  code: {type: string, enum: [ORDER_REJECTED, TRADING_PAUSED, MAX_ORDER_QUANTITY, MAX_OPEN_ORDERS]}
+                  order: {$ref: "#/components/schemas/Order"}
+                  idempotent: {type: boolean}
         "400":
           description: Ошибка валидации
           content:
@@ -677,6 +699,13 @@ components:
           $ref: "#/components/schemas/Order"
         idempotent:
           type: boolean
+        code:
+          type: string
+          enum: [ORDER_REJECTED, ORDER_FAILED, QUIK_ANSWER_PENDING, QUIK_ANSWER_UNKNOWN]
+          description: Только в ответах 202/422/502
+        error:
+          type: string
+          description: Только в ответах 202/422/502; для 422 — причина отказа QUIK
     Order:
       type: object
       properties:

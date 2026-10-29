@@ -369,11 +369,56 @@ func (s *Server) createOrder(w http.ResponseWriter, r *http.Request) {
 	}
 	observability.AnnotateOrder(r, order.ID, order.ClientOrderID, req.AccountID, order.Symbol, string(order.Side), qty, price)
 	metrics.OrdersReceived.Inc()
-	code := http.StatusCreated
-	if idempotent {
-		code = http.StatusOK
+	order, err = s.awaitOrderAnswer(r.Context(), order)
+	if err != nil {
+		observability.AnnotateError(r, "ORDER_STATUS_UNAVAILABLE", err.Error(), "order_service")
+		writeJSON(w, http.StatusAccepted, map[string]any{"order": orderDTO(order), "idempotent": idempotent,
+			"code": "QUIK_ANSWER_UNKNOWN", "error": "order is stored; its QUIK status could not be read, check GET /api/v1/orders/{id}"})
+		return
 	}
-	writeJSON(w, code, map[string]any{"order": orderDTO(order), "idempotent": idempotent})
+	writeOrderAnswer(w, order, idempotent)
+}
+
+// awaitOrderAnswer holds the reply until QUIK accepts or rejects the order,
+// leaving the request a margin to write the reply before its deadline.
+func (s *Server) awaitOrderAnswer(ctx context.Context, order domain.Order) (domain.Order, error) {
+	wait := s.cfg.OrderAnswerTimeout
+	if wait <= 0 {
+		return order, nil
+	}
+	if dl, ok := ctx.Deadline(); ok {
+		wait = min(wait, time.Until(dl)-time.Second)
+	}
+	ctx, cancel := context.WithTimeout(ctx, wait)
+	defer cancel()
+	return s.orders.AwaitVenueAnswer(ctx, order)
+}
+
+// writeOrderAnswer: 201/200 accepted by QUIK, 422 rejected by QUIK, 502 not
+// delivered, 202 QUIK has not answered in time (the order stays live).
+func writeOrderAnswer(w http.ResponseWriter, order domain.Order, idempotent bool) {
+	body := map[string]any{"order": orderDTO(order), "idempotent": idempotent}
+	switch {
+	case orders.AwaitingVenue(order.Status):
+		body["code"] = "QUIK_ANSWER_PENDING"
+		body["error"] = "QUIK has not answered yet; the order is not cancelled, check GET /api/v1/orders/{id}"
+		writeJSON(w, http.StatusAccepted, body)
+	case order.Status == domain.OrderRejected:
+		body["code"] = "ORDER_REJECTED"
+		body["error"] = "rejected by QUIK"
+		if order.RejectReason != nil && *order.RejectReason != "" {
+			body["error"] = "rejected by QUIK: " + *order.RejectReason
+		}
+		writeJSON(w, http.StatusUnprocessableEntity, body)
+	case order.Status == domain.OrderFailed:
+		body["code"] = "ORDER_FAILED"
+		body["error"] = "order was not delivered to QUIK"
+		writeJSON(w, http.StatusBadGateway, body)
+	case idempotent:
+		writeJSON(w, http.StatusOK, body)
+	default:
+		writeJSON(w, http.StatusCreated, body)
+	}
 }
 
 func (s *Server) listBrokerOrders(w http.ResponseWriter, r *http.Request) {
