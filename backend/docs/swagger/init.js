@@ -6,6 +6,8 @@ window.addEventListener("DOMContentLoaded", function () {
     dom_id: "#swagger-ui",
     deepLinking: true,
     defaultModelsExpandDepth: 1,
-    validatorUrl: null
+    validatorUrl: null,
+    // The broker token survives page reloads (browser localStorage) until Logout.
+    persistAuthorization: broker
   });
 });
