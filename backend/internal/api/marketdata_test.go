@@ -117,6 +117,9 @@ func TestBrokerGRPCChannelsHaveRESTAndSwagger(t *testing.T) {
 			t.Fatalf("%s not registered or lacks broker authentication: %d", path, w.Code)
 		}
 	}
+	if doc.Paths.Value("/ready") != nil {
+		t.Fatal("/ready exposed in broker-swagger")
+	}
 	for path := range doc.Paths.Map() {
 		if strings.Contains(path, "/admin/") {
 			t.Fatalf("admin method exposed in broker-swagger: %s", path)

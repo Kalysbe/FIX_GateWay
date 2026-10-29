@@ -26,7 +26,7 @@ servers:
     description: Local development
 tags:
   - name: Проверка связи
-    description: Health и readiness
+    description: Health
   - name: Фирма
     description: Код фирмы текущего токена
   - name: Справочники
@@ -48,16 +48,6 @@ paths:
       responses:
         "200":
           description: OK
-  /ready:
-    get:
-      tags: [Проверка связи]
-      summary: Readiness
-      description: Возвращает 200 если есть хотя бы один рабочий FIX-адаптер.
-      responses:
-        "200":
-          description: Ready
-        "503":
-          description: Not ready
   /api/v1/firm:
     get:
       tags: [Фирма]

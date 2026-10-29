@@ -134,7 +134,7 @@ func ensureOperation(doc *openapi3.T, rt docRoute) {
 }
 
 func brokerVisiblePath(path string) bool {
-	if path == "/health" || path == "/ready" {
+	if path == "/health" {
 		return true
 	}
 	if strings.HasPrefix(path, "/api/v1/admin") || path == "/metrics" {
