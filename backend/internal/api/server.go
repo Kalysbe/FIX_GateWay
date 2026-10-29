@@ -1510,14 +1510,14 @@ func (s *Server) listUsers(w http.ResponseWriter, r *http.Request) {
 
 func orderFieldHints() map[string]string {
 	return map[string]string{
-		"ClassCode":  "код класса → FIX tag 100 ExDestination",
-		"SecCode":    "код инструмента → FIX tag 48 SecurityID",
+		"ClassCode":  "код класса",
+		"SecCode":    "код инструмента",
 		"Operation":  "Купля или Продажа",
 		"Price":      "цена; без Price — рыночная заявка",
 		"Qty":        "количество",
-		"Account":    "торговый счёт → FIX tag 1",
-		"ClientCode": "код клиента → FIX tag 109 ClientID",
-		"FirmId":     "не в body — quik_firm API-токена → FIX tag 5018",
+		"Account":    "торговый счёт из GET /api/v1/accounts",
+		"ClientCode": "код клиента",
+		"FirmId":     "не передаётся — фирма берётся из токена",
 	}
 }
 

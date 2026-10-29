@@ -98,16 +98,16 @@ func ValidateIdempotencyKey(key string) error {
 // ValidateCreateRequest returns a field-specific error for bad order payloads.
 func ValidateCreateRequest(req CreateOrderRequest) error {
 	if req.AccountID == "" || req.AccountID == "string" {
-		return fmt.Errorf("Account обязателен: торговый счёт → FIX tag 1 (например 1-3101-006)")
+		return fmt.Errorf("Account обязателен: торговый счёт из GET /api/v1/accounts (например 1-3101-006)")
 	}
 	if req.ClientCode == "" || req.ClientCode == "string" {
-		return fmt.Errorf("ClientCode обязателен: код клиента → FIX tag 109 ClientID")
+		return fmt.Errorf("ClientCode обязателен: код клиента")
 	}
 	if req.Symbol == "" || req.Symbol == "string" {
-		return fmt.Errorf("SecCode обязателен: код инструмента → FIX tag 48 SecurityID")
+		return fmt.Errorf("SecCode обязателен: код инструмента")
 	}
 	if req.Board == "" || req.Board == "string" {
-		return fmt.Errorf("ClassCode обязателен: код класса → FIX tag 100 ExDestination (например LIST_GBA)")
+		return fmt.Errorf("ClassCode обязателен: код класса (например LIST_GBA)")
 	}
 	if req.Quantity.LessThanOrEqual(decimal.Zero) {
 		return fmt.Errorf("Qty должно быть > 0")
@@ -148,7 +148,7 @@ func (s *Service) Create(ctx context.Context, broker domain.Broker, ip string, r
 		return domain.Order{}, false, err
 	}
 	if strings.TrimSpace(quikFirm) == "" {
-		err := fmt.Errorf("на токене не задан quik_firm (код фирмы → FIX tag 5018); задайте при создании/обновлении токена")
+		err := fmt.Errorf("у токена не задана фирма; обратитесь к оператору шлюза")
 		s.emit(ctx, observability.Event{
 			Type: observability.TypeError, Subtype: observability.ErrValidation, BrokerID: &broker.ID,
 			BrokerCode: broker.Code, BrokerName: broker.Name, ErrorCode: "MISSING_QUIK_FIRM",

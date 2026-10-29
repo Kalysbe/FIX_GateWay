@@ -55,7 +55,7 @@ paths:
       security:
         - bearerAuth: []
       description: |
-        Требует `orders:read`. Строка `quik_export2.public."Firms"` для фирмы токена (`quik_firm` → FIX tag 5018,
+        Требует `orders:read`. Строка `quik_export2.public."Firms"` для фирмы токена (`quik_firm`,
         при пустом значении — код брокера) как есть (`row_to_json`).
       responses:
         "200":
@@ -251,7 +251,7 @@ paths:
           name: symbol
           schema:
             type: string
-          description: Тикер или SecurityID
+          description: Код инструмента
           example: GBA02280810
         - in: query
           name: board
@@ -699,11 +699,11 @@ components:
         ClassCode:
           type: string
           example: "LIST_GBA"
-          description: "Код класса → FIX tag 100 ExDestination"
+          description: "Код класса"
         SecCode:
           type: string
           example: "GBA02270915"
-          description: "Код инструмента из GET /api/v1/instruments → FIX tag 48 SecurityID"
+          description: "Код инструмента из GET /api/v1/instruments"
         Operation:
           type: string
           enum: ["Купля", "Продажа"]
@@ -719,11 +719,11 @@ components:
         Account:
           type: string
           example: "1-3101-006"
-          description: "Торговый счёт (TrdAccId из GET /api/v1/accounts) → FIX tag 1"
+          description: "Торговый счёт (TrdAccId из GET /api/v1/accounts)"
         ClientCode:
           type: string
           example: "006"
-          description: "Код клиента → FIX tag 109 ClientID"
+          description: "Код клиента"
     Order:
       type: object
       description: |
@@ -782,7 +782,7 @@ components:
       additionalProperties: true
       description: Строка `quik_export2.public."Trdaccs"` как есть; набор колонок задаёт QUIK.
       properties:
-        TrdAccId: {type: string, description: Торговый счёт → account_id заявки и FIX tag 1}
+        TrdAccId: {type: string, description: Торговый счёт → Account заявки}
         FirmId: {type: string}
     QuikFirmRow:
       type: object
