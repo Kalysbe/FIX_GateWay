@@ -372,8 +372,9 @@ func (s *Server) createOrder(w http.ResponseWriter, r *http.Request) {
 	order, err = s.awaitOrderAnswer(r.Context(), order)
 	if err != nil {
 		observability.AnnotateError(r, "ORDER_STATUS_UNAVAILABLE", err.Error(), "order_service")
-		writeJSON(w, http.StatusAccepted, map[string]any{"order": orderDTO(order), "idempotent": idempotent,
-			"code": "QUIK_ANSWER_UNKNOWN", "error": "order is stored; its QUIK status could not be read, check GET /api/v1/orders/{id}"})
+		body := orderReply(order)
+		body["code"], body["error"] = "QUIK_ANSWER_UNKNOWN", "order is stored; its QUIK status could not be read, check GET /api/v1/orders/{id}"
+		writeJSON(w, http.StatusAccepted, body)
 		return
 	}
 	writeOrderAnswer(w, order, idempotent)
@@ -397,7 +398,7 @@ func (s *Server) awaitOrderAnswer(ctx context.Context, order domain.Order) (doma
 // writeOrderAnswer: 201/200 accepted by QUIK, 422 rejected by QUIK, 502 not
 // delivered, 202 QUIK has not answered in time (the order stays live).
 func writeOrderAnswer(w http.ResponseWriter, order domain.Order, idempotent bool) {
-	body := map[string]any{"order": orderDTO(order), "idempotent": idempotent}
+	body := orderReply(order)
 	switch {
 	case orders.AwaitingVenue(order.Status):
 		body["code"] = "QUIK_ANSWER_PENDING"
@@ -406,9 +407,6 @@ func writeOrderAnswer(w http.ResponseWriter, order domain.Order, idempotent bool
 	case order.Status == domain.OrderRejected:
 		body["code"] = "ORDER_REJECTED"
 		body["error"] = "rejected by QUIK"
-		if order.RejectReason != nil && *order.RejectReason != "" {
-			body["error"] = "rejected by QUIK: " + *order.RejectReason
-		}
 		writeJSON(w, http.StatusUnprocessableEntity, body)
 	case order.Status == domain.OrderFailed:
 		body["code"] = "ORDER_FAILED"
@@ -419,6 +417,54 @@ func writeOrderAnswer(w http.ResponseWriter, order domain.Order, idempotent bool
 	default:
 		writeJSON(w, http.StatusCreated, body)
 	}
+}
+
+// orderReply is the POST /orders answer in QUIK Orders column names; numbers
+// are JSON numbers as in Orders rows. id is the gateway key for GET/cancel
+// while OrderNum is still unknown.
+func orderReply(o domain.Order) map[string]any {
+	num := func(d decimal.Decimal) json.Number { return json.Number(d.String()) }
+	var price, orderNum any
+	if o.Price != nil {
+		price = num(*o.Price)
+	}
+	if o.QuikOrderID != nil && *o.QuikOrderID != "" {
+		orderNum = *o.QuikOrderID
+		if n, err := decimal.NewFromString(*o.QuikOrderID); err == nil && n.IsInteger() {
+			orderNum = json.Number(*o.QuikOrderID)
+		}
+	}
+	operation := orders.OperationBuy
+	if o.Side == domain.SideSell {
+		operation = orders.OperationSell
+	}
+	var rejectReason any
+	if o.RejectReason != nil && *o.RejectReason != "" {
+		rejectReason = *o.RejectReason
+	}
+	return map[string]any{
+		"OrderNum": orderNum, "State": quikOrderState(o.Status),
+		"ClassCode": o.Board, "SecCode": o.Symbol, "Operation": operation,
+		"Price": price, "Qty": num(o.Quantity), "Balance": num(o.Quantity.Sub(o.FilledQuantity)),
+		"Account": o.TradingAccount, "ClientCode": o.ClientCode, "FirmId": o.QuikFirm,
+		"RejectReason": rejectReason, "id": o.ID,
+	}
+}
+
+// quikOrderState names the gateway status as QUIK Orders.State does; nil
+// while QUIK has not answered or the order never reached it.
+func quikOrderState(st domain.OrderStatus) any {
+	switch st {
+	case domain.OrderAcknowledged, domain.OrderPartiallyFilled, domain.OrderCancelPending:
+		return "Активна"
+	case domain.OrderFilled:
+		return "Исполнена"
+	case domain.OrderCancelled, domain.OrderExpired:
+		return "Снята"
+	case domain.OrderRejected:
+		return "Отклонена"
+	}
+	return nil
 }
 
 func (s *Server) listBrokerOrders(w http.ResponseWriter, r *http.Request) {
@@ -1420,12 +1466,14 @@ func (s *Server) listUsers(w http.ResponseWriter, r *http.Request) {
 
 func orderFieldHints() map[string]string {
 	return map[string]string{
-		"account_id":         "торговый код → FIX tag 1",
-		"client_code":        "произвольный код клиента → FIX tag 109 ClientID",
-		"symbol":             "инструмент (тикер/ISIN)",
-		"board / код класса": "в body заявки → FIX tag 100 ExDestination",
-		"currency / валюта":  "не в body — instruments.currency по symbol → FIX tag 15",
-		"quik_firm / 5018":   "код фирмы с API-токена (не из body) → FIX tag 5018",
+		"ClassCode":  "код класса → FIX tag 100 ExDestination",
+		"SecCode":    "код инструмента → FIX tag 48 SecurityID",
+		"Operation":  "Купля или Продажа",
+		"Price":      "цена; без Price — рыночная заявка",
+		"Qty":        "количество",
+		"Account":    "торговый счёт → FIX tag 1",
+		"ClientCode": "код клиента → FIX tag 109 ClientID",
+		"FirmId":     "не в body — quik_firm API-токена → FIX tag 5018",
 	}
 }
 

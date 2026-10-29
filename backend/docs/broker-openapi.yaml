@@ -316,23 +316,16 @@ paths:
       security:
         - bearerAuth: []
       description: |
-        Требует `orders:create`. `broker_id` и `quik_firm` берутся из токена.
-
-        Поля для QUIK/FIX:
-        - `symbol` → FIX tag 48 SecurityID
-        - `board` → FIX tag 100 ExDestination
-        - `account_id` → FIX tag 1 Account
-        - `client_code` → FIX tag 109 ClientID
-
-        `client_order_id` создаёт шлюз (совпадает с `id` заявки); передавать его в теле нельзя — ответ `400`.
+        Требует `orders:create`. Поля запроса и ответа называются как колонки таблицы QUIK `Orders`.
+        `FirmId` берётся из `quik_firm` токена. Заявка с `Price` — лимитная, без `Price` — рыночная; срок — день.
 
         Шлюз сразу отправляет заявку в QUIK и отвечает, когда QUIK её принял или отклонил (обычно меньше секунды, ожидание — до 10 с):
-        - `201` — QUIK принял заявку, `order.quik_order_id` — номер заявки в QUIK;
-        - `422` `ORDER_REJECTED` — QUIK отклонил заявку, причина в `error` и `order.reject_reason`;
+        - `201` — QUIK принял заявку, `OrderNum` — номер заявки в QUIK;
+        - `422` `ORDER_REJECTED` — QUIK отклонил заявку, причина в `RejectReason`;
         - `502` `ORDER_FAILED` — заявку не удалось передать в QUIK;
         - `202` `QUIK_ANSWER_PENDING` — QUIK не ответил за время ожидания. Заявка не отменена и может быть принята позже: узнайте итог через `GET /api/v1/orders/{id}`, не отправляйте её заново.
 
-        Идемпотентность: необязательный заголовок `Idempotency-Key`. Повтор с тем же ключом и теми же параметрами возвращает существующую заявку с её текущим итогом (`200`, если QUIK её принял) и `idempotent: true`. Без заголовка каждый запрос создаёт новую заявку.
+        Идемпотентность: необязательный заголовок `Idempotency-Key`. Повтор с тем же ключом и теми же параметрами возвращает существующую заявку с её текущим итогом (`200`, если QUIK её принял). Без заголовка каждый запрос создаёт новую заявку.
       parameters:
         - name: Idempotency-Key
           in: header
@@ -349,15 +342,13 @@ paths:
             schema:
               $ref: "#/components/schemas/CreateOrderRequest"
             example:
-              account_id: "1-3101-006"
-              client_code: "006"
-              symbol: "KG0105166315"
-              board: "LISTEDSTOCKK"
-              side: "BUY"
-              order_type: "LIMIT"
-              time_in_force: "DAY"
-              quantity: "1"
-              price: "400"
+              ClassCode: "LIST_GBA"
+              SecCode: "GBA02270915"
+              Operation: "Купля"
+              Price: 400
+              Qty: 1
+              Account: "1-3101-006"
+              ClientCode: "006"
       responses:
         "201":
           description: QUIK принял заявку
@@ -365,6 +356,20 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/CreateOrderResponse"
+              example:
+                OrderNum: 26102912345
+                State: "Активна"
+                ClassCode: "LIST_GBA"
+                SecCode: "GBA02270915"
+                Operation: "Купля"
+                Price: 400
+                Qty: 1
+                Balance: 1
+                Account: "1-3101-006"
+                ClientCode: "006"
+                FirmId: "SENTI2004"
+                RejectReason: null
+                id: "276d043c-6716-4ebd-a7b7-15904e760d40"
         "200":
           description: Идемпотентный повтор — заявка уже существует и принята QUIK
           content:
@@ -384,7 +389,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/CreateOrderResponse"
         "409":
-          description: Idempotency-Key уже использован заявкой с другими параметрами (инструмент, board, сторона, тип, срок, количество, цена, счёт, код клиента, фирма). Заявка не создаётся; для новой заявки нужен новый ключ.
+          description: Idempotency-Key уже использован заявкой с другими параметрами (ClassCode, SecCode, Operation, Price, Qty, Account, ClientCode, фирма). Заявка не создаётся; для новой заявки нужен новый ключ.
           content:
             application/json:
               schema:
@@ -395,18 +400,28 @@ paths:
                   code: {type: string, enum: [IDEMPOTENCY_CONFLICT]}
         "422":
           description: |
-            QUIK отклонил заявку (`ORDER_REJECTED`, ответ содержит `order` с `reject_reason`)
-            или шлюз не создал её: торговая пауза, превышение quantity/open-order лимита.
+            QUIK отклонил заявку (`ORDER_REJECTED`: ответ — заявка с `State` = `Отклонена` и `RejectReason`)
+            или шлюз не создал её (`TRADING_PAUSED`, `MAX_ORDER_QUANTITY`, `MAX_OPEN_ORDERS`: только `error` и `code`).
           content:
             application/json:
               schema:
-                type: object
-                required: [error, code]
-                properties:
-                  error: {type: string}
-                  code: {type: string, enum: [ORDER_REJECTED, TRADING_PAUSED, MAX_ORDER_QUANTITY, MAX_OPEN_ORDERS]}
-                  order: {$ref: "#/components/schemas/Order"}
-                  idempotent: {type: boolean}
+                $ref: "#/components/schemas/CreateOrderResponse"
+              example:
+                code: "ORDER_REJECTED"
+                error: "rejected by QUIK"
+                OrderNum: null
+                State: "Отклонена"
+                ClassCode: "LIST_GBA"
+                SecCode: "GBA02270915"
+                Operation: "Купля"
+                Price: 400
+                Qty: 1
+                Balance: 1
+                Account: "1-3101-006"
+                ClientCode: "006"
+                FirmId: "SENTI2004"
+                RejectReason: "Недостаточно средств"
+                id: "276d043c-6716-4ebd-a7b7-15904e760d40"
         "400":
           description: Ошибка валидации
           content:
@@ -648,64 +663,64 @@ components:
           type: object
     CreateOrderRequest:
       type: object
-      required: [account_id, client_code, symbol, board, side, order_type, quantity]
+      description: Имена полей — как колонки таблицы QUIK `Orders`.
+      required: [ClassCode, SecCode, Operation, Qty, Account, ClientCode]
       additionalProperties: false
       properties:
-        account_id:
+        ClassCode:
+          type: string
+          example: "LIST_GBA"
+          description: "Код класса → FIX tag 100 ExDestination"
+        SecCode:
+          type: string
+          example: "GBA02270915"
+          description: "Код инструмента из GET /api/v1/instruments → FIX tag 48 SecurityID"
+        Operation:
+          type: string
+          enum: ["Купля", "Продажа"]
+          example: "Купля"
+        Price:
+          type: number
+          example: 400
+          description: "Цена. Без Price — рыночная заявка"
+        Qty:
+          type: number
+          example: 1
+          description: "Количество"
+        Account:
           type: string
           example: "1-3101-006"
-          description: "Торговый код счёта → FIX tag 1 Account"
-        client_code:
+          description: "Торговый счёт (TrdAccId из GET /api/v1/accounts) → FIX tag 1"
+        ClientCode:
           type: string
           example: "006"
           description: "Код клиента → FIX tag 109 ClientID"
-        symbol:
-          type: string
-          example: "KG0105166315"
-          description: "Инструмент (тикер/ISIN) из GET /api/v1/instruments"
-        board:
-          type: string
-          example: "LISTEDSTOCKK"
-          description: "Код класса → FIX tag 100 ExDestination"
-        side:
-          type: string
-          enum: [BUY, SELL]
-          example: "BUY"
-        order_type:
-          type: string
-          enum: [MARKET, LIMIT]
-          example: "LIMIT"
-        time_in_force:
-          type: string
-          enum: [DAY, IOC, FOK, GTC]
-          example: "DAY"
-          default: "DAY"
-        quantity:
-          oneOf:
-            - type: string
-            - type: number
-          example: "1"
-          description: "Количество (строка или число)"
-        price:
-          oneOf:
-            - type: string
-            - type: number
-          example: "400"
-          description: "Цена для LIMIT (строка или число)"
     CreateOrderResponse:
       type: object
+      description: |
+        Заявка в именах колонок QUIK `Orders`. `FirmId` — `quik_firm` токена.
+        `id` — номер заявки в шлюзе: им можно пользоваться в GET и отмене, пока QUIK не дал `OrderNum`.
       properties:
-        order:
-          $ref: "#/components/schemas/Order"
-        idempotent:
-          type: boolean
+        OrderNum: {type: integer, format: int64, nullable: true, description: "Номер заявки в QUIK; null, пока QUIK не принял заявку"}
+        State: {type: string, nullable: true, description: "Активна, Исполнена, Снята или Отклонена; null, пока QUIK не ответил"}
+        ClassCode: {type: string}
+        SecCode: {type: string}
+        Operation: {type: string, enum: ["Купля", "Продажа"]}
+        Price: {type: number, nullable: true, description: "null — рыночная заявка"}
+        Qty: {type: number}
+        Balance: {type: number, description: Неисполненный остаток}
+        Account: {type: string}
+        ClientCode: {type: string}
+        FirmId: {type: string}
+        RejectReason: {type: string, nullable: true, description: Причина отказа QUIK}
+        id: {type: string, format: uuid}
         code:
           type: string
-          enum: [ORDER_REJECTED, ORDER_FAILED, QUIK_ANSWER_PENDING, QUIK_ANSWER_UNKNOWN]
+          enum: [ORDER_REJECTED, ORDER_FAILED, QUIK_ANSWER_PENDING, QUIK_ANSWER_UNKNOWN, TRADING_PAUSED, MAX_ORDER_QUANTITY, MAX_OPEN_ORDERS]
           description: Только в ответах 202/422/502
         error:
           type: string
-          description: Только в ответах 202/422/502; для 422 — причина отказа QUIK
+          description: Только в ответах 202/422/502
     Order:
       type: object
       properties:

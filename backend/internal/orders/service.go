@@ -46,18 +46,45 @@ func (s *Service) SetObserver(obs observability.Emitter) { s.obs = obs }
 // Configure before serving requests. Notifications never replace durable enqueueing.
 func (s *Service) SetQueueNotifier(fn func()) { s.onQueued = fn }
 
-// CreateOrderRequest has no client_order_id: the gateway always generates it.
-// Retries are protected by the optional Idempotency-Key header instead.
+// CreateOrderRequest uses the QUIK Orders column names. It has no order id: the
+// gateway always generates it, and retries use the Idempotency-Key header.
+// Side, OrderType and TimeInForce are derived (Operation, Price present, DAY).
 type CreateOrderRequest struct {
-	AccountID   string           `json:"account_id"`  // торговый код → FIX tag 1
-	ClientCode  string           `json:"client_code"` // произвольный код клиента → FIX tag 109
-	Symbol      string           `json:"symbol"`
-	Board       string           `json:"board"` // код класса → FIX tag 100 ExDestination
-	Side        domain.Side      `json:"side"`
-	OrderType   domain.OrderType `json:"order_type"`
-	TimeInForce string           `json:"time_in_force"`
-	Quantity    decimal.Decimal  `json:"quantity"`
-	Price       *decimal.Decimal `json:"price"`
+	Board       string           `json:"ClassCode"` // код класса → FIX tag 100 ExDestination
+	Symbol      string           `json:"SecCode"`   // → FIX tag 48 SecurityID
+	Operation   string           `json:"Operation"` // Купля / Продажа
+	Price       *decimal.Decimal `json:"Price"`     // нет — рыночная заявка
+	Quantity    decimal.Decimal  `json:"Qty"`
+	AccountID   string           `json:"Account"`    // торговый счёт → FIX tag 1
+	ClientCode  string           `json:"ClientCode"` // код клиента → FIX tag 109
+	Side        domain.Side      `json:"-"`
+	OrderType   domain.OrderType `json:"-"`
+	TimeInForce string           `json:"-"`
+}
+
+// QUIK Orders.Operation values.
+const (
+	OperationBuy  = "Купля"
+	OperationSell = "Продажа"
+)
+
+// deriveFIXFields fills the fields the QUIK-shaped request leaves implicit.
+func (r *CreateOrderRequest) deriveFIXFields() {
+	switch strings.TrimSpace(r.Operation) {
+	case OperationBuy:
+		r.Side = domain.SideBuy
+	case OperationSell:
+		r.Side = domain.SideSell
+	}
+	if r.OrderType == "" {
+		r.OrderType = domain.OrderTypeMarket
+		if r.Price != nil {
+			r.OrderType = domain.OrderTypeLimit
+		}
+	}
+	if r.TimeInForce == "" {
+		r.TimeInForce = "DAY"
+	}
 }
 
 // MaxIdempotencyKeyLen bounds the Idempotency-Key header.
@@ -71,41 +98,42 @@ func ValidateIdempotencyKey(key string) error {
 // ValidateCreateRequest returns a field-specific error for bad order payloads.
 func ValidateCreateRequest(req CreateOrderRequest) error {
 	if req.AccountID == "" || req.AccountID == "string" {
-		return fmt.Errorf("account_id обязателен: торговый код счёта брокера → FIX tag 1 (например 1-3101-006)")
+		return fmt.Errorf("Account обязателен: торговый счёт → FIX tag 1 (например 1-3101-006)")
 	}
 	if req.ClientCode == "" || req.ClientCode == "string" {
-		return fmt.Errorf("client_code обязателен: произвольный код клиента → FIX tag 109 ClientID")
+		return fmt.Errorf("ClientCode обязателен: код клиента → FIX tag 109 ClientID")
 	}
 	if req.Symbol == "" || req.Symbol == "string" {
-		return fmt.Errorf("symbol обязателен: инструмент (тикер/ISIN) → FIX tag 48 SecurityID")
+		return fmt.Errorf("SecCode обязателен: код инструмента → FIX tag 48 SecurityID")
 	}
 	if req.Board == "" || req.Board == "string" {
-		return fmt.Errorf("board обязателен: код класса → FIX tag 100 ExDestination (например LISTEDSTOCKK, TQBR)")
+		return fmt.Errorf("ClassCode обязателен: код класса → FIX tag 100 ExDestination (например LIST_GBA)")
 	}
 	if req.Quantity.LessThanOrEqual(decimal.Zero) {
-		return fmt.Errorf("quantity must be > 0")
+		return fmt.Errorf("Qty должно быть > 0")
 	}
 	if req.Side != domain.SideBuy && req.Side != domain.SideSell {
-		return fmt.Errorf("side: допустимо BUY или SELL")
+		return fmt.Errorf("Operation: допустимо %q или %q", OperationBuy, OperationSell)
 	}
 	if req.OrderType != domain.OrderTypeMarket && req.OrderType != domain.OrderTypeLimit {
-		return fmt.Errorf("order_type: допустимо MARKET или LIMIT")
+		return fmt.Errorf("order type: допустимо MARKET или LIMIT")
 	}
 	if req.OrderType == domain.OrderTypeLimit && (req.Price == nil || req.Price.LessThanOrEqual(decimal.Zero)) {
-		return fmt.Errorf("price обязателен для LIMIT")
+		return fmt.Errorf("Price должна быть > 0; для рыночной заявки не передавайте Price")
 	}
 	switch req.TimeInForce {
-	case "", "string", "DAY", "IOC", "FOK", "GTC":
+	case "", "DAY", "IOC", "FOK", "GTC":
 	default:
-		return fmt.Errorf("time_in_force: допустимо DAY, IOC, FOK, GTC (по умолчанию DAY)")
+		return fmt.Errorf("time in force: допустимо DAY, IOC, FOK, GTC")
 	}
-	return domain.CheckFIXTexts("account_id", req.AccountID, "client_code", req.ClientCode,
-		"symbol", req.Symbol, "board", req.Board)
+	return domain.CheckFIXTexts("Account", req.AccountID, "ClientCode", req.ClientCode,
+		"SecCode", req.Symbol, "ClassCode", req.Board)
 }
 
 // Create stores the order with a gateway-generated client_order_id. A non-empty
 // idempotencyKey makes a retry with the same parameters return the original order.
 func (s *Service) Create(ctx context.Context, broker domain.Broker, ip string, req CreateOrderRequest, quikFirm, idempotencyKey string) (domain.Order, bool, error) {
+	req.deriveFIXFields()
 	err := ValidateCreateRequest(req)
 	if err == nil {
 		err = ValidateIdempotencyKey(idempotencyKey)
@@ -141,7 +169,7 @@ func (s *Service) Create(ctx context.Context, broker domain.Broker, ip string, r
 		if !errors.Is(err, quikexport.ErrAccountNotFound) {
 			return domain.Order{}, false, fmt.Errorf("%w: %w", ErrPersistenceUnavailable, err)
 		}
-		msg := fmt.Errorf("account_id %q не найден в QUIK Trdaccs для фирмы %q", req.AccountID, firm)
+		msg := fmt.Errorf("Account %q не найден в QUIK Trdaccs для фирмы %q", req.AccountID, firm)
 		s.emit(ctx, observability.Event{
 			Type: observability.TypeError, Subtype: observability.ErrValidation, BrokerID: &broker.ID,
 			BrokerCode: broker.Code, BrokerName: broker.Name,
@@ -158,7 +186,7 @@ func (s *Service) Create(ctx context.Context, broker domain.Broker, ip string, r
 		if !errors.Is(err, pgx.ErrNoRows) && !errors.Is(err, ErrInstrumentNotFound) {
 			return domain.Order{}, false, fmt.Errorf("%w: %w", ErrPersistenceUnavailable, err)
 		}
-		msg := fmt.Errorf("instrument %q не найден: добавьте в справочник instruments (symbol + board/код класса + currency) или укажите существующий символ из GET /api/v1/instruments", req.Symbol)
+		msg := fmt.Errorf("instrument %q (ClassCode %q) не найден: укажите SecCode и ClassCode из GET /api/v1/instruments", req.Symbol, req.Board)
 		s.emit(ctx, observability.Event{
 			Type: observability.TypeError, Subtype: observability.ErrValidation, BrokerID: &broker.ID,
 			BrokerCode: broker.Code, BrokerName: broker.Name, Instrument: req.Symbol,

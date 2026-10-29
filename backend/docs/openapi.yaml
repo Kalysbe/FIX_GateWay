@@ -267,14 +267,17 @@ paths:
       description: |
         Requires permission `orders:create`. broker_id берётся из токена, не из body.
 
-        Куда писать поля QUIK/FIX:
-        - **Инструмент** → `symbol` (тикер или ISIN) → FIX tag **48** SecurityID (`22=8`)
-        - **Код класса** → `board` → FIX tag **100** ExDestination
-        - **Валюта** → не в body; `instruments.currency` → FIX tag 15
-        - **Торговый счёт** → `account_id` (например `1-3101-006`) → FIX tag **1**
-        - **Код клиента** → `client_code` (произвольная строка) → FIX tag **109** ClientID
-        - **Код фирмы** → `quik_firm` **API-токена** → FIX tag **5018** (не из body)
-        - **ID заявки** → `client_order_id` создаёт шлюз (равен `id`); в body не передаётся
+        Поля — имена колонок QUIK `Orders`:
+        - `SecCode` → FIX tag **48** SecurityID (`22=8`)
+        - `ClassCode` → FIX tag **100** ExDestination
+        - `Operation` (`Купля` / `Продажа`) → FIX tag 54
+        - `Price` → FIX tag 44; без `Price` — рыночная заявка; срок DAY
+        - `Qty` → FIX tag 38
+        - `Account` → FIX tag **1**
+        - `ClientCode` → FIX tag **109** ClientID
+        - `FirmId` → `quik_firm` **API-токена** → FIX tag **5018** (не из body)
+
+        Ответ — заявка в тех же именах плюс `OrderNum`, `State`, `Balance`, `FirmId`, `RejectReason` и `id` шлюза.
 
         Защита от дублей — необязательный заголовок `Idempotency-Key`.
 
@@ -295,15 +298,13 @@ paths:
             schema:
               $ref: "#/components/schemas/CreateOrderRequest"
             example:
-              account_id: "1-3101-006"
-              client_code: "006"
-              symbol: "KG0105166315"
-              board: "LISTEDSTOCKK"
-              side: "BUY"
-              order_type: "LIMIT"
-              time_in_force: "DAY"
-              quantity: "1"
-              price: "400"
+              ClassCode: "LIST_GBA"
+              SecCode: "GBA02270915"
+              Operation: "Купля"
+              Price: 400
+              Qty: 1
+              Account: "1-3101-006"
+              ClientCode: "006"
       responses:
         "200":
           description: Idempotent existing order, accepted by QUIK
@@ -1725,60 +1726,25 @@ components:
   schemas:
     CreateOrderRequest:
       type: object
-      required: [account_id, client_code, symbol, board, side, order_type, quantity]
+      description: Имена полей — как колонки таблицы QUIK Orders. Price есть — лимитная, нет — рыночная; срок DAY.
+      required: [ClassCode, SecCode, Operation, Qty, Account, ClientCode]
       additionalProperties: false
       example:
-        account_id: "1-3101-006"
-        client_code: "006"
-        symbol: "KG0105166315"
-        board: "LISTEDSTOCKK"
-        side: "BUY"
-        order_type: "LIMIT"
-        time_in_force: "DAY"
-        quantity: "1"
-        price: "400"
+        ClassCode: "LIST_GBA"
+        SecCode: "GBA02270915"
+        Operation: "Купля"
+        Price: 400
+        Qty: 1
+        Account: "1-3101-006"
+        ClientCode: "006"
       properties:
-        account_id:
-          type: string
-          example: "1-3101-006"
-          description: "Торговый код счёта. FIX tag 1 Account"
-        client_code:
-          type: string
-          example: "006"
-          description: "Произвольный код клиента. FIX tag 109 ClientID"
-        symbol:
-          type: string
-          example: "KG0105166315"
-          description: "Инструмент (тикер/ISIN). Список — GET /api/v1/instruments"
-        board:
-          type: string
-          example: "LISTEDSTOCKK"
-          description: "Код класса (QUIK class code). FIX tag 100 ExDestination"
-        side:
-          type: string
-          enum: [BUY, SELL]
-          example: "BUY"
-        order_type:
-          type: string
-          enum: [MARKET, LIMIT]
-          example: "LIMIT"
-        time_in_force:
-          type: string
-          enum: [DAY, IOC, FOK, GTC]
-          example: "DAY"
-          default: "DAY"
-        quantity:
-          oneOf:
-            - type: string
-            - type: number
-          example: "1"
-          description: "Количество (строка или число)"
-        price:
-          oneOf:
-            - type: string
-            - type: number
-          example: "400"
-          description: "Цена для LIMIT (строка или число)"
+        ClassCode: {type: string, description: "Код класса. FIX tag 100 ExDestination"}
+        SecCode: {type: string, description: "Код инструмента. FIX tag 48 SecurityID"}
+        Operation: {type: string, enum: ["Купля", "Продажа"]}
+        Price: {type: number, description: "Цена; без Price — рыночная заявка"}
+        Qty: {type: number}
+        Account: {type: string, description: "Торговый счёт. FIX tag 1 Account"}
+        ClientCode: {type: string, description: "Код клиента. FIX tag 109 ClientID"}
     CreateTokenRequest:
       type: object
       required: [name]

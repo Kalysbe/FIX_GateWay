@@ -105,8 +105,8 @@ INSERT INTO public."Firms" VALUES ('KSE','2040','Сенти',NULL,1),('KSE','999
 		}
 		return strings.TrimSpace(w.Body.String())
 	}
-	order := map[string]any{"account_id": "1-3001-71", "client_code": "C1", "symbol": "X", "board": "Y",
-		"side": "BUY", "order_type": "LIMIT", "quantity": "1", "price": "1"}
+	order := map[string]any{"Account": "1-3001-71", "ClientCode": "C1", "SecCode": "X", "ClassCode": "Y",
+		"Operation": "Купля", "Qty": 1, "Price": 1}
 	// Without the QUIK source nothing can be confirmed.
 	call("GET", "/api/v1/accounts", token.Raw, nil, 503)
 	call("POST", "/api/v1/orders", token.Raw, order, 503)
@@ -128,11 +128,11 @@ INSERT INTO public."Firms" VALUES ('KSE','2040','Сенти',NULL,1),('KSE','999
 	}
 	// Another firm's account is refused; the account check passes for its own
 	// (the instrument is unknown, so validation stops at the next step).
-	order["account_id"] = "1-9999-01"
+	order["Account"] = "1-9999-01"
 	if got := call("POST", "/api/v1/orders", token.Raw, order, 400); !strings.Contains(got, "не найден в QUIK Trdaccs") {
 		t.Fatal(got)
 	}
-	order["account_id"] = "1-3001-71"
+	order["Account"] = "1-3001-71"
 	if got := call("POST", "/api/v1/orders", token.Raw, order, 400); strings.Contains(got, "Trdaccs") || !strings.Contains(got, "instrument") {
 		t.Fatal(got)
 	}

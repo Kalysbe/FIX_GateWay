@@ -102,15 +102,14 @@ func TestOrderIdempotencyIntegration(t *testing.T) {
 		return rr
 	}
 	decodeOrder := func(rr *httptest.ResponseRecorder) map[string]any {
-		var resp map[string]any
-		_ = json.Unmarshal(rr.Body.Bytes(), &resp)
-		order, _ := resp["order"].(map[string]any)
+		var order map[string]any
+		_ = json.Unmarshal(rr.Body.Bytes(), &order)
 		return order
 	}
 
 	body := map[string]any{
-		"account_id": "ACC1", "client_code": "006", "symbol": "SBER", "board": "TQBR",
-		"side": "BUY", "order_type": "LIMIT", "quantity": "10", "price": "250",
+		"Account": "ACC1", "ClientCode": "006", "SecCode": "SBER", "ClassCode": "TQBR",
+		"Operation": "Купля", "Qty": 10, "Price": 250,
 	}
 	idemKey := "IDEM-" + uuid.NewString()
 	rr := callCreate(body, idemKey)
@@ -118,25 +117,19 @@ func TestOrderIdempotencyIntegration(t *testing.T) {
 		t.Fatalf("first create status %d body %s", rr.Code, rr.Body.String())
 	}
 	first := decodeOrder(rr)
-	// client_order_id is assigned by the gateway, not taken from the broker.
-	if first["client_order_id"] != first["id"] {
-		t.Fatalf("client_order_id must be generated as the order id: %#v", first)
+	if first["OrderNum"] != nil || first["SecCode"] != "SBER" || first["Operation"] != "Купля" || first["id"] == nil {
+		t.Fatalf("reply must use QUIK Orders names: %#v", first)
 	}
 
 	rr2 := callCreate(body, idemKey)
 	if rr2.Code != http.StatusAccepted {
 		t.Fatalf("idempotent create status %d", rr2.Code)
 	}
-	var resp map[string]any
-	_ = json.Unmarshal(rr2.Body.Bytes(), &resp)
-	if resp["idempotent"] != true {
-		t.Fatalf("expected idempotent true: %#v", resp)
-	}
-	orderID := resp["order"].(map[string]any)["id"].(string)
+	orderID := decodeOrder(rr2)["id"].(string)
 	if orderID != first["id"] {
 		t.Fatalf("replay must return the original order: %s != %v", orderID, first["id"])
 	}
-	for field, value := range map[string]any{"quantity": "11", "price": "251", "side": "SELL", "client_code": "007"} {
+	for field, value := range map[string]any{"Qty": 11, "Price": 251, "Operation": "Продажа", "ClientCode": "007"} {
 		changed := map[string]any{}
 		for k, v := range body {
 			changed[k] = v
@@ -190,12 +183,12 @@ func TestOrderIdempotencyIntegration(t *testing.T) {
 	if err := orderStore.UpdateTradingLimit(ctx, policy, "integration-operator", "test broker pause"); err != nil {
 		t.Fatal(err)
 	}
-	body["quantity"] = "1"
+	body["Qty"] = 1
 	riskResponse = callCreate(body, "")
 	if riskResponse.Code != http.StatusUnprocessableEntity || !bytes.Contains(riskResponse.Body.Bytes(), []byte("TRADING_PAUSED")) {
 		t.Fatalf("pause rejection: %d %s", riskResponse.Code, riskResponse.Body.String())
 	}
-	body["quantity"] = "10"
+	body["Qty"] = 10
 	if replay := callCreate(body, idemKey); replay.Code != http.StatusOK {
 		t.Fatalf("paused replay: %d %s", replay.Code, replay.Body.String())
 	}

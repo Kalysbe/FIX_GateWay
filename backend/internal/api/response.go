@@ -100,23 +100,27 @@ func decodeJSONBody(r *http.Request, dst any) error {
 func fieldHint(field string) string {
 	f := strings.ToLower(field)
 	switch {
-	case strings.Contains(f, "account_id"):
-		return `account_id — произвольный торговый код счёта брокера → FIX tag 1 (например "1-3101-006")`
+	case strings.Contains(f, "account"):
+		return `торговый счёт пишите в Account → FIX tag 1 (например "1-3101-006")`
 	case strings.Contains(f, "amount"), strings.Contains(f, "currency"), strings.Contains(f, "валют"):
 		return `для денег: currency (KGS/USD) и amount (CUR_BAL); опционально tag, open_bal, limit, locked`
-	case strings.Contains(f, "quantity"), strings.Contains(f, "price"), strings.Contains(f, "long_qty"), strings.Contains(f, "short_qty"):
-		return `quantity/price можно передавать числом или строкой, например 1 или "1"`
-	case strings.Contains(f, "symbol"):
-		return `инструмент пишите в symbol (тикер/ISIN)`
+	case strings.Contains(f, "long_qty"), strings.Contains(f, "short_qty"):
+		return `количество можно передавать числом или строкой, например 1 или "1"`
+	case strings.Contains(f, "quantity"), strings.Contains(f, "qty"), strings.Contains(f, "price"):
+		return `заявка: количество — Qty, цена — Price (без Price — рыночная); числом или строкой`
+	case strings.Contains(f, "side"), strings.Contains(f, "operation"), strings.Contains(f, "order_type"), strings.Contains(f, "time_in_force"):
+		return `направление пишите в Operation: "Купля" или "Продажа"; тип и срок не передаются (Price → лимитная, срок DAY)`
+	case strings.Contains(f, "symbol"), strings.Contains(f, "seccode"):
+		return `код инструмента пишите в SecCode → FIX tag 48`
 	case strings.Contains(f, "board"), strings.Contains(f, "class"):
-		return `код класса пишите в board → FIX tag 100 ExDestination (например LISTEDSTOCKK)`
-	case strings.Contains(f, "client_code"):
-		return `client_code — код клиента (PartyRole 3)`
+		return `код класса пишите в ClassCode → FIX tag 100 ExDestination (например LIST_GBA)`
+	case strings.Contains(f, "client"):
+		return `код клиента пишите в ClientCode → FIX tag 109`
 	case strings.Contains(f, "tag"):
 		return `tag — ключ денежной позиции (например EQTV); если пусто, берётся currency`
 	case strings.Contains(f, "firm"):
 		return `firm_id — код фирмы / код брокера (например 2040)`
 	default:
-		return `см. схему CreateOrderRequest: symbol→инструмент; board→код класса (FIX 100); фирма→quik_firm (FIX 5018)`
+		return `заявка: ClassCode, SecCode, Operation, Price, Qty, Account, ClientCode (имена колонок QUIK Orders)`
 	}
 }

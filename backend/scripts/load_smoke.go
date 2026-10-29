@@ -45,8 +45,8 @@ func main() {
 			client := &http.Client{Timeout: 10 * time.Second}
 			for i := range jobs {
 				body, _ := json.Marshal(map[string]any{
-					"account_id": *account, "client_code": *clientCode,
-					"symbol": "SBER", "board": "TQBR", "side": "BUY", "order_type": "LIMIT", "quantity": "1", "price": "100",
+					"Account": *account, "ClientCode": *clientCode,
+					"SecCode": "SBER", "ClassCode": "TQBR", "Operation": "Купля", "Qty": 1, "Price": 100,
 				})
 				if err := createSmokeOrder(client, base, *token, fmt.Sprintf("%s-%d", runPrefix, i), body); err != nil {
 					fail.Add(1)

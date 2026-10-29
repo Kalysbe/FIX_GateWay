@@ -57,6 +57,27 @@ func TestCreateRequestValidation(t *testing.T) {
 	}
 }
 
+// Operation and Price decide side and order type; the term is always DAY.
+func TestDeriveFIXFields(t *testing.T) {
+	price := decimal.NewFromInt(400)
+	for _, tc := range []struct {
+		op    string
+		price *decimal.Decimal
+		side  domain.Side
+		typ   domain.OrderType
+	}{
+		{OperationBuy, &price, domain.SideBuy, domain.OrderTypeLimit},
+		{OperationSell, nil, domain.SideSell, domain.OrderTypeMarket},
+		{"BUY", &price, "", domain.OrderTypeLimit},
+	} {
+		r := CreateOrderRequest{Operation: tc.op, Price: tc.price}
+		r.deriveFIXFields()
+		if r.Side != tc.side || r.OrderType != tc.typ || r.TimeInForce != "DAY" {
+			t.Fatalf("%s: %+v", tc.op, r)
+		}
+	}
+}
+
 func TestIdempotencyKeyValidation(t *testing.T) {
 	for _, key := range []string{"", "IDEM-1", strings.Repeat("k", MaxIdempotencyKeyLen)} {
 		if err := ValidateIdempotencyKey(key); err != nil {
