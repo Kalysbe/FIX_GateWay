@@ -21,7 +21,6 @@ import (
 	"github.com/fix-gateway/backend/internal/domain"
 	"github.com/fix-gateway/backend/internal/executioninbox"
 	"github.com/fix-gateway/backend/internal/grpcstream"
-	"github.com/fix-gateway/backend/internal/marketdata"
 	"github.com/fix-gateway/backend/internal/metrics"
 	"github.com/fix-gateway/backend/internal/observability"
 	"github.com/fix-gateway/backend/internal/orders"
@@ -305,7 +304,7 @@ func main() {
 		go positionSubscriptionLoop(ctx, log, manager, hub, 5*time.Second)
 	}
 	go positionSnapshotLoop(ctx, log, manager, positionWriter, cfg.PositionSyncInterval)
-	go syncMarketDataLoop(ctx, log, manager, marketdata.NewStore(pool), refStore, cfg.MarketDataSyncInterval, cfg.MarketDataBoards)
+	go syncMarketDataLoop(ctx, log, manager, refStore, cfg.MarketDataSyncInterval, cfg.MarketDataBoards)
 
 	worker := outbox.NewWorker(outboxStore, orderStore, manager, log, cfg.WorkerID, cfg.OutboxPollInterval, cfg.OutboxBatchSize)
 	worker.SetObserver(obs)

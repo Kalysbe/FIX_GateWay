@@ -48,20 +48,6 @@ func (r *testMDReference) ListActiveInstruments(context.Context) ([]domain.Secur
 	return list, nil
 }
 
-type testMDStore struct{ saved int }
-
-func (s *testMDStore) BeginSnapshot(context.Context, string, string) (int64, error) { return 1, nil }
-func (s *testMDStore) InsertQuotes(_ context.Context, _ int64, rows []domain.MarketQuote) error {
-	for _, row := range rows {
-		if !row.HasData() {
-			panic("seed persisted as success")
-		}
-	}
-	s.saved++
-	return nil
-}
-func (s *testMDStore) CompleteSnapshot(context.Context, int64, string, string, int) error { return nil }
-
 type testMDHub struct{ events int }
 
 func (h *testMDHub) Broadcast(string, any) { h.events++ }
@@ -70,15 +56,12 @@ func TestMarketDataSupervisorContinuesAfterSeedsAndRefreshesDictionaryWithoutUI(
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	m := &testMDManager{cancel: cancel}
-	refs, store := &testMDReference{}, &testMDStore{}
-	syncMarketDataLoop(ctx, slog.New(slog.NewTextHandler(io.Discard, nil)), m, store, refs, time.Millisecond, nil)
+	refs := &testMDReference{}
+	syncMarketDataLoop(ctx, slog.New(slog.NewTextHandler(io.Discard, nil)), m, refs, time.Millisecond, nil)
 	if m.calls != 4 {
 		t.Fatal("automatic recovery stopped on seeded or quiet rows", m.calls)
 	}
 	if len(m.queries[0].Instruments) != 1 || len(m.queries[1].Instruments) != 2 {
 		t.Fatal("dictionary change was not reconciled")
-	}
-	if store.saved != 1 {
-		t.Fatal("invalid or duplicate snapshot persisted", store.saved)
 	}
 }

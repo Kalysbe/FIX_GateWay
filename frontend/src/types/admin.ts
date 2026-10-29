@@ -155,7 +155,6 @@ export type Dashboard = {
   stats: { total: number; filled: number; rejected: number; active: number } | null;
   orders_source_error?: string;
   brokers: number;
-  active_accounts: number;
   adapters_available: number;
   observability?: {
     requests_today: number;

@@ -98,10 +98,7 @@ func (s *Store) SyncFromFIX(ctx context.Context, items []domain.SecurityRef) (Sy
 		SET status = 'INACTIVE'
 		WHERE i.id <> ALL($1)
 		  AND i.status <> 'INACTIVE'
-		  AND (
-		    EXISTS (SELECT 1 FROM orders o WHERE o.instrument_id = i.id)
-		    OR EXISTS (SELECT 1 FROM broker_instrument_mapping m WHERE m.instrument_id = i.id)
-		  )`, keepIDs)
+		  AND EXISTS (SELECT 1 FROM orders o WHERE o.instrument_id = i.id)`, keepIDs)
 	if err != nil {
 		return res, fmt.Errorf("deactivate stale instruments: %w", err)
 	}
@@ -110,8 +107,7 @@ func (s *Store) SyncFromFIX(ctx context.Context, items []domain.SecurityRef) (Sy
 	tag, err = tx.Exec(ctx, `
 		DELETE FROM instruments i
 		WHERE i.id <> ALL($1)
-		  AND NOT EXISTS (SELECT 1 FROM orders o WHERE o.instrument_id = i.id)
-		  AND NOT EXISTS (SELECT 1 FROM broker_instrument_mapping m WHERE m.instrument_id = i.id)`, keepIDs)
+		  AND NOT EXISTS (SELECT 1 FROM orders o WHERE o.instrument_id = i.id)`, keepIDs)
 	if err != nil {
 		return res, fmt.Errorf("delete stale instruments: %w", err)
 	}

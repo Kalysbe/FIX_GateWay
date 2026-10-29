@@ -52,7 +52,7 @@ SELECT o.id, o.broker_id, COALESCE(o.account_id, 0), o.client_order_id, o.instru
        o.time_in_force, o.quantity, o.price, o.filled_quantity, o.avg_price, o.status, o.adapter_id,
        o.fix_cl_ord_id, o.quik_order_id, o.reject_reason, o.created_at, o.updated_at,
        i.quik_symbol, COALESCE(NULLIF(o.board, ''), i.board) AS board,
-       COALESCE(NULLIF(o.fix_account, ''), a.trading_account, '') AS trading_account,
+       COALESCE(o.fix_account, '') AS trading_account,
        i.currency,
        COALESCE(NULLIF(o.fix_firm, ''), '') AS quik_firm,
        COALESCE(NULLIF(o.fix_client_id, ''), '') AS client_code,
@@ -63,19 +63,7 @@ FROM orders o
 JOIN instruments i ON i.id = o.instrument_id
 LEFT JOIN brokers b ON b.id = o.broker_id
 LEFT JOIN brokers bf ON bf.code = NULLIF(o.fix_firm, '')
-LEFT JOIN quik_firms f ON f.firm_id = NULLIF(o.fix_firm, '')
-LEFT JOIN LATERAL (
-	SELECT ba.trading_account
-	FROM broker_accounts ba
-	WHERE ba.broker_id = o.broker_id
-	  AND (
-		(o.account_id IS NOT NULL AND ba.id = o.account_id)
-		OR ba.trading_account = o.fix_account
-		OR ba.code = o.fix_account
-	  )
-	ORDER BY CASE WHEN o.account_id IS NOT NULL AND ba.id = o.account_id THEN 0 ELSE 1 END
-	LIMIT 1
-) a ON true`
+LEFT JOIN quik_firms f ON f.firm_id = NULLIF(o.fix_firm, '')`
 
 func (s *Store) scanOrder(row pgx.Row) (domain.Order, error) {
 	var o domain.Order
@@ -815,24 +803,16 @@ func (s *Store) ListEvents(ctx context.Context, orderID uuid.UUID) ([]domain.Ord
 func (s *Store) ResolveInstrument(ctx context.Context, brokerID int64, brokerSymbol, board string) (domain.Instrument, error) {
 	var i domain.Instrument
 	err := s.pool.QueryRow(ctx, `
-		SELECT i.id, i.internal_symbol, i.quik_symbol, i.board, i.currency, i.security_type, i.status
-		FROM broker_instrument_mapping m
-		JOIN instruments i ON i.id = m.instrument_id
-		WHERE m.broker_id=$1 AND m.broker_symbol=$2`, brokerID, brokerSymbol,
+		SELECT id, internal_symbol, quik_symbol, board, currency, security_type, status
+		FROM instruments
+		WHERE status = 'ACTIVE'
+		  AND (internal_symbol=$1 OR quik_symbol=$1 OR internal_symbol LIKE '%/' || $1)
+		  AND ($2 = '' OR board = $2)
+		ORDER BY CASE WHEN board = $2 THEN 0 ELSE 1 END, id
+		LIMIT 1`, brokerSymbol, board,
 	).Scan(&i.ID, &i.InternalSymbol, &i.QuikSymbol, &i.Board, &i.Currency, &i.SecurityType, &i.Status)
 	if errors.Is(err, pgx.ErrNoRows) {
-		err = s.pool.QueryRow(ctx, `
-			SELECT id, internal_symbol, quik_symbol, board, currency, security_type, status
-			FROM instruments
-			WHERE status = 'ACTIVE'
-			  AND (internal_symbol=$1 OR quik_symbol=$1 OR internal_symbol LIKE '%/' || $1)
-			  AND ($2 = '' OR board = $2)
-			ORDER BY CASE WHEN board = $2 THEN 0 ELSE 1 END, id
-			LIMIT 1`, brokerSymbol, board,
-		).Scan(&i.ID, &i.InternalSymbol, &i.QuikSymbol, &i.Board, &i.Currency, &i.SecurityType, &i.Status)
-		if errors.Is(err, pgx.ErrNoRows) {
-			return i, ErrInstrumentNotFound
-		}
+		return i, ErrInstrumentNotFound
 	}
 	return i, err
 }

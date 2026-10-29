@@ -376,7 +376,6 @@ func (s *Store) ApplyRetention(ctx context.Context, cfg Retention) error {
 	_, _ = s.pool.Exec(ctx, `DELETE FROM obs_notifications WHERE last_seen_at < now() - make_interval(days => $1)`, days)
 	_, _ = s.pool.Exec(ctx, `DELETE FROM obs_export_jobs WHERE created_at < now() - interval '7 days'`)
 	_, _ = s.pool.Exec(ctx, `DELETE FROM audit_logs WHERE created_at < now() - make_interval(days => $1)`, days)
-	_, _ = s.pool.Exec(ctx, `DELETE FROM api_logs WHERE created_at < now() - make_interval(days => $1)`, days)
 	return nil
 }
 
