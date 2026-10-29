@@ -19,6 +19,7 @@ type quikOrderReader interface {
 	ListOrders(context.Context, quikexport.OrderFilter) (quikexport.OrderPage, error)
 	GetOrder(context.Context, string, *string) (quikexport.Order, error)
 	CountOrdersByState(context.Context) (map[string]int, error)
+	ListTrades(context.Context, quikexport.TradeFilter) (quikexport.TradePage, error)
 }
 
 // quikOrderStats keeps the dashboard counters that existed before the QUIK
@@ -175,10 +176,10 @@ func (s *Server) listQuikOrdersMatching(w http.ResponseWriter, r *http.Request, 
 	s.writeQuikOrderPage(w, r, filter, func(rows []quikexport.Order) any { return rows })
 }
 
-// writeQuikOrderPage serves one page of the Orders rows matching filter,
-// whose Firm is already decided by the caller, as view renders them.
-func (s *Server) writeQuikOrderPage(w http.ResponseWriter, r *http.Request, filter quikexport.OrderFilter, view func([]quikexport.Order) any) {
-	limit, offset := 200, 0
+// pageParams reads limit (1–1000, default 200) and offset; a bad value is
+// answered with 400 and ok=false.
+func pageParams(w http.ResponseWriter, r *http.Request) (limit, offset int, ok bool) {
+	limit = 200
 	for _, p := range []struct {
 		key      string
 		dest     *int
@@ -188,10 +189,20 @@ func (s *Server) writeQuikOrderPage(w http.ResponseWriter, r *http.Request, filt
 			n, err := strconv.Atoi(raw)
 			if err != nil || n < p.min || n > p.max {
 				writeErr(w, http.StatusBadRequest, "invalid "+p.key)
-				return
+				return 0, 0, false
 			}
 			*p.dest = n
 		}
+	}
+	return limit, offset, true
+}
+
+// writeQuikOrderPage serves one page of the Orders rows matching filter,
+// whose Firm is already decided by the caller, as view renders them.
+func (s *Server) writeQuikOrderPage(w http.ResponseWriter, r *http.Request, filter quikexport.OrderFilter, view func([]quikexport.Order) any) {
+	limit, offset, ok := pageParams(w, r)
+	if !ok {
+		return
 	}
 	if s.quikOrders == nil {
 		s.writeOrderReadError(w, quikexport.ErrNotConfigured)

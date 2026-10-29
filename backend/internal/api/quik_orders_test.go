@@ -14,8 +14,9 @@ import (
 )
 
 type testOrderSource struct {
-	filter quikexport.OrderFilter
-	firm   *string
+	filter      quikexport.OrderFilter
+	tradeFilter quikexport.TradeFilter
+	firm        *string
 	err    error
 	order  quikexport.Order
 }
@@ -30,6 +31,34 @@ func (s *testOrderSource) GetOrder(_ context.Context, _ string, firm *string) (q
 }
 func (s *testOrderSource) CountOrdersByState(context.Context) (map[string]int, error) {
 	return map[string]int{s.order.Text("State"): 1}, s.err
+}
+func (s *testOrderSource) ListTrades(_ context.Context, f quikexport.TradeFilter) (quikexport.TradePage, error) {
+	s.tradeFilter = f
+	return quikexport.TradePage{Trades: []quikexport.Order{s.order}, HasMore: true, NextOffset: f.Offset + 1}, s.err
+}
+
+// Broker trades are the token firm's raw QUIK Trades rows, paged.
+func TestBrokerTradesAreRawQUIKRowsOfTokenFirm(t *testing.T) {
+	row := `{"TradeNum":11094,"Operation":"Купля","ClassCode":"LIST_GBA","SecCode":"GBA02280810","Price":99.00000000,"Qty":201,"FirmId":"2040","CPFirmId":"BAKAI"}`
+	src := &testOrderSource{order: quikexport.Order{Raw: json.RawMessage(row)}}
+	s := &Server{quikOrders: src}
+	w := httptest.NewRecorder()
+	s.listTrades(w, brokerOrderRequest("/api/v1/trades?limit=5&offset=10"))
+	if w.Code != 200 || strings.TrimSpace(w.Body.String()) != "["+row+"]" {
+		t.Fatalf("%d %s", w.Code, w.Body.String())
+	}
+	if src.tradeFilter.Firm == nil || *src.tradeFilter.Firm != "2040" || src.tradeFilter.Limit != 5 || src.tradeFilter.Offset != 10 {
+		t.Fatalf("filter %+v", src.tradeFilter)
+	}
+	if w.Header().Get("X-Has-More") != "true" || w.Header().Get("X-Next-Offset") != "11" {
+		t.Fatalf("headers %v", w.Header())
+	}
+	src.err = errors.New("down")
+	w = httptest.NewRecorder()
+	s.listTrades(w, brokerOrderRequest("/api/v1/trades"))
+	if w.Code != 503 {
+		t.Fatalf("outage must be 503, got %d", w.Code)
+	}
 }
 
 func TestQUIKOrderStatsGroupRawStates(t *testing.T) {

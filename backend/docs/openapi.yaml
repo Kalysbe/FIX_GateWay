@@ -521,22 +521,25 @@ paths:
   /api/v1/trades:
     get:
       tags: [Broker]
-      summary: List fills of the current broker
+      summary: Trades of the token firm — rows of QUIK Trades
       security:
         - bearerAuth: []
-      description: Requires `trades:read`. Up to 100 latest executions for this broker.
+      description: Requires `trades:read`. JSON array of quik_export2.public."Trades" rows (row_to_json, unchanged) whose FirmId is the token firm, newest first; one row per trade side. Paged by limit/offset with X-Has-More / X-Next-Offset. gRPC trade.created carries today's new rows in data_json.
+      parameters:
+        - {in: query, name: limit, schema: {type: integer, minimum: 1, maximum: 1000, default: 200}}
+        - {in: query, name: offset, schema: {type: integer, minimum: 0, maximum: 10000000, default: 0}}
       responses:
         "200":
-          description: OK
+          description: QUIK Trades rows
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  trades:
-                    type: array
-                    items:
-                      $ref: "#/components/schemas/Trade"
+                type: array
+                items:
+                  type: object
+                  additionalProperties: true
+        "503":
+          description: QUIK Trades source unavailable
         "401":
           description: Unauthorized
         "403":

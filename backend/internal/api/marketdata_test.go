@@ -125,7 +125,7 @@ func TestBrokerGRPCChannelsHaveRESTAndSwagger(t *testing.T) {
 			t.Fatalf("admin method exposed in broker-swagger: %s", path)
 		}
 	}
-	for name, fields := range map[string]map[string]any{"Order": orderReply(domain.Order{}), "Trade": tradeDTO(domain.Trade{})} {
+	for name, fields := range map[string]map[string]any{"Order": orderReply(domain.Order{})} {
 		for field := range fields {
 			if doc.Components.Schemas[name].Value.Properties[field] == nil {
 				t.Errorf("%s.%s missing from broker-swagger", name, field)

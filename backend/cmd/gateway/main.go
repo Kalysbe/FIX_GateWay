@@ -245,6 +245,11 @@ func main() {
 		}, func(err error) {
 			log.Warn("QUIK Orders change read failed; retaining previous selection", "error", err)
 		})
+		go quikExportStore.RunTrades(ctx, func(trade quikexport.Order) {
+			hub.BroadcastTradeForFirm(trade.Raw, strings.TrimSpace(trade.Text("FirmId")))
+		}, func(err error) {
+			log.Warn("QUIK Trades change read failed; retaining previous selection", "error", err)
+		})
 		go syncFirmNames(ctx, log, quikExportStore, refStore, 5*time.Minute)
 		go quikExportStore.RunParams(ctx, func(change quikexport.ParamChange) {
 			hub.BroadcastMarketData(change.Param.Raw, change.Removed)

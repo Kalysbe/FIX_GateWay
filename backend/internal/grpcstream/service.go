@@ -197,8 +197,8 @@ func (s *Service) Stream(stream grpc.BidiStreamingServer[pb.ClientMessage, pb.Se
 	}
 	validate := time.NewTicker(5 * time.Second)
 	defer validate.Stop()
-	// order.updated is firm-scoped, so the token is rechecked before delivery,
-	// but at most once per orderRevalidateEvery: a burst of Orders changes must
+	// order.updated and trade.created are firm-scoped, so the token is rechecked
+	// before delivery, but at most once per orderRevalidateEvery: a burst of changes must
 	// not turn into one database lookup per event per stream.
 	validatedAt := time.Now()
 	heartbeat := time.NewTicker(20 * time.Second)
@@ -268,7 +268,7 @@ func (s *Service) Stream(stream grpc.BidiStreamingServer[pb.ClientMessage, pb.Se
 			if !time.Now().Before(principal.expires) {
 				return status.Error(codes.Unauthenticated, "session expired")
 			}
-			if principal.info.BrokerID > 0 && event.Type == "order.updated" && time.Since(validatedAt) >= orderRevalidateEvery {
+			if principal.info.BrokerID > 0 && (event.Type == "order.updated" || event.Type == "trade.created") && time.Since(validatedAt) >= orderRevalidateEvery {
 				check, cancel := context.WithTimeout(ctx, 2*time.Second)
 				err := principal.validate(check)
 				cancel()

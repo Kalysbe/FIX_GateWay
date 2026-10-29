@@ -183,19 +183,16 @@ Idempotency-Key: ORD-0001
 
 | REST / gRPC | Назначение | Возвращаемые данные | Право |
 |---|---|---|---|
-| `GET /api/v1/trades` | Последние 100 сделок брокера, новые первыми | `{trades: [Trade]}`; без фильтров и пагинации | `trades:read` |
-| gRPC `trade.created` | Получать новые исполнения своего брокера | `event.data` — `Execution` | `trades:read` |
+| `GET /api/v1/trades` | Сделки своей фирмы, новые первыми | Массив исходных строк QUIK `Trades` | `trades:read` |
+| gRPC `trade.created` | Новые сделки своей фирмы за сегодня | `event.data_json` — исходный JSON строки `Trades` | `trades:read` |
 
-gRPC не отправляет начальный список сделок.
+Источник — таблица QUIK `quik_export2.public."Trades"`, как для заявок `Orders`: имена колонок, числа, строки и `null` передаются без изменений, шлюз ничего не добавляет. Каждая строка — одна сторона сделки; `FirmId` ограничен `quik_firm` токена (при пустом значении — кодом брокера). Основные колонки: `TradeNum`, `TradeDate`, `ClassCode`, `SecCode`, `OrderNum`, `Operation`, `Price`, `Qty`, `FirmId`, `Account`, `ClientCode`, `CPFirmId` (фирма контрагента).
 
-| Поля Execution | Данные |
-|---|---|
-| `id`, `order_id`, `exec_id` | UUID исполнения, UUID заявки шлюза, ID исполнения из FIX |
-| `last_qty`, `last_px` | Количество и цена этого исполнения |
-| `cum_qty`, `leaves_qty` | Накопленное исполненное количество и остаток заявки |
-| `adapter_id`, `created_at` | Адаптер и время записи; `adapter_id` может отсутствовать |
+```json
+[{"TradeNum":11094,"TradeDate":"2026-10-06T00:00:00","ClassCode":"LIST_GBA","SecCode":"GBA02280810","OrderNum":22450,"Operation":"Купля","Price":99.00000000,"Qty":201,"FirmId":"2040","Account":"1-3101-2040","ClientCode":"Kalys","CPFirmId":"BAKAI2008"}]
+```
 
-`Trade` в REST содержит все поля `Execution` и дополнительно: `broker_id`, `client_order_id`, `symbol`, `board`, `side`, `client_code`, `quik_firm`, `firm_name`, `fix_cl_ord_id`, `quik_order_id`. В REST `adapter_id`, `fix_cl_ord_id` и `quik_order_id` могут быть `null`. Сделки читаются отдельно через `GET /api/v1/trades` и не добавляются к строке заявки.
+Список принимает `limit` 1–1000 (по умолчанию 200) и `offset`; заголовки `X-Has-More` и `X-Next-Offset` задают продолжение. Ошибка БД QUIK — 503. gRPC не отправляет начальный список: загрузите его через REST; новые строки проверяются каждые две секунды, включая сделки по заявкам, поданным вне шлюза. Сделку с заявкой связывает `OrderNum`.
 
 ## Рыночные данные и стакан
 

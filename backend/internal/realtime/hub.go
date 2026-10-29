@@ -186,6 +186,12 @@ func (h *Hub) BroadcastOrderForFirm(data json.RawMessage, firm string, removed b
 	h.broadcast("order.updated", data, 0, &firm, removed)
 }
 
+// BroadcastTradeForFirm publishes one QUIK Trades row verbatim to the brokers
+// of its firm; empty firm codes are never delivered to brokers.
+func (h *Hub) BroadcastTradeForFirm(data json.RawMessage, firm string) {
+	h.broadcast("trade.created", data, 0, &firm, false)
+}
+
 // BroadcastMarketData publishes one QUIK Params row verbatim to every
 // subscriber of marketdata.tick; market data is not firm-scoped.
 func (h *Hub) BroadcastMarketData(data json.RawMessage, removed bool) {

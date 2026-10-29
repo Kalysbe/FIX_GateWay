@@ -589,23 +589,33 @@ paths:
   /api/v1/trades:
     get:
       tags: [Сделки]
-      summary: Список сделок брокера
+      summary: Сделки фирмы — строки QUIK Trades
       x-grpc-event: trade.created
       security:
         - bearerAuth: []
-      description: Требует `trades:read`. Последние 100 сделок своего брокера. Событие gRPC `trade.created` содержит исполнение (id, order_id, exec_id, last_qty, last_px, cum_qty, leaves_qty, adapter_id, created_at). REST дополнительно возвращает реквизиты заявки, инструмента, клиента и фирмы.
+      description: |
+        Требует `trades:read`. Сделки вашей фирмы (`quik_firm` токена, при пустом значении — код брокера)
+        из таблицы QUIK `Trades`, новые первыми. Ответ — JSON-массив исходных строк БД: имена колонок,
+        числа, строки и `null` без изменений. Каждая строка — одна сторона сделки.
+        Страницы: `limit`/`offset`, заголовки `X-Has-More` и `X-Next-Offset`.
+        Событие gRPC `trade.created`: новая строка `Trades` вашей фирмы за сегодня в `event.data_json`.
+      parameters:
+        - {in: query, name: limit, schema: {type: integer, minimum: 1, maximum: 1000, default: 200}}
+        - {in: query, name: offset, schema: {type: integer, minimum: 0, maximum: 10000000, default: 0}}
       responses:
         "200":
-          description: OK
+          description: Исходные строки QUIK Trades
+          headers:
+            X-Has-More: {schema: {type: boolean}, description: Есть ли следующая страница}
+            X-Next-Offset: {schema: {type: integer}, description: offset следующей страницы}
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  trades:
-                    type: array
-                    items:
-                      $ref: "#/components/schemas/Trade"
+                type: array
+                items:
+                  $ref: "#/components/schemas/Trade"
+        "503":
+          description: Источник QUIK Trades недоступен
         "401":
           description: Unauthorized
         "403":
@@ -880,56 +890,24 @@ components:
           type: string
     Trade:
       type: object
+      additionalProperties: true
+      description: |
+        Строка `quik_export2.public."Trades"` как есть (`row_to_json`): одна сторона сделки.
+        Набор колонок задаёт QUIK; шлюз не добавляет и не переименовывает поля. Ниже — основные колонки.
       properties:
-        trade_match_id:
-          type: string
-          description: Exchange matched trade identifier (FIX 880). Distinct from per-order exec_id.
-        contra_broker:
-          type: string
-          description: Counterparty broker from FIX 375, when disclosed.
-        contra_trader:
-          type: string
-          description: Counterparty trader from FIX 337, not a client identifier.
-        execution_date:
-          type: string
-          format: date
-          description: FIX trade date, or UTC receipt date for legacy executions.
-        broker_id: {type: integer, format: int64}
-        adapter_id: {type: string, nullable: true}
-        firm_name: {type: string}
-        fix_cl_ord_id: {type: string, nullable: true}
-        quik_order_id: {type: string, nullable: true}
-        id:
-          type: string
-          format: uuid
-        order_id:
-          type: string
-          format: uuid
-        exec_id:
-          type: string
-        last_qty:
-          type: string
-        last_px:
-          type: string
-        cum_qty:
-          type: string
-        leaves_qty:
-          type: string
-        client_order_id:
-          type: string
-        symbol:
-          type: string
-        board:
-          type: string
-        side:
-          type: string
-        client_code:
-          type: string
-        quik_firm:
-          type: string
-        created_at:
-          type: string
-          format: date-time
+        TradeNum: {type: number, description: "Номер сделки QUIK"}
+        TradeDate: {type: string}
+        ClassCode: {type: string}
+        SecCode: {type: string}
+        OrderNum: {type: number, description: "Номер заявки QUIK"}
+        Operation: {type: string, description: "Купля / Продажа"}
+        Price: {type: number}
+        Qty: {type: number}
+        FirmId: {type: string}
+        Account: {type: string}
+        ClientCode: {type: string}
+        CPFirmId: {type: string, description: "Фирма контрагента"}
+      example: {"TradeNum": 11094, "TradeDate": "2026-10-06T00:00:00", "ClassCode": "LIST_GBA", "SecCode": "GBA02280810", "OrderNum": 22450, "Operation": "Купля", "Price": 99.00000000, "Qty": 201, "FirmId": "2040", "Account": "1-3101-2040", "ClientCode": "Kalys", "CPFirmId": "BAKAI2008"}
     Position:
       type: object
       properties:

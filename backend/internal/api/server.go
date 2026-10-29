@@ -660,14 +660,37 @@ func (s *Server) syncInstrumentsFIX(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "result": res})
 }
 
+// listTrades serves the token firm's rows of QUIK "Trades" as stored, newest
+// first, paged like the Orders list.
 func (s *Server) listTrades(w http.ResponseWriter, r *http.Request) {
-	b, _ := BrokerFromContext(r.Context())
-	list, err := s.orderStore.ListTrades(r.Context(), &b.ID, 100)
+	firm, _, err := s.orderReadScope(r, false)
 	if err != nil {
-		s.writeInternal(w, err)
+		s.writeOrderReadError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"trades": mapTrades(list)})
+	limit, offset, ok := pageParams(w, r)
+	if !ok {
+		return
+	}
+	if s.quikOrders == nil {
+		s.writeTradeReadError(w, quikexport.ErrNotConfigured)
+		return
+	}
+	page, err := s.quikOrders.ListTrades(r.Context(), quikexport.TradeFilter{Firm: firm, Limit: limit, Offset: offset})
+	if err != nil {
+		s.writeTradeReadError(w, err)
+		return
+	}
+	w.Header().Set("X-Has-More", strconv.FormatBool(page.HasMore))
+	w.Header().Set("X-Next-Offset", strconv.Itoa(page.NextOffset))
+	writeQuikJSON(w, page.Trades)
+}
+
+func (s *Server) writeTradeReadError(w http.ResponseWriter, err error) {
+	if s.log != nil {
+		s.log.Error("QUIK Trades read failed", "error", err)
+	}
+	writeErr(w, http.StatusServiceUnavailable, "QUIK Trades source unavailable")
 }
 
 func (s *Server) listBrokerPositions(w http.ResponseWriter, r *http.Request) {
@@ -1498,28 +1521,6 @@ func orderFieldHints() map[string]string {
 	}
 }
 
-func tradeDTO(t domain.Trade) map[string]any {
-	return map[string]any{
-		"id": t.ID, "order_id": t.OrderID, "exec_id": t.ExecID,
-		"last_qty": t.LastQty, "last_px": t.LastPx, "cum_qty": t.CumQty, "leaves_qty": t.LeavesQty,
-		"adapter_id": t.AdapterID, "created_at": t.CreatedAt,
-		"execution_date": t.ExecutionDate,
-		"trade_match_id": t.TradeMatchID, "contra_broker": t.ContraBroker, "contra_trader": t.ContraTrader,
-		"broker_id": t.BrokerID, "client_order_id": t.ClientOrderID,
-		"symbol": t.Symbol, "board": t.Board, "side": t.Side,
-		"client_code": t.ClientCode, "quik_firm": t.QuikFirm, "firm_name": t.FirmName,
-		"fix_cl_ord_id": t.FixClOrdID, "quik_order_id": t.QuikOrderID,
-	}
-}
-
-func mapTrades(list []domain.Trade) []map[string]any {
-	out := make([]map[string]any, 0, len(list))
-	for _, t := range list {
-		out = append(out, tradeDTO(t))
-	}
-	return out
-}
-
 func eventDTO(e domain.OrderEvent) map[string]any {
 	m := map[string]any{
 		"id": e.ID, "order_id": e.OrderID, "event_type": e.EventType,
@@ -1640,7 +1641,8 @@ func (s *Server) OnExecution(ctx context.Context, report adapters.ExecutionRepor
 				return err
 			}
 		}
-		s.hub.BroadcastForBroker("trade.created", exec, order.BrokerID)
+		// Admin trigger only: brokers receive the QUIK Trades row from the Trades feed.
+		s.hub.Broadcast("trade.created", exec)
 	}
 	s.emitOrderLifecycle(order, report)
 	return nil

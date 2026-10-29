@@ -45,8 +45,8 @@ Unix timestamp, nonce, `POST`, полный RPC-путь выше, пустое 
 ```
 
 `order.updated` требует `orders:read`, `trade.created` — `trades:read`,
-`marketdata.tick` — `orders:read`, `positions.updated` — `positions:read`. Заявки и исполнения доставляются только своему
-брокеру; строки текущих торгов (`Params`) общие. Пустой список выбирает все разрешённые события.
+`marketdata.tick` — `orders:read`, `positions.updated` — `positions:read`. Строки заявок (`Orders`) и сделок (`Trades`) доставляются только
+своей фирме; строки текущих торгов (`Params`) общие. Пустой список выбирает все разрешённые события.
 Повторный Subscribe полностью заменяет список. Административные события брокеру
 запрещены. Пути в окне — соответствующие источники данных (`/api/v1/orders`,
 `/api/v1/trades`, `/api/v1/market-data`), а не отдельные RPC.
@@ -56,7 +56,7 @@ Unix timestamp, nonce, `POST`, полный RPC-путь выше, пустое 
 Все четыре брокерских события имеют REST-методы и схемы в `/broker-swagger`:
 
 - `order.updated` → `GET /api/v1/orders` и `GET /api/v1/orders/{id}` (`orders:read`).
-- `trade.created` → `GET /api/v1/trades` (`trades:read`).
+- `trade.created` → `GET /api/v1/trades` (`trades:read`), новая строка QUIK `Trades` своей фирмы за сегодня в `data_json`.
 - `positions.updated` → `GET /api/v1/positions` (`positions:read`).
 - `marketdata.tick` → `GET /api/v1/market-data` и `GET /api/v1/market-data/{board}/{symbol}` (`orders:read`), строка текущих торгов (8 полей из QUIK `Params`/`Securities`/`Classes`) в `data_json`.
 

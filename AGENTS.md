@@ -33,6 +33,7 @@
 # Источник сделок 28.10.2026
 
 - По поручению пользователя сделки QUIK для сверки реестра (`trades`/`trade_sides`/`trade_reports`) читаются напрямую из таблицы `public."Trades"` БД QUIK через `QUIK_EXPORT_DATABASE_URL` (только чтение), строками `row_to_json`. QUIK Module API (`/api/trades`, `http://172.23.10.85:5000` и любые другие адреса `:5000`) не использовать и не возвращать; `QUIK_API_BASE_URL`, настройка `quik_api_base_url` и `/api/v1/admin/quik-api/*` удалены.
+- По поручению пользователя 29.10.2026 брокерские сделки (`GET /api/v1/trades`, gRPC `trade.created`) — исходные строки `public."Trades"` фирмы токена (`FirmId` = `quik_firm`, при пустом — код брокера), как `Orders`: без переименования и добавленных полей; gRPC — новые строки за сегодня в `Event.data_json`. Заявки (`POST /api/v1/orders`, отмена) принимаются и возвращаются в именах колонок `Orders`.
 
 # Счета и фирмы 26.10.2026
 
