@@ -169,7 +169,7 @@ func (s *Service) Create(ctx context.Context, broker domain.Broker, ip string, r
 		if !errors.Is(err, quikexport.ErrAccountNotFound) {
 			return domain.Order{}, false, fmt.Errorf("%w: %w", ErrPersistenceUnavailable, err)
 		}
-		msg := fmt.Errorf("Account %q не найден в QUIK Trdaccs для фирмы %q", req.AccountID, firm)
+		msg := fmt.Errorf("счёт %q не найден у фирмы %q; список счетов — GET /api/v1/accounts", req.AccountID, firm)
 		s.emit(ctx, observability.Event{
 			Type: observability.TypeError, Subtype: observability.ErrValidation, BrokerID: &broker.ID,
 			BrokerCode: broker.Code, BrokerName: broker.Name,

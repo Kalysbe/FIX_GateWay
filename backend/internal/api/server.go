@@ -333,7 +333,7 @@ func (s *Server) createOrder(w http.ResponseWriter, r *http.Request) {
 	var req orders.CreateOrderRequest
 	if err := decodeJSONBody(r, &req); err != nil {
 		observability.AnnotateError(r, "INVALID_JSON", err.Error(), "api")
-		writeErrDetails(w, http.StatusBadRequest, "invalid request body", err.Error())
+		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	ip, _ := s.clientIP(r)
@@ -359,7 +359,7 @@ func (s *Server) createOrder(w http.ResponseWriter, r *http.Request) {
 			s.writeInternal(w, err)
 			return
 		}
-		writeErrDetails(w, http.StatusBadRequest, err.Error(), orderFieldHints())
+		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	qty := order.Quantity.String()
@@ -1508,18 +1508,6 @@ func (s *Server) listUsers(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"users": list})
 }
 
-func orderFieldHints() map[string]string {
-	return map[string]string{
-		"ClassCode":  "код класса",
-		"SecCode":    "код инструмента",
-		"Operation":  "Купля или Продажа",
-		"Price":      "цена; без Price — рыночная заявка",
-		"Qty":        "количество",
-		"Account":    "торговый счёт из GET /api/v1/accounts",
-		"ClientCode": "код клиента",
-		"FirmId":     "не передаётся — фирма берётся из токена",
-	}
-}
 
 func eventDTO(e domain.OrderEvent) map[string]any {
 	m := map[string]any{

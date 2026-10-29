@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http/httptest"
 	"strings"
@@ -22,6 +23,19 @@ func TestDecodeJSONBody_AccountIDStringOK(t *testing.T) {
 	if req.AccountID != "1-3101-2040" || req.Board != "LIST_GBA" || req.Symbol != "GBA02270915" || req.Operation != "Купля" ||
 		req.Price == nil || req.Price.String() != "400" || req.Quantity.String() != "1" || req.ClientCode != "006" {
 		t.Fatalf("got %+v", req)
+	}
+}
+
+// A refused order is answered with the reason only: {"error": ...}.
+func TestCreateOrderBadBodyIsErrorOnly(t *testing.T) {
+	r := httptest.NewRequest("POST", "/api/v1/orders", bytes.NewBufferString(`{"account_id":"x"}`))
+	r = r.WithContext(context.WithValue(r.Context(), ctxBroker, domain.Broker{ID: 1}))
+	w := httptest.NewRecorder()
+	(&Server{}).createOrder(w, r)
+	var body map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil || w.Code != 400 || len(body) != 1 ||
+		!strings.Contains(body["error"].(string), "Account") {
+		t.Fatalf("%d %s", w.Code, w.Body.String())
 	}
 }
 

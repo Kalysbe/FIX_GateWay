@@ -685,11 +685,12 @@ components:
   schemas:
     Error:
       type: object
+      required: [error]
       properties:
         error:
           type: string
-        details:
-          type: object
+          description: Причина ошибки
+      example: {"error": "счёт \"1-3101-006\" не найден у фирмы \"FREEDOM2003\"; список счетов — GET /api/v1/accounts"}
     CreateOrderRequest:
       type: object
       description: Имена полей — как колонки таблицы QUIK `Orders`.

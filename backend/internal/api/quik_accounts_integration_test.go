@@ -129,7 +129,7 @@ INSERT INTO public."Firms" VALUES ('KSE','2040','Сенти',NULL,1),('KSE','999
 	// Another firm's account is refused; the account check passes for its own
 	// (the instrument is unknown, so validation stops at the next step).
 	order["Account"] = "1-9999-01"
-	if got := call("POST", "/api/v1/orders", token.Raw, order, 400); !strings.Contains(got, "не найден в QUIK Trdaccs") {
+	if got := call("POST", "/api/v1/orders", token.Raw, order, 400); !strings.Contains(got, "не найден у фирмы") || strings.Contains(got, "details") {
 		t.Fatal(got)
 	}
 	order["Account"] = "1-3001-71"
