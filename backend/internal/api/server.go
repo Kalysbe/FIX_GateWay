@@ -188,7 +188,8 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/v1/orders/{id}/cancel", s.brokerAuth(s.requirePermission(auth.PermOrdersCancel)(http.HandlerFunc(s.cancelBrokerOrder))))
 	mux.Handle("GET /api/v1/accounts", s.brokerAuth(s.requirePermission(auth.PermOrdersRead)(http.HandlerFunc(s.listBrokerAccounts))))
 	mux.Handle("GET /api/v1/firm", s.brokerAuth(s.requirePermission(auth.PermOrdersRead)(http.HandlerFunc(s.getBrokerFirm))))
-	mux.Handle("GET /api/v1/instruments", s.brokerAuth(s.requirePermission(auth.PermOrdersRead)(http.HandlerFunc(s.listInstruments))))
+	mux.Handle("GET /api/v1/errors", s.brokerAuth(http.HandlerFunc(s.listErrorCodes)))
+	mux.Handle("GET /api/v1/instruments",s.brokerAuth(s.requirePermission(auth.PermOrdersRead)(http.HandlerFunc(s.listInstruments))))
 	mux.Handle("GET /api/v1/quotes", s.brokerAuth(s.requirePermission(auth.PermOrdersRead)(http.HandlerFunc(s.listBrokerQuotes))))
 	mux.Handle("GET /api/v1/orderbook",s.brokerAuth(s.requirePermission(auth.PermOrdersRead)(http.HandlerFunc(s.listBrokerOrderBook))))
 	mux.Handle("GET /api/v1/market-data", s.brokerAuth(s.requirePermission(auth.PermOrdersRead)(http.HandlerFunc(s.listMarketData))))
@@ -410,6 +411,7 @@ func writeOrderAnswer(w http.ResponseWriter, order domain.Order, idempotent bool
 		if text := quikRejectText(order.RejectReason); text != "" {
 			body["error"] = text
 		}
+		body["error_code"] = quikRejectCode(order.RejectReason, "OrdRejReason=")
 		writeJSON(w, http.StatusUnprocessableEntity, body)
 	case order.Status == domain.OrderFailed:
 		body["code"] = "ORDER_FAILED"
@@ -455,17 +457,55 @@ func orderReply(o domain.Order) map[string]any {
 	}
 }
 
-// quikRejectText is QUIK's own reject text without the gateway's appended FIX
-// OrdRejReason number.
+// rejectCodeMarkers are the FIX reason codes the gateway appends to QUIK's
+// reject text: OrdRejReason (103) on orders, CxlRejReason (102) on cancels.
+var rejectCodeMarkers = []string{"OrdRejReason=", "CxlRejReason="}
+
+// quikRejectText is QUIK's own reject text without the appended FIX code.
 func quikRejectText(reason *string) string {
 	if reason == nil {
 		return ""
 	}
 	text := *reason
-	if i := strings.Index(text, "OrdRejReason="); i >= 0 {
-		text = text[:i]
+	for _, marker := range rejectCodeMarkers {
+		if i := strings.Index(text, marker); i >= 0 {
+			text = text[:i]
+		}
 	}
 	return strings.TrimRight(strings.TrimSpace(text), ";")
+}
+
+// cancelRejectReason stores QUIK's cancel-reject text with its FIX 102 code
+// the way order rejects keep 103.
+func cancelRejectReason(text, cxlRejReason string) string {
+	parts := make([]string, 0, 2)
+	if t := strings.TrimSpace(text); t != "" {
+		parts = append(parts, t)
+	}
+	if c := strings.TrimSpace(cxlRejReason); c != "" {
+		parts = append(parts, "CxlRejReason="+c)
+	}
+	return strings.Join(parts, "; ")
+}
+
+// quikRejectCode is the QUIK error code (see GET /api/v1/errors) as a JSON
+// number, or nil when QUIK sent none.
+func quikRejectCode(reason *string, marker string) any {
+	if reason == nil {
+		return nil
+	}
+	i := strings.Index(*reason, marker)
+	if i < 0 {
+		return nil
+	}
+	code := strings.TrimSpace((*reason)[i+len(marker):])
+	if j := strings.IndexAny(code, "; "); j >= 0 {
+		code = code[:j]
+	}
+	if _, err := strconv.ParseInt(code, 10, 64); err != nil {
+		return nil
+	}
+	return json.Number(code)
 }
 
 // quikOrderState names the gateway status as QUIK Orders.State does; nil
@@ -523,6 +563,7 @@ func (s *Server) cancelBrokerOrder(w http.ResponseWriter, r *http.Request) {
 	}
 	id := local.ID
 	ip, _ := s.clientIP(r)
+	requested := time.Now()
 	order, err := s.orders.Cancel(r.Context(), b.ID, id, ip)
 	if err != nil {
 		if errors.Is(err, orders.ErrPersistenceUnavailable) {
@@ -541,12 +582,18 @@ func (s *Server) cancelBrokerOrder(w http.ResponseWriter, r *http.Request) {
 	if waited, err := s.awaitOrderAnswer(r.Context(), order, orders.AwaitingCancel); err == nil {
 		order = waited
 	}
-	writeCancelAnswer(w, order)
+	var rejectReason string
+	if s.orderStore != nil && (order.Status == domain.OrderAcknowledged || order.Status == domain.OrderPartiallyFilled) {
+		// The clock margin keeps a reject written by the database within the window.
+		rejectReason, _ = s.orderStore.CancelRejectReason(r.Context(), order.ID, requested.Add(-2*time.Second))
+	}
+	writeCancelAnswer(w, order, rejectReason)
 }
 
 // writeCancelAnswer: 200 cancelled by QUIK, 409 QUIK refused the cancel (the
 // order stays active or was filled), 202 QUIK has not answered in time.
-func writeCancelAnswer(w http.ResponseWriter, order domain.Order) {
+// rejectReason is QUIK's cancel-reject text with its CxlRejReason code.
+func writeCancelAnswer(w http.ResponseWriter, order domain.Order, rejectReason string) {
 	body := orderReply(order)
 	switch order.Status {
 	case domain.OrderCancelled, domain.OrderExpired:
@@ -558,6 +605,10 @@ func writeCancelAnswer(w http.ResponseWriter, order domain.Order) {
 	default:
 		body["code"] = "CANCEL_REJECTED"
 		body["error"] = "QUIK did not cancel the order"
+		if text := quikRejectText(&rejectReason); text != "" {
+			body["error"] = text
+		}
+		body["error_code"] = quikRejectCode(&rejectReason, "CxlRejReason=")
 		writeJSON(w, http.StatusConflict, body)
 	}
 }
@@ -1589,7 +1640,7 @@ func (s *Server) OnExecution(ctx context.Context, report adapters.ExecutionRepor
 	ctx = orders.WithExecutionDate(ctx, date)
 	if report.CancelReject {
 		order, err := s.orderStore.ApplyCancelReject(ctx, report.ClOrdID, report.OrigClOrdID, report.OrderID, report.AdapterID,
-			strings.TrimSpace(report.Text+" "+report.CxlRejReason), report.RawFIX)
+			cancelRejectReason(report.Text, report.CxlRejReason), report.RawFIX)
 		if err != nil {
 			if errors.Is(err, orders.ErrNotFound) && s.tradeLedger != nil && s.tradeLedger.Pool != nil && report.RawFIX != "" {
 				return nil

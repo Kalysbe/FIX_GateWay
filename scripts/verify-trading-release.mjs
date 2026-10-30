@@ -17,8 +17,8 @@ assert.equal(containers.Project,'fix-gateway-verification');
 assert.ok(containers.Publishers.some(p=>p.PublishedPort===38080 && p.TargetPort===8080));
 function sql(statement){return execFileSync(docker,[...compose,'exec','-T','postgres','psql','-U','gateway','-d','fix_gateway_local','-v','ON_ERROR_STOP=1','-At'],{input:statement,encoding:'utf8',timeout:15000}).trim();}
 // Broker replies are {success, code, message, data}: a success yields data, a
-// failure {code, error, ...data}.
-const unwrap=(path,v)=>path.startsWith('/api/v1/admin/')||!v||typeof v!=='object'||!('success' in v)?v:v.success?v.data:{...(v.data&&typeof v.data==='object'?v.data:{}),code:v.code,error:v.message};
+// failure {code, error, error_code, ...data}.
+const unwrap=(path,v)=>path.startsWith('/api/v1/admin/')||!v||typeof v!=='object'||!('success' in v)?v:v.success?v.data:{...(v.data&&typeof v.data==='object'?v.data:{}),code:v.code,error:v.message,error_code:v.error_code};
 async function call(path,token='',method='GET',body,status=200,key){
  const response=await fetch(base+path,{method,headers:{...(token?{Authorization:`Bearer ${token}`} : {}),...(body?{'Content-Type':'application/json'}:{}),...(key?{'Idempotency-Key':key}:{})},body:body?JSON.stringify(body):undefined,signal:AbortSignal.timeout(20000)});
  const value=unwrap(path,await response.json());assert.ok([].concat(status).includes(response.status),`${method} ${path}: ${JSON.stringify(value)}`);return value;

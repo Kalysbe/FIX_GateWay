@@ -9,8 +9,8 @@ const compose = ['compose', '-f', 'deploy/docker-compose.local.yml'];
 const docker = process.env.DOCKER_BIN || 'docker';
 
 // Broker replies are {success, code, message, data}: a success yields data, a
-// failure {code, error, ...data}.
-const unwrap=(path,v)=>path.startsWith('/api/v1/admin/')||!v||typeof v!=='object'||!('success' in v)?v:v.success?v.data:{...(v.data&&typeof v.data==='object'?v.data:{}),code:v.code,error:v.message};
+// failure {code, error, error_code, ...data}.
+const unwrap=(path,v)=>path.startsWith('/api/v1/admin/')||!v||typeof v!=='object'||!('success' in v)?v:v.success?v.data:{...(v.data&&typeof v.data==='object'?v.data:{}),code:v.code,error:v.message,error_code:v.error_code};
 async function request(path, token, method = 'GET', body, expected = 200, idempotencyKey) {
   const response = await fetch(base + path, {
     method,

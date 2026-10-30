@@ -39,19 +39,19 @@ func TestBrokerEnvelopeShapes(t *testing.T) {
 			w.Header().Set("X-Has-More", "true")
 			w.Header().Set("X-Next-Offset", "200")
 			_, _ = w.Write([]byte("[" + row + "]\n"))
-		}, 200, `{"success":true,"code":"OK","message":null,"data":[` + row + `],"has_more":true,"next_offset":200}`},
+		}, 200, `{"success":true,"code":"OK","message":null,"error_code":null,"data":[` + row + `],"has_more":true,"next_offset":200}`},
 		{"created order", func(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, 201, map[string]any{"OrderNum": json.Number("5"), "id": "x"})
-		}, 201, `{"success":true,"code":"OK","message":null,"data":{"OrderNum":5,"id":"x"}}`},
+		}, 201, `{"success":true,"code":"OK","message":null,"error_code":null,"data":{"OrderNum":5,"id":"x"}}`},
 		{"QUIK reject keeps the order as data", func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w, 422, map[string]any{"code": "ORDER_REJECTED", "error": "No right", "State": "Отклонена"})
-		}, 422, `{"success":false,"code":"ORDER_REJECTED","message":"No right","data":{"State":"Отклонена"}}`},
+			writeJSON(w, 422, map[string]any{"code": "ORDER_REJECTED", "error": "No right", "error_code": json.Number("8637225"), "State": "Отклонена"})
+		}, 422, `{"success":false,"code":"ORDER_REJECTED","message":"No right","error_code":8637225,"data":{"State":"Отклонена"}}`},
 		{"plain error", func(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, 401, "invalid token")
-		}, 401, `{"success":false,"code":"UNAUTHORIZED","message":"invalid token","data":null}`},
+		}, 401, `{"success":false,"code":"UNAUTHORIZED","message":"invalid token","error_code":null,"data":null}`},
 		{"non-JSON error", func(w http.ResponseWriter, r *http.Request) {
 			http.NotFound(w, r)
-		}, 404, `{"success":false,"code":"NOT_FOUND","message":"404 page not found","data":null}`},
+		}, 404, `{"success":false,"code":"NOT_FOUND","message":"404 page not found","error_code":null,"data":null}`},
 	} {
 		w := serveEnveloped(tc.h, "/api/v1/orders")
 		if w.Code != tc.code || strings.TrimSpace(w.Body.String()) != tc.want || w.Header().Get("Content-Type") != "application/json" {

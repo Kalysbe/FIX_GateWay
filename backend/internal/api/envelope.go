@@ -10,14 +10,17 @@ import (
 
 // Every broker REST reply has one shape (поручение пользователя 30.10.2026):
 //
-//	{"success": bool, "code": "OK"|<error code>, "message": null|<reason>, "data": <payload>|null}
+//	{"success": bool, "code": "OK"|<error code>, "message": null|<reason>,
+//	 "error_code": null|<QUIK code>, "data": <payload>|null}
 //
-// Lists add has_more and next_offset. Payloads (QUIK rows) are copied byte for
-// byte, so their numbers keep full precision.
+// error_code is QUIK's numeric reason (FIX 103 / 102), listed by GET
+// /api/v1/errors. Lists add has_more and next_offset. Payloads (QUIK rows) are
+// copied byte for byte, so their numbers keep full precision.
 type brokerEnvelope struct {
 	Success    bool            `json:"success"`
 	Code       string          `json:"code"`
 	Message    *string         `json:"message"`
+	ErrorCode  json.RawMessage `json:"error_code"`
 	Data       json.RawMessage `json:"data"`
 	HasMore    *bool           `json:"has_more,omitempty"`
 	NextOffset *int            `json:"next_offset,omitempty"`
@@ -80,7 +83,7 @@ func (s *Server) brokerEnvelope(next http.Handler) http.Handler {
 		enc.SetEscapeHTML(false) // keep the payload bytes as the handler wrote them
 		if err := enc.Encode(envelopeFor(status, buf.header, buf.body.Bytes())); err != nil {
 			encoded.Reset()
-			encoded.WriteString(`{"success":false,"code":"INTERNAL_ERROR","message":"internal error","data":null}` + "\n")
+			encoded.WriteString(`{"success":false,"code":"INTERNAL_ERROR","message":"internal error","error_code":null,"data":null}` + "\n")
 			status = http.StatusInternalServerError
 		}
 		w.Header().Del("Content-Length")
@@ -92,12 +95,13 @@ func (s *Server) brokerEnvelope(next http.Handler) http.Handler {
 
 // envelopeFor: 200/201 are successes with the handler's JSON as data. Any
 // other status (202: QUIK has not answered yet) is a failure; its "code" and
-// "error" become code and message, and the remaining fields (an order) data.
+// "error" become code and message, "error_code" goes next to them, and the
+// remaining fields (an order) are data.
 func envelopeFor(status int, header http.Header, body []byte) brokerEnvelope {
 	body = bytes.TrimSpace(body)
 	isJSON := len(body) > 0 && json.Valid(body)
 	if status == http.StatusOK || status == http.StatusCreated {
-		out := brokerEnvelope{Success: true, Code: "OK", Data: json.RawMessage("null")}
+		out := brokerEnvelope{Success: true, Code: "OK", ErrorCode: json.RawMessage("null"), Data: json.RawMessage("null")}
 		if isJSON {
 			out.Data = json.RawMessage(body)
 		}
@@ -110,7 +114,7 @@ func envelopeFor(status int, header http.Header, body []byte) brokerEnvelope {
 		}
 		return out
 	}
-	out := brokerEnvelope{Code: statusCodes[status], Data: json.RawMessage("null")}
+	out := brokerEnvelope{Code: statusCodes[status], ErrorCode: json.RawMessage("null"), Data: json.RawMessage("null")}
 	if out.Code == "" {
 		out.Code = "ERROR"
 	}
@@ -124,8 +128,12 @@ func envelopeFor(status int, header http.Header, body []byte) brokerEnvelope {
 		if json.Unmarshal(fields["error"], &text) == nil && text != "" {
 			message = text
 		}
+		if n := fields["error_code"]; len(n) > 0 {
+			out.ErrorCode = n
+		}
 		delete(fields, "code")
 		delete(fields, "error")
+		delete(fields, "error_code")
 		if len(fields) > 0 {
 			if data, err := json.Marshal(fields); err == nil {
 				out.Data = data

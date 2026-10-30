@@ -22,8 +22,8 @@ assert.ok(modes.every(m=>['adapter-1','adapter-2','both'].includes(m)));
 let admin,token,tokenId,brokerId;
 const report={run,started:new Date().toISOString(),environment:base,seconds,simulatorFillDelaySeconds:3,results:[]};
 // Broker replies are {success, code, message, data}: a success yields data, a
-// failure {code, error, ...data}.
-const unwrap=(path,v)=>path.startsWith('/api/v1/admin/')||!v||typeof v!=='object'||!('success' in v)?v:v.success?v.data:{...(v.data&&typeof v.data==='object'?v.data:{}),code:v.code,error:v.message};
+// failure {code, error, error_code, ...data}.
+const unwrap=(path,v)=>path.startsWith('/api/v1/admin/')||!v||typeof v!=='object'||!('success' in v)?v:v.success?v.data:{...(v.data&&typeof v.data==='object'?v.data:{}),code:v.code,error:v.message,error_code:v.error_code};
 async function request(path,auth=admin,method='GET',body,idempotencyKey){
   const t=performance.now();
   const r=await fetch(base+path,{method,headers:{...(auth?{Authorization:`Bearer ${auth}`} :{}),...(body?{'Content-Type':'application/json'}:{}),...(idempotencyKey?{'Idempotency-Key':idempotencyKey}:{})},body:body?JSON.stringify(body):undefined,signal:AbortSignal.timeout(15000)});

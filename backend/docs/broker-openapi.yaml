@@ -10,8 +10,9 @@ info:
     Подключение: VPN + TLS. Клиентские сертификаты и HMAC по умолчанию не требуются.
 
     **Единый формат ответа.** Любой ответ любого метода, успешный или нет, имеет вид
-    `{"success": true|false, "code": "OK"|<код ошибки>, "message": null|<причина>, "data": <данные>|null}`.
-    Списки дополнительно содержат `has_more` и `next_offset`. Проверяйте `success`, причину берите из `message`.
+    `{"success": true|false, "code": "OK"|<код ошибки>, "message": null|<причина>, "error_code": null|<код QUIK>, "data": <данные>|null}`.
+    Списки дополнительно содержат `has_more` и `next_offset`. Проверяйте `success`, причину берите из `message`,
+    точный код причины от QUIK — из `error_code` (список всех кодов — `GET /api/v1/errors`).
     При отказе QUIK (`ORDER_REJECTED`) и ожидании ответа QUIK (`QUIK_ANSWER_PENDING`) в `data` — заявка.
 
     Текущие заявки — исходные строки таблицы QUIK `Orders` вашей фирмы (см. `QuikOrderRow`).
@@ -75,6 +76,49 @@ paths:
           description: Фирмы нет в Firms
         "503":
           description: Источник QUIK недоступен
+  /api/v1/errors:
+    get:
+      tags: [Справочники]
+      summary: Коды ошибок
+      security:
+        - bearerAuth: []
+      description: |
+        Справочник кодов ответа. `codes` — значения поля `code` (тип ответа шлюза и HTTP-статус).
+        `error_codes` — значения поля `error_code`: причины отказа от QUIK. `operation`: `order` — отказ заявки
+        (FIX 103), `cancel` — отказ снятия (FIX 102); одно число может означать разное в этих операциях.
+        QUIK может прислать код, которого нет в списке: текст причины всегда есть в `message`.
+      responses:
+        "200":
+          description: Справочник кодов
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  codes:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        code: {type: string}
+                        http_status: {type: integer}
+                        description: {type: string}
+                  error_codes:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        error_code: {type: integer}
+                        operation: {type: string, enum: [order, cancel]}
+                        source: {type: string}
+                        description: {type: string}
+              example:
+                codes:
+                  - {code: ORDER_REJECTED, http_status: 422, description: "QUIK отклонил заявку; причина — message и error_code"}
+                error_codes:
+                  - {error_code: 8637225, operation: order, source: "Дилерская библиотека QUIK (проверка лимитов и прав)", description: "Работа по данному торговому счёту запрещена"}
+        "401":
+          description: Нет токена
   /api/v1/instruments:
     get:
       tags: [Справочники]

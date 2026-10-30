@@ -61,10 +61,15 @@ func envelopeSchema(success bool, data *openapi3.SchemaRef, paged bool) *openapi
 	message := openapi3.NewStringSchema()
 	message.Nullable = true
 	message.Description = "Причина ошибки; null при успехе"
+	errorCode := openapi3.NewIntegerSchema()
+	errorCode.Nullable = true
+	errorCode.Description = "Код ошибки QUIK (отказ заявки — FIX 103, отказ снятия — FIX 102); null при успехе " +
+		"и когда QUIK кода не прислал. Список — GET /api/v1/errors"
 	s := openapi3.NewObjectSchema().
 		WithProperty("success", ok).
 		WithProperty("code", code).
-		WithProperty("message", message)
+		WithProperty("message", message).
+		WithProperty("error_code", errorCode)
 	if data != nil {
 		s = s.WithPropertyRef("data", data)
 	} else {
@@ -78,15 +83,15 @@ func envelopeSchema(success bool, data *openapi3.SchemaRef, paged bool) *openapi
 		next.Description = "offset следующей страницы (как заголовок X-Next-Offset)"
 		s = s.WithProperty("has_more", more).WithProperty("next_offset", next)
 	}
-	s.Required = []string{"success", "code", "message", "data"}
+	s.Required = []string{"success", "code", "message", "error_code", "data"}
 	return s
 }
 
 func envelopeExample(success bool, example any, keepData bool) any {
 	if success {
-		return map[string]any{"success": true, "code": "OK", "message": nil, "data": example}
+		return map[string]any{"success": true, "code": "OK", "message": nil, "error_code": nil, "data": example}
 	}
-	out := map[string]any{"success": false, "code": "ERROR", "message": nil, "data": nil}
+	out := map[string]any{"success": false, "code": "ERROR", "message": nil, "error_code": nil, "data": nil}
 	fields, ok := example.(map[string]any)
 	if !ok {
 		return out
@@ -98,6 +103,8 @@ func envelopeExample(success bool, example any, keepData bool) any {
 			out["code"] = v
 		case "error":
 			out["message"] = v
+		case "error_code":
+			out["error_code"] = v
 		default:
 			rest[k] = v
 		}

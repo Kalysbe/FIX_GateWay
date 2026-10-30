@@ -14,8 +14,8 @@ assert.equal(config.networks.default.internal,true);
 assert.equal(config.services.gateway.environment.ADAPTER_HOST_OVERRIDE,'fixsimulator');
 assert.equal(config.services.fixsimulator.environment.SIM_FILL_DELAY,'30s');
 // Broker replies are {success, code, message, data}: a success yields data, a
-// failure {code, error, ...data}.
-const unwrap=(path,v)=>path.startsWith('/api/v1/admin/')||!v||typeof v!=='object'||!('success' in v)?v:v.success?v.data:{...(v.data&&typeof v.data==='object'?v.data:{}),code:v.code,error:v.message};
+// failure {code, error, error_code, ...data}.
+const unwrap=(path,v)=>path.startsWith('/api/v1/admin/')||!v||typeof v!=='object'||!('success' in v)?v:v.success?v.data:{...(v.data&&typeof v.data==='object'?v.data:{}),code:v.code,error:v.message,error_code:v.error_code};
 async function call(path,token='',method='GET',body,expected=200){
  const r=await fetch('http://127.0.0.1:38080'+path,{method,headers:{...(token?{Authorization:`Bearer ${token}`} : {}),...(body?{'Content-Type':'application/json'}:{})},body:body?JSON.stringify(body):undefined,signal:AbortSignal.timeout(15000)});
  const result=unwrap(path,await r.json());assert.equal(r.status,expected,`${method} ${path}: ${JSON.stringify(result)}`);return result;

@@ -98,10 +98,59 @@ func TestWriteCancelAnswer(t *testing.T) {
 		{domain.OrderFilled, 409, `"State":"Исполнена"`},
 	} {
 		w := httptest.NewRecorder()
-		writeCancelAnswer(w, domain.Order{Status: tc.status})
+		writeCancelAnswer(w, domain.Order{Status: tc.status}, "")
 		if w.Code != tc.code || !strings.Contains(w.Body.String(), tc.want) {
 			t.Fatalf("%s: %d %s", tc.status, w.Code, w.Body.String())
 		}
+	}
+}
+
+// QUIK's reason code goes to error_code; the text keeps no FIX marker.
+func TestRejectCodes(t *testing.T) {
+	reason := "Вам запрещена работа по данному торговому счету; OrdRejReason=8637225"
+	w := httptest.NewRecorder()
+	writeOrderAnswer(w, domain.Order{Status: domain.OrderRejected, RejectReason: &reason}, false)
+	body := w.Body.String()
+	if !strings.Contains(body, `"error_code":8637225`) || !strings.Contains(body, `"error":"Вам запрещена работа по данному торговому счету"`) {
+		t.Fatal(body)
+	}
+	noCode := "[QME] Цена вне границ"
+	w = httptest.NewRecorder()
+	writeOrderAnswer(w, domain.Order{Status: domain.OrderRejected, RejectReason: &noCode}, false)
+	if !strings.Contains(w.Body.String(), `"error_code":null`) {
+		t.Fatal(w.Body.String())
+	}
+	w = httptest.NewRecorder()
+	writeCancelAnswer(w, domain.Order{Status: domain.OrderFilled}, cancelRejectReason("Too late to cancel", "0"))
+	if body := w.Body.String(); !strings.Contains(body, `"error_code":0`) || !strings.Contains(body, `"error":"Too late to cancel"`) {
+		t.Fatal(body)
+	}
+}
+
+// GET /api/v1/errors lists every reply code and the known QUIK error codes.
+func TestListErrorCodes(t *testing.T) {
+	w := serveEnveloped((&Server{}).listErrorCodes, "/api/v1/errors")
+	var env struct {
+		Success bool `json:"success"`
+		Data    struct {
+			Codes      []gatewayCode   `json:"codes"`
+			ErrorCodes []quikErrorCode `json:"error_codes"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &env); err != nil || !env.Success {
+		t.Fatal(w.Body.String())
+	}
+	seen := map[string]bool{}
+	for _, c := range env.Data.Codes {
+		seen[c.Code] = true
+	}
+	for _, code := range statusCodes {
+		if !seen[code] {
+			t.Errorf("code %s missing from /api/v1/errors", code)
+		}
+	}
+	if len(env.Data.ErrorCodes) == 0 {
+		t.Fatal("no QUIK error codes")
 	}
 }
 

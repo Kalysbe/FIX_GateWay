@@ -22,7 +22,7 @@ REST создаёт и отменяет заявки, изменяет пози�
 Все REST-методы брокера отвечают в одном формате — и при успехе, и при ошибке:
 
 ```json
-{"success": true, "code": "OK", "message": null, "data": { ... }}
+{"success": true, "code": "OK", "message": null, "error_code": null, "data": { ... }}
 ```
 
 | Поле | Значение |
@@ -30,6 +30,7 @@ REST создаёт и отменяет заявки, изменяет пози�
 | `success` | `true` — запрос выполнен; `false` — ошибка или QUIK ещё не ответил |
 | `code` | `OK` при успехе, иначе код ошибки (таблица в разделе «Ошибки») |
 | `message` | Причина ошибки текстом; `null` при успехе |
+| `error_code` | Код причины от QUIK (отказ заявки — FIX 103, отказ снятия — FIX 102); `null` при успехе и когда QUIK кода не прислал |
 | `data` | Результат: объект, массив строк QUIK или `null` у ошибки |
 
 Списки (`/orders`, `/orders/active`, `/trades`, `/market-data`, `/quotes`, `/accounts`) дополнительно содержат `has_more` и `next_offset` (те же значения, что в заголовках `X-Has-More` и `X-Next-Offset`). Строки QUIK внутри `data` передаются без изменений.
@@ -37,11 +38,11 @@ REST создаёт и отменяет заявки, изменяет пози�
 Отказ QUIK и ожидание ответа QUIK возвращают заявку в `data`:
 
 ```json
-{"success": false, "code": "ORDER_REJECTED", "message": "No right for this trading account",
+{"success": false, "code": "ORDER_REJECTED", "message": "No right for this trading account", "error_code": 8637225,
  "data": {"OrderNum": null, "State": "Отклонена", "RejectReason": "No right for this trading account", "id": "4efb2c8e-…", "...": "…"}}
 ```
 
-Обработка: проверьте `success`; при `false` решение принимайте по `code`, текст для пользователя — `message`. HTTP-код ответа сохраняется (`200`, `201`, `202`, `4xx`, `5xx`).
+Обработка: проверьте `success`; при `false` решение принимайте по `code`, точная причина от QUIK — `error_code`, текст для пользователя — `message`. Все значения `code` и известные `error_code` отдаёт `GET /api/v1/errors`. HTTP-код ответа сохраняется (`200`, `201`, `202`, `4xx`, `5xx`).
 ## Фирма, счета, инструменты
 
 ### Изменение контракта 26.10.2026
@@ -333,7 +334,7 @@ REST: `method` — HTTP-метод, `path` — точный escaped path с ис
 
 ## Ошибки
 
-REST возвращает ошибки в общем формате: `success: false`, `code` и `message`; `data` — `null` или заявка.
+REST возвращает ошибки в общем формате: `success: false`, `code`, `message` и `error_code`; `data` — `null` или заявка. Справочник кодов — `GET /api/v1/errors`: `codes` (поле `code`) и `error_codes` (поле `error_code`, с операцией `order`/`cancel` и источником в QUIK). QUIK может прислать код, которого нет в справочнике; текст причины всегда в `message`.
 
 | HTTP | `code` | Значение |
 |---|---|---|

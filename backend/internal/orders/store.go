@@ -667,6 +667,24 @@ func mapExecStatus(execType, ordStatus string, current domain.OrderStatus) domai
 	return current
 }
 
+// CancelRejectReason is the reason of the latest cancel reject QUIK sent for the
+// order since the given time; "" when there is none.
+func (s *Store) CancelRejectReason(ctx context.Context, orderID uuid.UUID, since time.Time) (string, error) {
+	var msg string
+	err := s.pool.QueryRow(ctx, `
+		SELECT message FROM order_events
+		WHERE order_id=$1 AND event_type='ORDER_CANCEL_REJECTED' AND created_at >= $2
+		ORDER BY created_at DESC, id DESC LIMIT 1`, orderID, since).Scan(&msg)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	msg = strings.TrimPrefix(msg, "cancel rejected")
+	return strings.TrimSpace(strings.TrimPrefix(msg, ":")), nil
+}
+
 func composeRejectReason(text, ordRejReason string) *string {
 	parts := make([]string, 0, 2)
 	if t := strings.TrimSpace(text); t != "" {
