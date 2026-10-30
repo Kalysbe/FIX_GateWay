@@ -33,7 +33,7 @@ import (
 	"github.com/shopspring/decimal"
 )
 
-func TestOrderIdempotencyIntegration(t *testing.T) {
+func TestOrderCreateIntegration(t *testing.T) {
 	dsn := os.Getenv("DATABASE_URL")
 	if dsn == "" {
 		t.Skip("DATABASE_URL not set")
@@ -114,8 +114,7 @@ func TestOrderIdempotencyIntegration(t *testing.T) {
 		"Account": "ACC1", "ClientCode": "006", "SecCode": "SBER", "ClassCode": "TQBR",
 		"Operation": "Купля", "Qty": 10, "Price": 250,
 	}
-	idemKey := "IDEM-" + uuid.NewString()
-	rr := callCreate(body, idemKey)
+	rr := callCreate(body, "")
 	if rr.Code != http.StatusAccepted || !strings.Contains(rr.Body.String(), "QUIK_ANSWER_PENDING") {
 		t.Fatalf("first create status %d body %s", rr.Code, rr.Body.String())
 	}
@@ -123,29 +122,11 @@ func TestOrderIdempotencyIntegration(t *testing.T) {
 	if first["OrderNum"] != nil || first["SecCode"] != "SBER" || first["Operation"] != "Купля" || first["id"] == nil {
 		t.Fatalf("reply must use QUIK Orders names: %#v", first)
 	}
-
-	rr2 := callCreate(body, idemKey)
-	if rr2.Code != http.StatusAccepted {
-		t.Fatalf("idempotent create status %d", rr2.Code)
-	}
-	orderID := decodeOrder(rr2)["id"].(string)
-	if orderID != first["id"] {
-		t.Fatalf("replay must return the original order: %s != %v", orderID, first["id"])
-	}
-	for field, value := range map[string]any{"Qty": 11, "Price": 251, "Operation": "Продажа", "ClientCode": "007"} {
-		changed := map[string]any{}
-		for k, v := range body {
-			changed[k] = v
-		}
-		changed[field] = value
-		if rr := callCreate(changed, idemKey); rr.Code != http.StatusConflict {
-			t.Fatalf("reused Idempotency-Key with different %s: status %d body %s", field, rr.Code, rr.Body.String())
-		}
-	}
-	// Without the header every request is a new order.
-	noKey1, noKey2 := callCreate(body, ""), callCreate(body, "")
-	if noKey1.Code != http.StatusAccepted || noKey2.Code != http.StatusAccepted || decodeOrder(noKey1)["id"] == decodeOrder(noKey2)["id"] {
-		t.Fatalf("requests without Idempotency-Key must create distinct orders: %d %d", noKey1.Code, noKey2.Code)
+	orderID := first["id"].(string)
+	// Idempotency-Key is no longer read: a repeat with it is a new order.
+	again := callCreate(body, "IDEM-"+uuid.NewString())
+	if again.Code != http.StatusAccepted || decodeOrder(again)["id"] == orderID {
+		t.Fatalf("every request must create a new order: %d %s", again.Code, again.Body.String())
 	}
 	withID := map[string]any{"client_order_id": "BROKER-1"}
 	for k, v := range body {
@@ -156,7 +137,7 @@ func TestOrderIdempotencyIntegration(t *testing.T) {
 	}
 	var queued int
 	if err := pool.QueryRow(ctx, `SELECT count(*) FROM outbox_events WHERE aggregate_id=$1 AND event_type='ORDER_SEND' AND status='PENDING'`, orderID).Scan(&queued); err != nil || queued != 1 {
-		t.Fatalf("accepted/idempotent order must have exactly one durable queue entry: count=%d err=%v", queued, err)
+		t.Fatalf("accepted order must have exactly one durable queue entry: count=%d err=%v", queued, err)
 	}
 	if _, err := pool.Exec(ctx, `UPDATE orders SET status='ACKNOWLEDGED' WHERE id=$1`, orderID); err != nil {
 		t.Fatal(err)
@@ -190,10 +171,6 @@ func TestOrderIdempotencyIntegration(t *testing.T) {
 	riskResponse = callCreate(body, "")
 	if riskResponse.Code != http.StatusUnprocessableEntity || !bytes.Contains(riskResponse.Body.Bytes(), []byte("TRADING_PAUSED")) {
 		t.Fatalf("pause rejection: %d %s", riskResponse.Code, riskResponse.Body.String())
-	}
-	body["Qty"] = 10
-	if replay := callCreate(body, idemKey); replay.Code != http.StatusOK {
-		t.Fatalf("paused replay: %d %s", replay.Code, replay.Body.String())
 	}
 }
 

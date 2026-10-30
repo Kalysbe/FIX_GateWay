@@ -1,7 +1,6 @@
 package orders
 
 import (
-	"strings"
 	"testing"
 
 	"github.com/fix-gateway/backend/internal/domain"
@@ -78,15 +77,3 @@ func TestDeriveFIXFields(t *testing.T) {
 	}
 }
 
-func TestIdempotencyKeyValidation(t *testing.T) {
-	for _, key := range []string{"", "IDEM-1", strings.Repeat("k", MaxIdempotencyKeyLen)} {
-		if err := ValidateIdempotencyKey(key); err != nil {
-			t.Fatalf("key %q: %v", key, err)
-		}
-	}
-	for _, key := range []string{"k\x01", "k\n", strings.Repeat("k", MaxIdempotencyKeyLen+1)} {
-		if err := ValidateIdempotencyKey(key); err == nil {
-			t.Fatalf("key %q must be rejected", key)
-		}
-	}
-}

@@ -374,16 +374,7 @@ paths:
         - `502` `ORDER_FAILED` — заявку не удалось передать в QUIK;
         - `202` `QUIK_ANSWER_PENDING` — QUIK не ответил за время ожидания. Заявка не отменена и может быть принята позже: узнайте итог через `GET /api/v1/orders/{id}`, не отправляйте её заново.
 
-        Идемпотентность: необязательный заголовок `Idempotency-Key`. Повтор с тем же ключом и теми же параметрами возвращает существующую заявку с её текущим итогом (`200`, если QUIK её принял). Без заголовка каждый запрос создаёт новую заявку.
-      parameters:
-        - name: Idempotency-Key
-          in: header
-          required: false
-          description: "Ваш уникальный ключ запроса (до 255 символов, без управляющих символов). Повторяйте его при таймауте или сетевой ошибке; для новой заявки нужен новый ключ."
-          schema:
-            type: string
-            maxLength: 255
-          example: "ORD-20260818-0001"
+        Каждый запрос создаёт новую заявку. После таймаута или сетевой ошибки сначала проверьте `GET /api/v1/orders`, и только потом отправляйте заявку повторно: иначе она может быть выставлена дважды.
       requestBody:
         required: true
         content:
@@ -419,12 +410,6 @@ paths:
                 FirmId: "SENTI2004"
                 RejectReason: null
                 id: "276d043c-6716-4ebd-a7b7-15904e760d40"
-        "200":
-          description: Идемпотентный повтор — заявка уже существует и принята QUIK
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Order"
         "202":
           description: QUIK не ответил за время ожидания (`QUIK_ANSWER_PENDING`). Заявка не отменена; итог — через GET /api/v1/orders/{id}.
           content:
@@ -437,16 +422,6 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Order"
-        "409":
-          description: Idempotency-Key уже использован заявкой с другими параметрами (ClassCode, SecCode, Operation, Price, Qty, Account, ClientCode, фирма). Заявка не создаётся; для новой заявки нужен новый ключ.
-          content:
-            application/json:
-              schema:
-                type: object
-                required: [error, code]
-                properties:
-                  error: {type: string}
-                  code: {type: string, enum: [IDEMPOTENCY_CONFLICT]}
         "422":
           description: |
             QUIK отклонил заявку (`ORDER_REJECTED`: ответ — заявка с `State` = `Отклонена` и `RejectReason`)

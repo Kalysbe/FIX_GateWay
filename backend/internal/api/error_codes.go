@@ -28,7 +28,6 @@ var gatewayCodes = []gatewayCode{
 	{"NOT_FOUND", 404, "Объект не найден или принадлежит другой фирме"},
 	{"METHOD_NOT_ALLOWED", 405, "Метод не поддерживается для этого адреса"},
 	{"CONFLICT", 409, "Действие невозможно в текущем состоянии, например заявка не активна"},
-	{"IDEMPOTENCY_CONFLICT", 409, "Idempotency-Key уже использован для другой заявки"},
 	{"CANCEL_REJECTED", 409, "QUIK не снял заявку; причина — message и error_code"},
 	{"PAYLOAD_TOO_LARGE", 413, "Слишком большое тело запроса"},
 	{"ORDER_REJECTED", 422, "QUIK отклонил заявку; причина — message и error_code"},

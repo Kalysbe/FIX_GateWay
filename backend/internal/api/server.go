@@ -338,7 +338,7 @@ func (s *Server) createOrder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ip, _ := s.clientIP(r)
-	order, idempotent, err := s.orders.Create(r.Context(), b, ip, req, tok.QuikFirm, r.Header.Get("Idempotency-Key"))
+	order, err := s.orders.Create(r.Context(), b, ip, req, tok.QuikFirm)
 	if err != nil {
 		var risk *orders.RiskRejected
 		if errors.As(err, &risk) {
@@ -346,13 +346,8 @@ func (s *Server) createOrder(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusUnprocessableEntity, map[string]any{"error": risk.Message, "code": risk.Code})
 			return
 		}
-		if errors.Is(err, orders.ErrIdempotencyConflict) {
-			observability.AnnotateError(r, "IDEMPOTENCY_CONFLICT", err.Error(), "validation")
-			writeJSON(w, http.StatusConflict, map[string]any{"error": err.Error(), "code": "IDEMPOTENCY_CONFLICT"})
-			return
-		}
 		if errors.Is(err, orders.ErrPersistenceUnavailable) {
-			writeErr(w, http.StatusServiceUnavailable, "order storage unavailable; verify result and retry with the same Idempotency-Key")
+			writeErr(w, http.StatusServiceUnavailable, "order storage unavailable; check GET /api/v1/orders before sending the order again")
 			return
 		}
 		observability.AnnotateError(r, "ORDER_CREATE_FAILED", err.Error(), "order_service")
@@ -378,7 +373,7 @@ func (s *Server) createOrder(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusAccepted, body)
 		return
 	}
-	writeOrderAnswer(w, order, idempotent)
+	writeOrderAnswer(w, order)
 }
 
 // awaitOrderAnswer holds the reply until QUIK answers the order or cancel,
@@ -396,9 +391,9 @@ func (s *Server) awaitOrderAnswer(ctx context.Context, order domain.Order, pendi
 	return s.orders.AwaitVenueAnswer(ctx, order, pending)
 }
 
-// writeOrderAnswer: 201/200 accepted by QUIK, 422 rejected by QUIK, 502 not
+// writeOrderAnswer: 201 accepted by QUIK, 422 rejected by QUIK, 502 not
 // delivered, 202 QUIK has not answered in time (the order stays live).
-func writeOrderAnswer(w http.ResponseWriter, order domain.Order, idempotent bool) {
+func writeOrderAnswer(w http.ResponseWriter, order domain.Order) {
 	body := orderReply(order)
 	switch {
 	case orders.AwaitingVenue(order.Status):
@@ -417,8 +412,6 @@ func writeOrderAnswer(w http.ResponseWriter, order domain.Order, idempotent bool
 		body["code"] = "ORDER_FAILED"
 		body["error"] = "order was not delivered to QUIK"
 		writeJSON(w, http.StatusBadGateway, body)
-	case idempotent:
-		writeJSON(w, http.StatusOK, body)
 	default:
 		writeJSON(w, http.StatusCreated, body)
 	}

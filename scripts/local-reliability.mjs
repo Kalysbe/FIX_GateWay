@@ -15,11 +15,10 @@ function sql(statement) {
 // Broker replies are {success, code, message, data}: a success yields data, a
 // failure {code, error, error_code, ...data}.
 const unwrap=(path,v)=>path.startsWith('/api/v1/admin/')||!v||typeof v!=='object'||!('success' in v)?v:v.success?v.data:{...(v.data&&typeof v.data==='object'?v.data:{}),code:v.code,error:v.message,error_code:v.error_code};
-async function call(path, token, method = 'GET', body, idempotencyKey) {
+async function call(path, token, method = 'GET', body) {
   const started = performance.now();
   const response = await fetch(base + path, {
-    method, headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(body ? {'Content-Type':'application/json'} : {}),
-      ...(idempotencyKey ? {'Idempotency-Key':idempotencyKey} : {}) },
+    method, headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(body ? {'Content-Type':'application/json'} : {}) },
     body: body ? JSON.stringify(body) : undefined, signal: AbortSignal.timeout(20000),
   });
   return {status:response.status, body:unwrap(path, await response.json()), ms:performance.now()-started,
@@ -42,19 +41,28 @@ const run=randomUUID();
 const prefix=`RELIABILITY-${run}`;
 const accepted=new Map();
 const timings=[];
-let token,admin,tokenId;
+let token,admin,tokenId,brokerId;
 let simulatorStopped=false;
 let databaseStopped=false;
 const payload={ClassCode:'TQBR',SecCode:'SBER',Operation:'Купля',Price:100,Qty:1,
   Account:'RELIABILITY',ClientCode:'RELIABILITY'};
+// Every request is a new order (no Idempotency-Key), so each one carries its own
+// ClientCode (orders.fix_client_id): after an uncertain HTTP result the ledger
+// shows whether the order was stored before it is sent again.
+const storedOrder=clientId=>sql(`SELECT id FROM orders WHERE broker_id=${brokerId} AND fix_client_id='${clientId}';`);
 async function submit(index) {
-  const clientId=`${prefix}-${index}`;
-  const body={...payload,Operation:index%2 ? 'Продажа':'Купля'};
+  const clientId=`R${index}`;
+  const body={...payload,ClientCode:clientId,Operation:index%2 ? 'Продажа':'Купля'};
   const deadline=Date.now()+60000;
   while(Date.now()<deadline) {
     let result;
-    try { result=await call('/api/v1/orders',token,'POST',body,clientId); }
-    catch { await delay(500); continue; } // same idempotency key on uncertain HTTP result
+    try { result=await call('/api/v1/orders',token,'POST',body); }
+    catch {
+      await delay(500);
+      let id=''; try { id=storedOrder(clientId); } catch { continue; }
+      if(id) { accepted.set(clientId,id); return; }
+      continue;
+    }
     // 202: stored and sent, QUIK has not answered yet (e.g. FIX outage).
     if([200,201,202].includes(result.status)) {
       assert.match(result.body.id,/^[0-9a-f-]{36}$/i);
@@ -74,13 +82,13 @@ async function batch(start,count,workers=8) {
   }));
 }
 function verifyRetained(expected) {
-  const counts=sql(`SELECT count(*),count(DISTINCT o.idempotency_key),count(e.id) FROM orders o LEFT JOIN outbox_events e ON e.aggregate_id=o.id::text AND e.event_type='ORDER_SEND' WHERE o.idempotency_key LIKE '${prefix}-%';`);
+  const counts=sql(`SELECT count(*),count(DISTINCT o.fix_client_id),count(e.id) FROM orders o LEFT JOIN outbox_events e ON e.aggregate_id=o.id::text AND e.event_type='ORDER_SEND' WHERE o.broker_id=${brokerId};`);
   assert.equal(counts,`${expected}|${expected}|${expected}`,'accepted orders/queue entries lost or duplicated');
 }
 async function waitFilled(expected) {
   const deadline=Date.now()+90000;
   while(Date.now()<deadline) {
-    const counts=sql(`SELECT count(*),count(*) FILTER(WHERE status='FILLED') FROM orders WHERE idempotency_key LIKE '${prefix}-%';`);
+    const counts=sql(`SELECT count(*),count(*) FILTER(WHERE status='FILLED') FROM orders WHERE broker_id=${brokerId};`);
     if(counts===`${expected}|${expected}`) return;
     await delay(1000);
   }
@@ -101,10 +109,11 @@ async function main() {
   const adapters=(await expect('/api/v1/admin/adapters',admin)).adapters.filter(a=>a.enabled);
   assert.ok(adapters.length===2 && adapters.every(a=>a.host==='fixsimulator' && a.type==='simulator'));
   const {broker}=await expect('/api/v1/admin/brokers',admin,'POST',{code:prefix,name:'Isolated reliability test'},201);
+  brokerId=broker.id;
   const created=await expect(`/api/v1/admin/brokers/${broker.id}/tokens`,admin,'POST',{name:'Reliability',quik_firm:'SIM',expires_in_days:30,permissions:['orders:create','orders:read']},201);
   token=created.token; tokenId=created.id;
   try {
-    const invalid=await call('/api/v1/orders',token,'POST',{...payload,SecCode:'NO_SUCH_RELIABILITY_INSTRUMENT'},`${prefix}-invalid`);
+    const invalid=await call('/api/v1/orders',token,'POST',{...payload,SecCode:'NO_SUCH_RELIABILITY_INSTRUMENT'});
     assert.equal(invalid.status,400,'validation errors must remain permanent 400 responses');
     await batch(0,100);
     await waitFilled(100); verifyRetained(100);
@@ -128,7 +137,7 @@ async function main() {
     await delay(1500);
     await batch(130,12,4);
     verifyRetained(142);
-    const queued=Number(sql(`SELECT count(*) FROM outbox_events e JOIN orders o ON o.id::text=e.aggregate_id WHERE o.idempotency_key LIKE '${prefix}-%' AND e.status IN ('PENDING','PROCESSING');`));
+    const queued=Number(sql(`SELECT count(*) FROM outbox_events e JOIN orders o ON o.id::text=e.aggregate_id WHERE o.broker_id=${brokerId} AND e.status IN ('PENDING','PROCESSING');`));
     assert.ok(queued>=12,'FIX outage did not leave trading requests queued');
     command([...compose,'kill','-s','SIGKILL','gateway']);
     command(['start','fix-gateway-local-gateway-1']);
@@ -136,18 +145,18 @@ async function main() {
     console.log('PASS FIX outage + abrupt gateway termination: all 142 orders/queue entries retained');
     command(['start','fix-gateway-local-fixsimulator-1']); simulatorStopped=false;
     await waitFilled(142); verifyRetained(142);
-    const trades=sql(`SELECT count(*),count(DISTINCT t.order_id) FROM executions t JOIN orders o ON o.id=t.order_id WHERE o.idempotency_key LIKE '${prefix}-%' AND t.last_qty>0;`);
+    const trades=sql(`SELECT count(*),count(DISTINCT t.order_id) FROM executions t JOIN orders o ON o.id=t.order_id WHERE o.broker_id=${brokerId} AND t.last_qty>0;`);
     assert.equal(trades,'142|142','missing or duplicate fills after recovery');
     command(['stop','fix-gateway-local-postgres-1']); databaseStopped=true;
     assert.equal((await call('/health')).status,200,'liveness must survive DB outage');
-    const failed=await call('/api/v1/orders',token,'POST',payload,`${prefix}-142`);
+    const failed=await call('/api/v1/orders',token,'POST',{...payload,ClientCode:'R142'});
     assert.equal(failed.status,503,'DB outage must be retryable, not invalid credentials or accepted');
     command(['start','fix-gateway-local-postgres-1']); databaseStopped=false;
     await delay(3000);
     verifyRetained(142);
     await submit(142); await waitFilled(143); verifyRetained(143);
-    assert.equal(sql(`SELECT count(*),count(DISTINCT t.order_id) FROM executions t JOIN orders o ON o.id=t.order_id WHERE o.idempotency_key LIKE '${prefix}-%' AND t.last_qty>0;`),'143|143','duplicate or missing fill after database recovery');
-    console.log('PASS database outage: explicit 503, liveness responsive, retained queue, same-key retry succeeds');
+    assert.equal(sql(`SELECT count(*),count(DISTINCT t.order_id) FROM executions t JOIN orders o ON o.id=t.order_id WHERE o.broker_id=${brokerId} AND t.last_qty>0;`),'143|143','duplicate or missing fill after database recovery');
+    console.log('PASS database outage: explicit 503, liveness responsive, retained queue, retry after 503 succeeds');
     timings.sort((a,b)=>a-b);
     console.log(`PASS recovery: 143 orders preserved; accepted HTTP p95=${Math.round(timings[Math.floor(timings.length*.95)])}ms max=${Math.round(timings.at(-1))}ms`);
   } finally {

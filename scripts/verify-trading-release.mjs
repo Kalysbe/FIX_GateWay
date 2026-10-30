@@ -19,8 +19,8 @@ function sql(statement){return execFileSync(docker,[...compose,'exec','-T','post
 // Broker replies are {success, code, message, data}: a success yields data, a
 // failure {code, error, error_code, ...data}.
 const unwrap=(path,v)=>path.startsWith('/api/v1/admin/')||!v||typeof v!=='object'||!('success' in v)?v:v.success?v.data:{...(v.data&&typeof v.data==='object'?v.data:{}),code:v.code,error:v.message,error_code:v.error_code};
-async function call(path,token='',method='GET',body,status=200,key){
- const response=await fetch(base+path,{method,headers:{...(token?{Authorization:`Bearer ${token}`} : {}),...(body?{'Content-Type':'application/json'}:{}),...(key?{'Idempotency-Key':key}:{})},body:body?JSON.stringify(body):undefined,signal:AbortSignal.timeout(20000)});
+async function call(path,token='',method='GET',body,status=200){
+ const response=await fetch(base+path,{method,headers:{...(token?{Authorization:`Bearer ${token}`} : {}),...(body?{'Content-Type':'application/json'}:{})},body:body?JSON.stringify(body):undefined,signal:AbortSignal.timeout(20000)});
  const value=unwrap(path,await response.json());assert.ok([].concat(status).includes(response.status),`${method} ${path}: ${JSON.stringify(value)}`);return value;
 }
 async function until(fn){const deadline=Date.now()+45000;while(Date.now()<deadline){try{const value=await fn();if(value)return value;}catch{}await delay(200);}throw Error('Verification timed out');}
@@ -34,7 +34,7 @@ const {token:admin}=await call('/api/v1/admin/login','','POST',{email:'admin@loc
 const {broker}=await call('/api/v1/admin/brokers',admin,'POST',{code:`VERIFY-${randomUUID()}`,name:'Release verification'},201);
 const {token}=await call(`/api/v1/admin/brokers/${broker.id}/tokens`,admin,'POST',{name:'Verification',quik_firm:'SIM',expires_in_days:30,permissions:['orders:create','orders:read']},201);
 const payload={ClassCode:'TQBR',SecCode:'SBER',Operation:'Купля',Price:100,Qty:1,Account:'VERIFY',ClientCode:'VERIFY'};
-const order=await call('/api/v1/orders',token,'POST',payload,201,'VERIFY-1');
+const order=await call('/api/v1/orders',token,'POST',payload,201);
 await until(async()=>localStatus(order.id)==='ACKNOWLEDGED');
 // Deterministic crash-window injection: venue ACK was received, but queue completion
 // was lost. This models durable PROCESSING state; it is not a socket-loss test.
@@ -44,7 +44,6 @@ await until(async()=>{const value=await call(`/api/v1/admin/reconciliation?order
 assert.equal(sql(`SELECT count(*) FROM outbox_reconciliations WHERE order_id='${order.id}'`),'1');
 assert.equal(sql(`SELECT attempts FROM outbox_events WHERE aggregate_id='${order.id}' AND event_type='ORDER_SEND'`),'1');
 assert.equal(sql(`SELECT fix_send_attempted_at IS NOT NULL FROM orders WHERE id='${order.id}'`),'t');
-const replay=await call('/api/v1/orders',token,'POST',payload,200,'VERIFY-1');assert.equal(replay.id,order.id);
 // Real socket fault: simulator accepts D, drops the connection before ACK and
 // emits the retained ACK after reconnect. Durable crash-window state is injected
 // separately so both the unconfirmed and confirmed reconciliation paths run.

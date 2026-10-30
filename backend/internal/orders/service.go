@@ -47,7 +47,7 @@ func (s *Service) SetObserver(obs observability.Emitter) { s.obs = obs }
 func (s *Service) SetQueueNotifier(fn func()) { s.onQueued = fn }
 
 // CreateOrderRequest uses the QUIK Orders column names. It has no order id: the
-// gateway always generates it, and retries use the Idempotency-Key header.
+// gateway always generates it, so every request is a new order.
 // Side, OrderType and TimeInForce are derived (Operation, Price present, DAY).
 type CreateOrderRequest struct {
 	Board       string           `json:"ClassCode"` // код класса → FIX tag 100 ExDestination
@@ -87,14 +87,6 @@ func (r *CreateOrderRequest) deriveFIXFields() {
 	}
 }
 
-// MaxIdempotencyKeyLen bounds the Idempotency-Key header.
-const MaxIdempotencyKeyLen = 255
-
-// ValidateIdempotencyKey accepts an empty key (no retry protection).
-func ValidateIdempotencyKey(key string) error {
-	return domain.CheckFIXText("Idempotency-Key", key, MaxIdempotencyKeyLen)
-}
-
 // ValidateCreateRequest returns a field-specific error for bad order payloads.
 func ValidateCreateRequest(req CreateOrderRequest) error {
 	if req.AccountID == "" || req.AccountID == "string" {
@@ -130,22 +122,18 @@ func ValidateCreateRequest(req CreateOrderRequest) error {
 		"SecCode", req.Symbol, "ClassCode", req.Board)
 }
 
-// Create stores the order with a gateway-generated client_order_id. A non-empty
-// idempotencyKey makes a retry with the same parameters return the original order.
-func (s *Service) Create(ctx context.Context, broker domain.Broker, ip string, req CreateOrderRequest, quikFirm, idempotencyKey string) (domain.Order, bool, error) {
+// Create stores a new order with a gateway-generated client_order_id
+// (поручение пользователя 30.10.2026: без Idempotency-Key, каждый запрос — новая заявка).
+func (s *Service) Create(ctx context.Context, broker domain.Broker, ip string, req CreateOrderRequest, quikFirm string) (domain.Order, error) {
 	req.deriveFIXFields()
-	err := ValidateCreateRequest(req)
-	if err == nil {
-		err = ValidateIdempotencyKey(idempotencyKey)
-	}
-	if err != nil {
+	if err := ValidateCreateRequest(req); err != nil {
 		s.emit(ctx, observability.Event{
 			Type: observability.TypeError, Subtype: observability.ErrValidation, BrokerID: &broker.ID,
 			BrokerCode: broker.Code, BrokerName: broker.Name,
 			ErrorCode: "VALIDATION_ERROR", ErrorMessage: err.Error(), FailureStage: "validation",
 			Message: err.Error(), AccountID: req.AccountID, Instrument: req.Symbol, Side: string(req.Side),
 		})
-		return domain.Order{}, false, err
+		return domain.Order{}, err
 	}
 	if strings.TrimSpace(quikFirm) == "" {
 		err := fmt.Errorf("у токена не задана фирма; обратитесь к оператору шлюза")
@@ -154,7 +142,7 @@ func (s *Service) Create(ctx context.Context, broker domain.Broker, ip string, r
 			BrokerCode: broker.Code, BrokerName: broker.Name, ErrorCode: "MISSING_QUIK_FIRM",
 			ErrorMessage: err.Error(), FailureStage: "validation", Message: err.Error(),
 		})
-		return domain.Order{}, false, err
+		return domain.Order{}, err
 	}
 	if req.TimeInForce == "" || req.TimeInForce == "string" {
 		req.TimeInForce = "DAY"
@@ -162,12 +150,12 @@ func (s *Service) Create(ctx context.Context, broker domain.Broker, ip string, r
 
 	firm := strings.TrimSpace(quikFirm)
 	if s.accounts == nil {
-		return domain.Order{}, false, fmt.Errorf("%w: QUIK trading accounts source is not configured", ErrPersistenceUnavailable)
+		return domain.Order{}, fmt.Errorf("%w: QUIK trading accounts source is not configured", ErrPersistenceUnavailable)
 	}
 	acc, err := s.accounts.TradingAccount(ctx, firm, req.AccountID)
 	if err != nil {
 		if !errors.Is(err, quikexport.ErrAccountNotFound) {
-			return domain.Order{}, false, fmt.Errorf("%w: %w", ErrPersistenceUnavailable, err)
+			return domain.Order{}, fmt.Errorf("%w: %w", ErrPersistenceUnavailable, err)
 		}
 		msg := fmt.Errorf("счёт %q не найден у фирмы %q; список счетов — GET /api/v1/accounts", req.AccountID, firm)
 		s.emit(ctx, observability.Event{
@@ -176,7 +164,7 @@ func (s *Service) Create(ctx context.Context, broker domain.Broker, ip string, r
 			ErrorCode: "ACCOUNT_NOT_ALLOWED", ErrorMessage: msg.Error(), FailureStage: "validation",
 			Message: msg.Error(), AccountID: req.AccountID, Instrument: req.Symbol, Side: string(req.Side),
 		})
-		return domain.Order{}, false, msg
+		return domain.Order{}, msg
 	}
 	// FIX tag 1 carries the account as QUIK stores it.
 	fixAccount := strings.TrimSpace(acc.Text("TrdAccId"))
@@ -184,7 +172,7 @@ func (s *Service) Create(ctx context.Context, broker domain.Broker, ip string, r
 	instr, err := s.store.ResolveInstrument(ctx, broker.ID, req.Symbol, req.Board)
 	if err != nil {
 		if !errors.Is(err, pgx.ErrNoRows) && !errors.Is(err, ErrInstrumentNotFound) {
-			return domain.Order{}, false, fmt.Errorf("%w: %w", ErrPersistenceUnavailable, err)
+			return domain.Order{}, fmt.Errorf("%w: %w", ErrPersistenceUnavailable, err)
 		}
 		msg := fmt.Errorf("instrument %q (ClassCode %q) не найден: укажите SecCode и ClassCode из GET /api/v1/instruments", req.Symbol, req.Board)
 		s.emit(ctx, observability.Event{
@@ -192,34 +180,28 @@ func (s *Service) Create(ctx context.Context, broker domain.Broker, ip string, r
 			BrokerCode: broker.Code, BrokerName: broker.Name, Instrument: req.Symbol,
 			ErrorCode: "INSTRUMENT_NOT_FOUND", ErrorMessage: msg.Error(), FailureStage: "validation", Message: msg.Error(),
 		})
-		return domain.Order{}, false, msg
+		return domain.Order{}, msg
 	}
 
-	order, idempotent, err := s.store.CreateWithOutbox(ctx, CreateInput{
+	order, _, err := s.store.CreateWithOutbox(ctx, CreateInput{
 		BrokerID: broker.ID, FixAccount: fixAccount, ClientCode: req.ClientCode, QuikFirm: strings.TrimSpace(quikFirm),
-		IdempotencyKey: idempotencyKey,
-		InstrumentID:   instr.ID, Board: req.Board, Side: req.Side, OrderType: req.OrderType,
+		InstrumentID: instr.ID, Board: req.Board, Side: req.Side, OrderType: req.OrderType,
 		TimeInForce: req.TimeInForce, Quantity: req.Quantity, Price: req.Price,
 		RequestID: observability.RequestIDFrom(ctx), TraceID: observability.TraceIDFrom(ctx),
 	})
-	if errors.Is(err, ErrIdempotencyConflict) {
-		s.emit(ctx, observability.Event{Type: observability.TypeError, Subtype: observability.ErrValidation, BrokerID: &broker.ID,
-			ErrorCode: "IDEMPOTENCY_CONFLICT", ErrorMessage: err.Error(), FailureStage: "validation", Message: err.Error()})
-		return order, false, err
-	}
 	if err != nil {
 		var risk *RiskRejected
 		if errors.As(err, &risk) {
 			s.emit(ctx, observability.Event{Type: observability.TypeError, Subtype: observability.ErrValidation, BrokerID: &broker.ID,
 				ErrorCode: risk.Code, ErrorMessage: risk.Message, FailureStage: "risk", Message: risk.Message})
-			return order, false, err
+			return order, err
 		}
 		s.emit(ctx, observability.Event{
 			Type: observability.TypeError, Subtype: observability.ErrDatabase, BrokerID: &broker.ID,
 			BrokerCode: broker.Code, BrokerName: broker.Name,
 			ErrorCode: "ORDER_PERSIST_FAILED", ErrorMessage: err.Error(), FailureStage: "order_service", Message: err.Error(),
 		})
-		return order, false, fmt.Errorf("%w: %w", ErrPersistenceUnavailable, err)
+		return order, fmt.Errorf("%w: %w", ErrPersistenceUnavailable, err)
 	}
 	if s.onQueued != nil {
 		s.onQueued()
@@ -230,7 +212,7 @@ func (s *Service) Create(ctx context.Context, broker domain.Broker, ip string, r
 		IP: ip, ClientOrderID: order.ClientOrderID, InternalOrderID: order.ID.String(),
 		RequestPayload: req, Result: "ok",
 	})
-	if !idempotent {
+	{
 		oid := order.ID
 		base := observability.EventFromContext(ctx)
 		base.BrokerID = &broker.ID
@@ -253,7 +235,7 @@ func (s *Service) Create(ctx context.Context, broker domain.Broker, ip string, r
 			s.emit(ctx, ev)
 		}
 	}
-	return order, idempotent, nil
+	return order, nil
 }
 
 // AwaitingVenue reports an order that QUIK has not answered yet.

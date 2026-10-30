@@ -11,12 +11,11 @@ const docker = process.env.DOCKER_BIN || 'docker';
 // Broker replies are {success, code, message, data}: a success yields data, a
 // failure {code, error, error_code, ...data}.
 const unwrap=(path,v)=>path.startsWith('/api/v1/admin/')||!v||typeof v!=='object'||!('success' in v)?v:v.success?v.data:{...(v.data&&typeof v.data==='object'?v.data:{}),code:v.code,error:v.message,error_code:v.error_code};
-async function request(path, token, method = 'GET', body, expected = 200, idempotencyKey) {
+async function request(path, token, method = 'GET', body, expected = 200) {
   const response = await fetch(base + path, {
     method,
     headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...(body ? { 'Content-Type': 'application/json' } : {}),
-      ...(idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : {}) },
+      ...(body ? { 'Content-Type': 'application/json' } : {}) },
     body: body ? JSON.stringify(body) : undefined,
     signal: AbortSignal.timeout(15000),
   });
@@ -134,10 +133,7 @@ async function main() {
     ClassCode: 'TQBR', SecCode: 'SBER', Operation: 'Купля', Price: 100, Qty: 1,
     Account: 'SMOKE', ClientCode: 'SMOKE',
   };
-  const fillKey = `SMOKE-${run}-fill`;
-  const created = await request('/api/v1/orders', first.token, 'POST', order, 201, fillKey);
-  const repeated = await request('/api/v1/orders', first.token, 'POST', order, 200, fillKey);
-  assert.equal(repeated.id, created.id);
+  const created = await request('/api/v1/orders', first.token, 'POST', order, 201);
   assert.ok(created.OrderNum, 'the reply comes after QUIK accepted the order');
   assert.equal(created.SecCode, 'SBER');
   await request(`/api/v1/orders/${created.id}`, second.token, 'GET', undefined, 404);
@@ -149,7 +145,7 @@ async function main() {
   const listed = await request('/api/v1/orders?limit=1000', first.token);
   assert.ok(Array.isArray(listed) && listed.some((row) => String(row.OrderNum) === String(filledRow.OrderNum)), 'list must contain the raw row');
   await events.waitFor('order.updated');
-  console.log('PASS create / idempotency / fill / trade / broker isolation / raw QUIK Orders row');
+  console.log('PASS create / fill / trade / broker isolation / raw QUIK Orders row');
   console.log('PASS realtime SSE over native TLS gRPC');
 
   const cancel = await request('/api/v1/orders', first.token, 'POST', order, 201);

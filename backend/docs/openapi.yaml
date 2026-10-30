@@ -279,18 +279,9 @@ paths:
 
         Ответ — заявка в тех же именах плюс `OrderNum`, `State`, `Balance`, `FirmId`, `RejectReason` и `id` шлюза.
 
-        Защита от дублей — необязательный заголовок `Idempotency-Key`.
+        Каждый запрос создаёт новую заявку; перед повтором после сетевой ошибки проверьте `GET /api/v1/orders`.
 
         Шлюз отправляет заявку в QUIK и отвечает после ответа QUIK (ожидание до `ORDER_ANSWER_TIMEOUT`, 10 с).
-      parameters:
-        - name: Idempotency-Key
-          in: header
-          required: false
-          description: "Ключ повтора (до 255 символов). Повтор с тем же ключом и параметрами возвращает исходную заявку; без заголовка каждый запрос создаёт новую."
-          schema:
-            type: string
-            maxLength: 255
-          example: "TEST0003"
       requestBody:
         required: true
         content:
@@ -306,8 +297,6 @@ paths:
               Account: "1-3101-006"
               ClientCode: "006"
       responses:
-        "200":
-          description: Idempotent existing order, accepted by QUIK
         "201":
           description: Sent to QUIK and accepted (quik_order_id set)
         "202":
@@ -316,8 +305,6 @@ paths:
           description: Rejected by QUIK (code ORDER_REJECTED, reason in error and order.reject_reason) or by gateway risk limits
         "502":
           description: Not delivered to QUIK (code ORDER_FAILED)
-        "409":
-          description: Idempotency-Key already used with different order parameters (code IDEMPOTENCY_CONFLICT)
         "401":
           description: Unauthorized
         "403":

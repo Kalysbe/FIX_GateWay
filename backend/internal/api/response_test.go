@@ -64,21 +64,20 @@ func TestDecodeJSONBody_UnknownField(t *testing.T) {
 func TestWriteOrderAnswer(t *testing.T) {
 	reason := "Недостаточно средств"
 	for _, tc := range []struct {
-		status     domain.OrderStatus
-		reason     *string
-		idempotent bool
-		code       int
-		want       string
+		status domain.OrderStatus
+		reason *string
+		code   int
+		want   string
 	}{
-		{domain.OrderAcknowledged, nil, false, 201, `"State":"Активна"`},
-		{domain.OrderFilled, nil, true, 200, `"State":"Исполнена"`},
-		{domain.OrderRejected, &reason, false, 422, `"RejectReason":"` + reason},
-		{domain.OrderFailed, nil, false, 502, "ORDER_FAILED"},
-		{domain.OrderQueued, nil, false, 202, "QUIK_ANSWER_PENDING"},
-		{domain.OrderSent, nil, true, 202, "QUIK_ANSWER_PENDING"},
+		{domain.OrderAcknowledged, nil, 201, `"State":"Активна"`},
+		{domain.OrderFilled, nil, 201, `"State":"Исполнена"`},
+		{domain.OrderRejected, &reason, 422, `"RejectReason":"` + reason},
+		{domain.OrderFailed, nil, 502, "ORDER_FAILED"},
+		{domain.OrderQueued, nil, 202, "QUIK_ANSWER_PENDING"},
+		{domain.OrderSent, nil, 202, "QUIK_ANSWER_PENDING"},
 	} {
 		w := httptest.NewRecorder()
-		writeOrderAnswer(w, domain.Order{Status: tc.status, RejectReason: tc.reason}, tc.idempotent)
+		writeOrderAnswer(w, domain.Order{Status: tc.status, RejectReason: tc.reason})
 		if w.Code != tc.code || !strings.Contains(w.Body.String(), tc.want) {
 			t.Fatalf("%s: %d %s", tc.status, w.Code, w.Body.String())
 		}
@@ -109,14 +108,14 @@ func TestWriteCancelAnswer(t *testing.T) {
 func TestRejectCodes(t *testing.T) {
 	reason := "Вам запрещена работа по данному торговому счету; OrdRejReason=8637225"
 	w := httptest.NewRecorder()
-	writeOrderAnswer(w, domain.Order{Status: domain.OrderRejected, RejectReason: &reason}, false)
+	writeOrderAnswer(w, domain.Order{Status: domain.OrderRejected, RejectReason: &reason})
 	body := w.Body.String()
 	if !strings.Contains(body, `"error_code":8637225`) || !strings.Contains(body, `"error":"Вам запрещена работа по данному торговому счету"`) {
 		t.Fatal(body)
 	}
 	noCode := "[QME] Цена вне границ"
 	w = httptest.NewRecorder()
-	writeOrderAnswer(w, domain.Order{Status: domain.OrderRejected, RejectReason: &noCode}, false)
+	writeOrderAnswer(w, domain.Order{Status: domain.OrderRejected, RejectReason: &noCode})
 	if !strings.Contains(w.Body.String(), `"error_code":null`) {
 		t.Fatal(w.Body.String())
 	}

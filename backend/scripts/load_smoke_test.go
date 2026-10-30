@@ -6,18 +6,17 @@ import (
 	"testing"
 )
 
-func TestSmokeRejectsFailedAndIdempotentResponses(t *testing.T) {
+func TestSmokeRejectsFailedResponses(t *testing.T) {
 	for _, code := range []int{http.StatusCreated, http.StatusOK, http.StatusBadRequest, http.StatusInternalServerError} {
 		t.Run(http.StatusText(code), func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if r.URL.Path != "/api/v1/orders" || r.Method != http.MethodPost || r.Header.Get("Authorization") != "Bearer test-token" ||
-					r.Header.Get("Idempotency-Key") != "smoke-1" {
+				if r.URL.Path != "/api/v1/orders" || r.Method != http.MethodPost || r.Header.Get("Authorization") != "Bearer test-token" {
 					t.Errorf("wrong request: %s %s", r.Method, r.URL.Path)
 				}
 				w.WriteHeader(code)
 			}))
 			defer server.Close()
-			err := createSmokeOrder(server.Client(), server.URL, "test-token", "smoke-1", []byte(`{"client_code":"006"}`))
+			err := createSmokeOrder(server.Client(), server.URL, "test-token", []byte(`{"client_code":"006"}`))
 			if (err == nil) != (code == http.StatusCreated) {
 				t.Fatalf("HTTP %d returned %v", code, err)
 			}

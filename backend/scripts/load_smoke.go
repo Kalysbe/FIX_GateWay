@@ -15,8 +15,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-
-	"github.com/google/uuid"
 )
 
 func main() {
@@ -32,8 +30,6 @@ func main() {
 		fmt.Fprintln(os.Stderr, "valid http(s) -url, -token, -account, -client-code and positive -n/-w required")
 		os.Exit(2)
 	}
-	runPrefix := "LOAD-" + uuid.NewString()
-
 	var ok, fail atomic.Int64
 	jobs := make(chan int, *workers)
 	var wg sync.WaitGroup
@@ -43,12 +39,12 @@ func main() {
 		go func() {
 			defer wg.Done()
 			client := &http.Client{Timeout: 10 * time.Second}
-			for i := range jobs {
+			for range jobs {
 				body, _ := json.Marshal(map[string]any{
 					"Account": *account, "ClientCode": *clientCode,
 					"SecCode": "SBER", "ClassCode": "TQBR", "Operation": "Купля", "Qty": 1, "Price": 100,
 				})
-				if err := createSmokeOrder(client, base, *token, fmt.Sprintf("%s-%d", runPrefix, i), body); err != nil {
+				if err := createSmokeOrder(client, base, *token, body); err != nil {
 					fail.Add(1)
 				} else {
 					ok.Add(1)
@@ -76,14 +72,13 @@ func normalizeGatewayURL(raw string) (string, error) {
 	return strings.TrimRight(u.String(), "/"), nil
 }
 
-func createSmokeOrder(client *http.Client, base, token, idempotencyKey string, body []byte) error {
+func createSmokeOrder(client *http.Client, base, token string, body []byte) error {
 	req, err := http.NewRequest(http.MethodPost, base+"/api/v1/orders", bytes.NewReader(body))
 	if err != nil {
 		return err
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Idempotency-Key", idempotencyKey)
 	resp, err := client.Do(req)
 	if err != nil {
 		return err
