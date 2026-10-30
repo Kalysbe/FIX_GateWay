@@ -21,10 +21,13 @@ const modes=(process.env.CAPACITY_MODES||'adapter-1,adapter-2,both').split(',');
 assert.ok(modes.every(m=>['adapter-1','adapter-2','both'].includes(m)));
 let admin,token,tokenId,brokerId;
 const report={run,started:new Date().toISOString(),environment:base,seconds,simulatorFillDelaySeconds:3,results:[]};
+// Broker replies are {success, code, message, data}: a success yields data, a
+// failure {code, error, ...data}.
+const unwrap=(path,v)=>path.startsWith('/api/v1/admin/')||!v||typeof v!=='object'||!('success' in v)?v:v.success?v.data:{...(v.data&&typeof v.data==='object'?v.data:{}),code:v.code,error:v.message};
 async function request(path,auth=admin,method='GET',body,idempotencyKey){
   const t=performance.now();
   const r=await fetch(base+path,{method,headers:{...(auth?{Authorization:`Bearer ${auth}`} :{}),...(body?{'Content-Type':'application/json'}:{}),...(idempotencyKey?{'Idempotency-Key':idempotencyKey}:{})},body:body?JSON.stringify(body):undefined,signal:AbortSignal.timeout(15000)});
-  const data=await r.json();return {status:r.status,data,ms:performance.now()-t};
+  const data=unwrap(path,await r.json());return {status:r.status,data,ms:performance.now()-t};
 }
 async function expect(path,auth,method,body,status=200){const r=await request(path,auth,method,body);assert.equal(r.status,status,`${path}: ${JSON.stringify(r.data)}`);return r.data;}
 async function sql(q){

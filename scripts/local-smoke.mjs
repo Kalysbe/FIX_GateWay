@@ -8,6 +8,9 @@ const base = 'http://127.0.0.1:28080';
 const compose = ['compose', '-f', 'deploy/docker-compose.local.yml'];
 const docker = process.env.DOCKER_BIN || 'docker';
 
+// Broker replies are {success, code, message, data}: a success yields data, a
+// failure {code, error, ...data}.
+const unwrap=(path,v)=>path.startsWith('/api/v1/admin/')||!v||typeof v!=='object'||!('success' in v)?v:v.success?v.data:{...(v.data&&typeof v.data==='object'?v.data:{}),code:v.code,error:v.message};
 async function request(path, token, method = 'GET', body, expected = 200, idempotencyKey) {
   const response = await fetch(base + path, {
     method,
@@ -17,7 +20,7 @@ async function request(path, token, method = 'GET', body, expected = 200, idempo
     body: body ? JSON.stringify(body) : undefined,
     signal: AbortSignal.timeout(15000),
   });
-  const result = await response.json();
+  const result = unwrap(path, await response.json());
   assert.equal(response.status, expected, `${method} ${path}: ${response.status} ${result.error || ''}`);
   return result;
 }

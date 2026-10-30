@@ -16,9 +16,12 @@ const containers=JSON.parse(command(['ps','--format','json','access']));
 assert.equal(containers.Project,'fix-gateway-verification');
 assert.ok(containers.Publishers.some(p=>p.PublishedPort===38080 && p.TargetPort===8080));
 function sql(statement){return execFileSync(docker,[...compose,'exec','-T','postgres','psql','-U','gateway','-d','fix_gateway_local','-v','ON_ERROR_STOP=1','-At'],{input:statement,encoding:'utf8',timeout:15000}).trim();}
+// Broker replies are {success, code, message, data}: a success yields data, a
+// failure {code, error, ...data}.
+const unwrap=(path,v)=>path.startsWith('/api/v1/admin/')||!v||typeof v!=='object'||!('success' in v)?v:v.success?v.data:{...(v.data&&typeof v.data==='object'?v.data:{}),code:v.code,error:v.message};
 async function call(path,token='',method='GET',body,status=200,key){
  const response=await fetch(base+path,{method,headers:{...(token?{Authorization:`Bearer ${token}`} : {}),...(body?{'Content-Type':'application/json'}:{}),...(key?{'Idempotency-Key':key}:{})},body:body?JSON.stringify(body):undefined,signal:AbortSignal.timeout(20000)});
- const value=await response.json();assert.ok([].concat(status).includes(response.status),`${method} ${path}: ${JSON.stringify(value)}`);return value;
+ const value=unwrap(path,await response.json());assert.ok([].concat(status).includes(response.status),`${method} ${path}: ${JSON.stringify(value)}`);return value;
 }
 async function until(fn){const deadline=Date.now()+45000;while(Date.now()<deadline){try{const value=await fn();if(value)return value;}catch{}await delay(200);}throw Error('Verification timed out');}
 // Every shipped migration must be applied, whichever is the latest.

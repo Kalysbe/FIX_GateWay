@@ -9,6 +9,11 @@ info:
     Токен выдаётся оператором. `broker_id` определяется по токену автоматически.
     Подключение: VPN + TLS. Клиентские сертификаты и HMAC по умолчанию не требуются.
 
+    **Единый формат ответа.** Любой ответ любого метода, успешный или нет, имеет вид
+    `{"success": true|false, "code": "OK"|<код ошибки>, "message": null|<причина>, "data": <данные>|null}`.
+    Списки дополнительно содержат `has_more` и `next_offset`. Проверяйте `success`, причину берите из `message`.
+    При отказе QUIK (`ORDER_REJECTED`) и ожидании ответа QUIK (`QUIK_ANSWER_PENDING`) в `data` — заявка.
+
     Текущие заявки — исходные строки таблицы QUIK `Orders` вашей фирмы (см. `QuikOrderRow`).
 
     Брокерские события gRPC имеют REST-источники: `order.updated` → GET `/api/v1/orders`,
@@ -443,7 +448,7 @@ paths:
       description: |
         Требует `orders:read`. Текущие заявки из таблицы QUIK `Orders` только вашей фирмы
         (`quik_firm` токена, при пустом значении — код брокера). Ответ — JSON-массив исходных
-        строк БД: имена колонок, числа, строки и `null` без изменений, без обёртки и
+        строк БД: имена колонок, числа, строки и `null` без изменений, в поле `data`, без
         вычисляемых полей. Числа могут иметь 19 знаков (`OrderNum`) — разбирайте их без потери точности.
         Страницы: заголовки `X-Has-More` и `X-Next-Offset`. Если таблица меняется между запросами,
         перечитайте список с первой страницы. REST-источник события gRPC `order.updated`.
@@ -506,7 +511,7 @@ paths:
       security:
         - bearerAuth: []
       description: |
-        Требует `orders:read`. Возвращает одну исходную строку QUIK `Orders` без обёртки,
+        Требует `orders:read`. Возвращает одну исходную строку QUIK `Orders` в поле `data`,
         переименования колонок, вычисляемых полей и истории. Тот же формат, что `data_json`
         события gRPC `order.updated`.
       parameters:
@@ -744,13 +749,6 @@ components:
         FirmId: {type: string}
         RejectReason: {type: string, nullable: true, description: Причина отказа QUIK}
         id: {type: string, format: uuid}
-        code:
-          type: string
-          enum: [ORDER_REJECTED, ORDER_FAILED, QUIK_ANSWER_PENDING, QUIK_ANSWER_UNKNOWN, CANCEL_REJECTED, TRADING_PAUSED, MAX_ORDER_QUANTITY, MAX_OPEN_ORDERS]
-          description: Только в ответах 202/409/422/502
-        error:
-          type: string
-          description: Только в ответах 202/422/502
     QuikOrderRow:
       type: object
       additionalProperties: true

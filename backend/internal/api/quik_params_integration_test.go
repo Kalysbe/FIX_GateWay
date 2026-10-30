@@ -125,7 +125,7 @@ INSERT INTO public."Orders" SELECT n, c, (now() AT TIME ZONE 'Asia/Bishkek')::da
 		if w.Code != want {
 			t.Fatalf("%s %s: %d %s", method, path, w.Code, w.Body.String())
 		}
-		return strings.TrimSpace(w.Body.String())
+		return strings.TrimSpace(string(unwrapBrokerData(path, w.Body.Bytes())))
 	}
 	get := func(path string, want int) string { t.Helper(); return call("GET", path, token.Raw, nil, want) }
 	// Before the source is configured: 503, never FIX quotes.

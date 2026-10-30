@@ -13,9 +13,12 @@ assert.equal(config.name,'fix-gateway-verification');
 assert.equal(config.networks.default.internal,true);
 assert.equal(config.services.gateway.environment.ADAPTER_HOST_OVERRIDE,'fixsimulator');
 assert.equal(config.services.fixsimulator.environment.SIM_FILL_DELAY,'30s');
+// Broker replies are {success, code, message, data}: a success yields data, a
+// failure {code, error, ...data}.
+const unwrap=(path,v)=>path.startsWith('/api/v1/admin/')||!v||typeof v!=='object'||!('success' in v)?v:v.success?v.data:{...(v.data&&typeof v.data==='object'?v.data:{}),code:v.code,error:v.message};
 async function call(path,token='',method='GET',body,expected=200){
  const r=await fetch('http://127.0.0.1:38080'+path,{method,headers:{...(token?{Authorization:`Bearer ${token}`} : {}),...(body?{'Content-Type':'application/json'}:{})},body:body?JSON.stringify(body):undefined,signal:AbortSignal.timeout(15000)});
- const result=await r.json();assert.equal(r.status,expected,`${method} ${path}: ${JSON.stringify(result)}`);return result;
+ const result=unwrap(path,await r.json());assert.equal(r.status,expected,`${method} ${path}: ${JSON.stringify(result)}`);return result;
 }
 function sql(statement){return command(['exec','-T','postgres','psql','-U','gateway','-d','fix_gateway_local','-v','ON_ERROR_STOP=1','-At','-c',statement]).trim();}
 // Broker REST returns only QUIK Orders rows; fills are checked in the local ledger.

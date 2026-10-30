@@ -12,6 +12,9 @@ function sql(statement) {
   return execFileSync(docker, [...compose, 'exec', '-T', 'postgres', 'psql', '-U', 'gateway', '-d', 'fix_gateway_local', '-v', 'ON_ERROR_STOP=1', '-At'],
     { input: statement, encoding: 'utf8', timeout: 15000 }).trim();
 }
+// Broker replies are {success, code, message, data}: a success yields data, a
+// failure {code, error, ...data}.
+const unwrap=(path,v)=>path.startsWith('/api/v1/admin/')||!v||typeof v!=='object'||!('success' in v)?v:v.success?v.data:{...(v.data&&typeof v.data==='object'?v.data:{}),code:v.code,error:v.message};
 async function call(path, token, method = 'GET', body, idempotencyKey) {
   const started = performance.now();
   const response = await fetch(base + path, {
@@ -19,7 +22,7 @@ async function call(path, token, method = 'GET', body, idempotencyKey) {
       ...(idempotencyKey ? {'Idempotency-Key':idempotencyKey} : {}) },
     body: body ? JSON.stringify(body) : undefined, signal: AbortSignal.timeout(20000),
   });
-  return {status:response.status, body:await response.json(), ms:performance.now()-started,
+  return {status:response.status, body:unwrap(path, await response.json()), ms:performance.now()-started,
     retryMs:Math.max(100, Number(response.headers.get('Retry-After') || 1) * 1000)};
 }
 async function expect(path, token, method, body, status=200) {

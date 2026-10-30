@@ -85,7 +85,7 @@ INSERT INTO public."Orders" VALUES
 		if w.Code != want {
 			t.Fatalf("%s: %d %s", path, w.Code, w.Body.String())
 		}
-		return w.Body.Bytes()
+		return unwrapBrokerData(path, w.Body.Bytes())
 	}
 	var page []quikexport.Order
 	if err := json.Unmarshal(call("/api/v1/orders?firm_id=9999&broker_id=99999", 200), &page); err != nil || len(page) != 1 || page[0].Text("FirmId") != "2040" {

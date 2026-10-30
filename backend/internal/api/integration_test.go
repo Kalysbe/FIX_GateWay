@@ -102,9 +102,12 @@ func TestOrderIdempotencyIntegration(t *testing.T) {
 		return rr
 	}
 	decodeOrder := func(rr *httptest.ResponseRecorder) map[string]any {
-		var order map[string]any
-		_ = json.Unmarshal(rr.Body.Bytes(), &order)
-		return order
+		var env struct {
+			Code string         `json:"code"`
+			Data map[string]any `json:"data"`
+		}
+		_ = json.Unmarshal(rr.Body.Bytes(), &env)
+		return env.Data
 	}
 
 	body := map[string]any{

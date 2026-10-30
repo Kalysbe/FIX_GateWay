@@ -103,7 +103,7 @@ INSERT INTO public."Firms" VALUES ('KSE','2040','Сенти',NULL,1),('KSE','999
 		if w.Code != want {
 			t.Fatalf("%s %s: %d %s", method, path, w.Code, w.Body.String())
 		}
-		return strings.TrimSpace(w.Body.String())
+		return strings.TrimSpace(string(unwrapBrokerData(path, w.Body.Bytes())))
 	}
 	order := map[string]any{"Account": "1-3001-71", "ClientCode": "C1", "SecCode": "X", "ClassCode": "Y",
 		"Operation": "Купля", "Qty": 1, "Price": 1}

@@ -40,6 +40,9 @@ func mergeOpenAPI(baseFile string, routes []docRoute, brokerOnly bool, r *http.R
 		}
 		ensureOperation(doc, rt)
 	}
+	if brokerOnly {
+		wrapBrokerResponses(doc)
+	}
 	if r != nil && r.Host != "" {
 		scheme := "http"
 		if r.TLS != nil || strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https") {

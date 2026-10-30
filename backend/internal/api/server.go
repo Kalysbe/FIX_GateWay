@@ -287,7 +287,7 @@ func (s *Server) Handler() http.Handler {
 		}, h)
 	}
 	h = observability.RequestIDMiddleware(h)
-	return s.requireHTTPS(s.cors(s.limitBody(h)))
+	return s.brokerEnvelope(s.requireHTTPS(s.cors(s.limitBody(h))))
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
@@ -407,6 +407,9 @@ func writeOrderAnswer(w http.ResponseWriter, order domain.Order, idempotent bool
 	case order.Status == domain.OrderRejected:
 		body["code"] = "ORDER_REJECTED"
 		body["error"] = "rejected by QUIK"
+		if text := quikRejectText(order.RejectReason); text != "" {
+			body["error"] = text
+		}
 		writeJSON(w, http.StatusUnprocessableEntity, body)
 	case order.Status == domain.OrderFailed:
 		body["code"] = "ORDER_FAILED"
@@ -428,7 +431,8 @@ func orderReply(o domain.Order) map[string]any {
 	if o.Price != nil {
 		price = num(*o.Price)
 	}
-	if o.QuikOrderID != nil && *o.QuikOrderID != "" {
+	// QUIK reports 37=0 on a rejected order: there is no QUIK order number.
+	if o.QuikOrderID != nil && strings.TrimLeft(*o.QuikOrderID, "0 ") != "" {
 		orderNum = *o.QuikOrderID
 		if n, err := decimal.NewFromString(*o.QuikOrderID); err == nil && n.IsInteger() {
 			orderNum = json.Number(*o.QuikOrderID)
@@ -439,8 +443,8 @@ func orderReply(o domain.Order) map[string]any {
 		operation = orders.OperationSell
 	}
 	var rejectReason any
-	if o.RejectReason != nil && *o.RejectReason != "" {
-		rejectReason = *o.RejectReason
+	if text := quikRejectText(o.RejectReason); text != "" {
+		rejectReason = text
 	}
 	return map[string]any{
 		"OrderNum": orderNum, "State": quikOrderState(o.Status),
@@ -449,6 +453,19 @@ func orderReply(o domain.Order) map[string]any {
 		"Account": o.TradingAccount, "ClientCode": o.ClientCode, "FirmId": o.QuikFirm,
 		"RejectReason": rejectReason, "id": o.ID,
 	}
+}
+
+// quikRejectText is QUIK's own reject text without the gateway's appended FIX
+// OrdRejReason number.
+func quikRejectText(reason *string) string {
+	if reason == nil {
+		return ""
+	}
+	text := *reason
+	if i := strings.Index(text, "OrdRejReason="); i >= 0 {
+		text = text[:i]
+	}
+	return strings.TrimRight(strings.TrimSpace(text), ";")
 }
 
 // quikOrderState names the gateway status as QUIK Orders.State does; nil
