@@ -19,7 +19,7 @@ export function classOptions(rows: DBOrder[], chosen: string[]): { code: string;
   return out;
 }
 
-/** The QUIK classes whose current trades are served to the admin UI and brokers. */
+/** The global choice of QUIK classes: Params, Trades, Orders, Securities and Classes, admin UI and brokers. */
 export function MarketClassesSettings() {
   const qc = useQueryClient();
   const toast = useToast();
@@ -40,9 +40,8 @@ export function MarketClassesSettings() {
   const save = useMutation({
     mutationFn: () => api<Settings>("/api/v1/admin/market-data/settings", { method: "PATCH", body: JSON.stringify({ classes: chosen }) }),
     onSuccess: () => {
-      toast.push("Классы текущих торгов сохранены", "ok");
-      qc.invalidateQueries({ queryKey: ["market-data-settings"] });
-      qc.invalidateQueries({ queryKey: ["admin-market-data"] });
+      toast.push("Классы QUIK сохранены", "ok");
+      qc.invalidateQueries();
     },
     onError: (err) => toast.push(err instanceof Error ? err.message : "Не удалось сохранить классы"),
   });
@@ -52,7 +51,8 @@ export function MarketClassesSettings() {
   const changed = draft != null && draft.join(",") !== saved.join(",");
 
   return <div className="card space-y-3">
-    <div className="text-[12px] font-medium text-muted">Классы текущих торгов{settingsQ.data ? `: ${saved.length ? saved.join(", ") : "все"}` : ""}</div>
+    <div className="text-[12px] font-medium text-muted">Классы QUIK{settingsQ.data ? `: ${saved.length ? saved.join(", ") : "все"}` : ""}</div>
+    <div className="text-xs text-muted">Настройка действует во всей системе: текущие торги, заявки, котировки, сделки, инструменты, админка и брокерский API. Ничего не выбрано — все классы.</div>
     {classesQ.error ? <div className="text-xs text-muted">Таблица QUIK Classes недоступна</div> : null}
     <div className="flex flex-wrap gap-x-4 gap-y-2">
       {options.map(o => <label key={o.code} className="flex items-center gap-2 text-sm">

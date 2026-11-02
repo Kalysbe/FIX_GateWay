@@ -133,7 +133,7 @@ INSERT INTO public."Orders" SELECT n, c, (now() AT TIME ZONE 'Asia/Bishkek')::da
 	get("/api/v1/market-data", 503)
 	classes := quikexport.NewClassSettings(pool)
 	store := quikexport.NewStore(readOnly)
-	store.SetParamClasses(classes.Classes)
+	store.SetServedClasses(classes.Classes)
 	s.SetQuikExport(store)
 	s.SetMarketDataClasses(classes)
 	// Today's LIST_GBA rows (the chosen class), only the chosen columns, as stored.
@@ -193,9 +193,16 @@ INSERT INTO public."Orders" SELECT n, c, (now() AT TIME ZONE 'Asia/Bishkek')::da
 	// Quotes: today's Orders rows in state "Активна" of every firm, as stored; brokers cannot read them here.
 	active7412 := `{"OrderNum":7412,"ClassCode":"LIST_GBA","TradeDate":"` + today + `","SecCode":"GBA02270915","FirmId":"SENTI2004","Operation":"Купля","State":"Активна","Qty":10,"Balance":10,"Price":100.00000000}`
 	active7414 := `{"OrderNum":7414,"ClassCode":"AUCT_GBA","TradeDate":"` + today + `","SecCode":"GBA02270915","FirmId":"2040","Operation":"Продажа","State":"Активна","Qty":1,"Balance":1,"Price":99}`
+	// Only of the served class; with no choice, of every class.
+	if got := call("GET", "/api/v1/admin/quotes", jwt, nil, 200); got != "["+active7412+"]" {
+		t.Fatal(got)
+	}
+	call("GET", "/api/v1/admin/market-data/AUCT_GBA/GBA02270915/details", jwt, nil, 404)
+	call("PATCH", "/api/v1/admin/market-data/settings", jwt, map[string]any{"classes": []string{}}, 200)
 	if got := call("GET", "/api/v1/admin/quotes", jwt, nil, 200); got != "["+active7414+","+active7412+"]" {
 		t.Fatal(got)
 	}
+	call("PATCH", "/api/v1/admin/market-data/settings", jwt, map[string]any{"classes": []string{"LIST_GBA"}}, 200)
 	if got := call("GET", "/api/v1/admin/quotes?board=LIST_GBA&symbol=GBA02270915", jwt, nil, 200); got != "["+active7412+"]" {
 		t.Fatal(got)
 	}

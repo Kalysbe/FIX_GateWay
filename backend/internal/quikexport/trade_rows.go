@@ -33,6 +33,10 @@ func (s *Store) ListTrades(ctx context.Context, f TradeFilter) (TradePage, error
 	if s == nil || s.pool == nil {
 		return out, ErrNotConfigured
 	}
+	classes, err := s.servedClasses(ctx)
+	if err != nil {
+		return out, err
+	}
 	limit := f.Limit
 	if limit > 0 {
 		limit++
@@ -40,8 +44,9 @@ func (s *Store) ListTrades(ctx context.Context, f TradeFilter) (TradePage, error
 	rows, err := s.pool.Query(ctx, `SELECT row_to_json(t) FROM public."Trades" t
 WHERE ($1::text IS NULL OR (btrim(t."FirmId")=$1 AND $1<>''))
 AND (NOT $4::boolean OR t."TradeDate"::date=(now() AT TIME ZONE 'Asia/Bishkek')::date)
+AND ($5::text[] IS NULL OR btrim(t."ClassCode"::text)=ANY($5::text[]))
 ORDER BY t."TradeDate" DESC, t."TradeNum" DESC, t."ClassCode", t."Operation"
-LIMIT NULLIF($2,0) OFFSET $3`, f.Firm, limit, f.Offset, f.Today)
+LIMIT NULLIF($2,0) OFFSET $3`, f.Firm, limit, f.Offset, f.Today, classes)
 	if err != nil {
 		return out, err
 	}

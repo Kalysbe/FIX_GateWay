@@ -230,15 +230,16 @@ func main() {
 		}
 	})
 	go server.RunDashboardRefresh(ctx)
+	marketClasses := quikexport.NewClassSettings(pool)
+	server.SetMarketDataClasses(marketClasses)
+	orderSvc.SetServedClasses(marketClasses.Classes)
+	if quikExportStore != nil {
+		quikExportStore.SetServedClasses(marketClasses.Classes)
+	}
+	server.SetQuikExport(quikExportStore)
 	if os.Getenv("TRADE_RECONCILIATION_ENABLED") == "true" {
 		go server.RunTradeReconciliation(ctx, quikExportStore)
 	}
-	marketClasses := quikexport.NewClassSettings(pool)
-	server.SetMarketDataClasses(marketClasses)
-	if quikExportStore != nil {
-		quikExportStore.SetParamClasses(marketClasses.Classes)
-	}
-	server.SetQuikExport(quikExportStore)
 	if quikExportStore != nil {
 		go quikExportStore.RunOrders(ctx, func(change quikexport.OrderChange) {
 			hub.BroadcastOrderForFirm(change.Order.Raw, strings.TrimSpace(change.Order.Text("FirmId")), change.Removed)

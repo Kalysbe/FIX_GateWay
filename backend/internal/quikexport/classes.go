@@ -10,9 +10,10 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// Market data serves the Params rows of the QUIK classes chosen by an
-// administrator. The choice is kept in the gateway's own gateway_settings,
-// comma-separated; an empty choice, the default, serves every class.
+// The gateway serves only the QUIK classes chosen by an administrator: rows of
+// Params, Trades, Orders, Securities and Classes of other classes are not read
+// out. The choice is kept in the gateway's own gateway_settings, comma-separated;
+// an empty choice, the default, serves every class.
 const (
 	ParamClassesKey     = "market_data_classes"
 	maxParamClasses     = 50
@@ -88,8 +89,35 @@ ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now(), upda
 	return list, nil
 }
 
+// SetServedClasses sets where the served classes come from; it is called once
+// before the store is used. Without it, or with an empty choice, every class is served.
+func (s *Store) SetServedClasses(classes func(context.Context) ([]string, error)) {
+	s.classes = classes
+}
+
+type allClassesKey struct{}
+
+// WithAllClasses lifts the served classes for one operation: an active order
+// must stay cancellable after its class is taken out of the choice.
+func WithAllClasses(ctx context.Context) context.Context {
+	return context.WithValue(ctx, allClassesKey{}, true)
+}
+
+// servedClasses returns nil when every class is served: the queries read NULL so.
+func (s *Store) servedClasses(ctx context.Context) ([]string, error) {
+	if s.classes == nil || ctx.Value(allClassesKey{}) != nil {
+		return nil, nil
+	}
+	list, err := s.classes(ctx)
+	if err != nil || len(list) == 0 {
+		return nil, err
+	}
+	return list, nil
+}
+
 // ListClasses returns ClassCode and ClassName of every QUIK class, from the
-// latest TradeDate of each, for choosing the served classes.
+// latest TradeDate of each. It is the list the served classes are chosen from,
+// so it is the one read that the choice does not limit.
 func (s *Store) ListClasses(ctx context.Context) ([]Row, error) {
 	return s.rows(ctx, `SELECT row_to_json(c) FROM (
 SELECT DISTINCT ON (btrim(c."ClassCode"::text)) c."ClassCode", c."ClassName" FROM public."Classes" c

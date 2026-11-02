@@ -4,6 +4,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -20,10 +21,10 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// A failure after the order transaction commits (LinkExecution, crash) is
-// retried with the same inbox receipt. The order is not applied twice, and
-// the retry still links the trade side to the local execution.
-func TestRetryAfterCommittedFillRestoresTradeSideLink(t *testing.T) {
+// A report retried after the order transaction committed is not applied twice,
+// and the next QUIK reconciliation links the QUIK side to the local execution
+// whichever of the two arrived first.
+func TestQUIKSideLinksToLocalExecutionAfterRetry(t *testing.T) {
 	dsn := os.Getenv("DATABASE_URL")
 	if isolated := os.Getenv("TRADE_LEDGER_API_TEST_DATABASE_URL"); isolated != "" {
 		dsn = isolated
@@ -58,8 +59,16 @@ VALUES($1,$2,$3,$4,'BUY','LIMIT','DAY',5,10,'ACKNOWLEDGED','2040',$5)`, orderID,
 	report := domain.ExecutionReport{AdapterID: "adapter-1", ClOrdID: clOrdID, OrderID: "261023-LINK_TEST-77", ExecID: "link-exec-1", ExecType: "2", OrdStatus: "2",
 		TradeDate: "20261023", LastQty: "5", LastPx: "10", CumQty: "5", LeavesQty: "0",
 		RawFIX: "8=FIX.4.2|35=8|37=261023-LINK_TEST-77|11=" + clOrdID + "|17=link-exec-1|880=" + match + "|20=0|150=2|39=2|75=20261023|100=LINK_TEST|48=" + symbol + "|54=1|32=5|31=10|14=5|151=0|5001=" + match[len("261023-LINK_TEST-"):] + "|5002=77|109=buyer|5018=2040|"}
+	number := match[len("261023-LINK_TEST-"):]
+	// The QUIK row is read before the FIX report is processed.
+	if err := s.tradeLedger.RecordQUIK(ctx, json.RawMessage(`{"TradeNum":"`+number+`","TradeDate":"23-10-2026","ClassCode":"LINK_TEST","SecCode":"`+symbol+`","Operation":"Купля","OrderNum":"77","Qty":"5","Price":"10","ClientCode":"buyer","FirmId":"2040"}`)); err != nil {
+		t.Fatal(err)
+	}
 	receipt := orders.WithExecutionReceipt(ctx, uuid.New())
 	if err := s.OnExecution(receipt, report); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.tradeLedger.LinkLocal(ctx); err != nil {
 		t.Fatal(err)
 	}
 	linked := func() (bool, uuid.UUID) {
@@ -81,6 +90,9 @@ VALUES($1,$2,$3,$4,'BUY','LIMIT','DAY',5,10,'ACKNOWLEDGED','2040',$5)`, orderID,
 		t.Fatal(err)
 	}
 	if err := s.OnExecution(receipt, report); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.tradeLedger.LinkLocal(ctx); err != nil {
 		t.Fatal(err)
 	}
 	ok, again := linked()

@@ -144,7 +144,7 @@ func (s *Server) listQuikFirms(w http.ResponseWriter, r *http.Request) {
 }
 
 // listQuikClasses serves ClassCode and ClassName of QUIK Classes, from which
-// administrators choose the market data classes.
+// administrators choose the served classes; the choice does not limit this list.
 func (s *Server) listQuikClasses(w http.ResponseWriter, r *http.Request) {
 	if s.quikRefs == nil {
 		s.writeQuikRefError(w, errQuikRefsUnavailable)

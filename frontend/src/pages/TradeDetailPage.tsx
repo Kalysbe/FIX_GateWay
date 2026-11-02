@@ -57,7 +57,7 @@ export default function TradeDetailPage() {
       {tradeRows(deal).map(trade => <section key={trade.id} className="trade-leg-card card" data-source={trade.source} aria-label={`${sideLabel(trade.side)} · ${trade.exec_id || "Контрагент"}`}>
         <div className="mb-4 flex items-center justify-between gap-3">
           <h2 className="font-semibold">{sideLabel(trade.side)}</h2>
-          <span className={trade.side === "BUY" ? "badge-success" : "badge-danger"}>{trade.has_fix_report ? (trade.has_quik_record ? "FIX · История QUIK" : "Отчёт FIX") : "История QUIK"}</span>
+          <span className={trade.side === "BUY" ? "badge-success" : "badge-danger"}>QUIK</span>
         </div>
         <dl className="trade-leg-fields">
           <Field label="Номер сделки QUIK">{trade.quik_trade_num || deal.label}</Field>

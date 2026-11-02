@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 	"time"
 
@@ -48,7 +49,7 @@ const paramsToday = `p."TradeDate"::date=(now() AT TIME ZONE 'Asia/Bishkek')::da
 // instrument is matched by ClassCode and SecCode. Both reference tables are
 // kept per TradeDate; the latest row is used, so the names stay available
 // until QUIK reloads them for the new day. A missing reference row gives null.
-// $1 is the list of served classes (see SetParamClasses); NULL serves all.
+// $1 is the list of served classes (see SetServedClasses); NULL serves all.
 const paramRows = `SELECT p."ClassCode", p."SecCode", s."CouponValue", p.status, s."FaceUnit", s."SecShortName", s."SecFullName", c."ClassName"
 FROM public."Params" p
 LEFT JOIN LATERAL (SELECT s."CouponValue", s."FaceUnit", s."SecShortName", s."SecFullName" FROM public."Securities" s
@@ -58,24 +59,6 @@ LEFT JOIN LATERAL (SELECT c."ClassName" FROM public."Classes" c
   WHERE btrim(c."ClassCode"::text)=btrim(p."ClassCode"::text)
   ORDER BY c."TradeDate" DESC LIMIT 1) c ON true
 WHERE ` + paramsToday + ` AND ($1::text[] IS NULL OR btrim(p."ClassCode"::text)=ANY($1::text[]))`
-
-// SetParamClasses sets where the served classes come from; it is called once
-// before the store is used. Without it, or with an empty choice, every class is served.
-func (s *Store) SetParamClasses(classes func(context.Context) ([]string, error)) {
-	s.paramClasses = classes
-}
-
-// servedClasses returns nil when every class is served: paramRows reads NULL so.
-func (s *Store) servedClasses(ctx context.Context) ([]string, error) {
-	if s.paramClasses == nil {
-		return nil, nil
-	}
-	list, err := s.paramClasses(ctx)
-	if err != nil || len(list) == 0 {
-		return nil, err
-	}
-	return list, nil
-}
 
 type ParamFilter struct {
 	// Empty values match any class or instrument.
@@ -161,10 +144,16 @@ type ParamDetails struct {
 	Class    *Row `json:"class"`
 }
 
-// GetParamDetails does not apply the served-class setting: it is the admin
-// view of any instrument QUIK trades today.
+// GetParamDetails is the admin view of an instrument of a served class.
 func (s *Store) GetParamDetails(ctx context.Context, classCode, secCode string) (ParamDetails, error) {
 	classCode, secCode = strings.TrimSpace(classCode), strings.TrimSpace(secCode)
+	classes, err := s.servedClasses(ctx)
+	if err != nil {
+		return ParamDetails{}, err
+	}
+	if classes != nil && !slices.Contains(classes, classCode) {
+		return ParamDetails{}, ErrParamNotFound
+	}
 	params, err := s.row(ctx, ErrParamNotFound, `SELECT row_to_json(p) FROM public."Params" p
 WHERE `+paramsToday+` AND btrim(p."ClassCode"::text)=$1 AND btrim(p."SecCode"::text)=$2 LIMIT 1`, classCode, secCode)
 	if err != nil {

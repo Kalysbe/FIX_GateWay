@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -24,11 +25,33 @@ type Service struct {
 	obs      observability.Emitter
 	onQueued func()
 	accounts TradingAccounts
+	classes  func(context.Context) ([]string, error)
 }
 
 // TradingAccounts is the QUIK Trdaccs source of the accounts a firm may trade.
 type TradingAccounts interface {
 	TradingAccount(ctx context.Context, firm, account string) (quikexport.Row, error)
+}
+
+// SetServedClasses limits new orders to the served QUIK classes: an order of any
+// other class could be neither listed nor found afterwards. Without it, or with
+// an empty choice, every class is accepted.
+func (s *Service) SetServedClasses(classes func(context.Context) ([]string, error)) {
+	s.classes = classes
+}
+
+func (s *Service) checkServedClass(ctx context.Context, board string) error {
+	if s.classes == nil {
+		return nil
+	}
+	list, err := s.classes(ctx)
+	if err != nil {
+		return err
+	}
+	if len(list) > 0 && !slices.Contains(list, strings.TrimSpace(board)) {
+		return ErrInstrumentNotFound
+	}
+	return nil
 }
 
 // SetTradingAccounts must be called before serving requests; without it no
@@ -170,6 +193,13 @@ func (s *Service) Create(ctx context.Context, broker domain.Broker, ip string, r
 	fixAccount := strings.TrimSpace(acc.Text("TrdAccId"))
 
 	instr, err := s.store.ResolveInstrument(ctx, broker.ID, req.Symbol, req.Board)
+	if err == nil {
+		board := req.Board
+		if strings.TrimSpace(board) == "" {
+			board = instr.Board
+		}
+		err = s.checkServedClass(ctx, board)
+	}
 	if err != nil {
 		if !errors.Is(err, pgx.ErrNoRows) && !errors.Is(err, ErrInstrumentNotFound) {
 			return domain.Order{}, fmt.Errorf("%w: %w", ErrPersistenceUnavailable, err)

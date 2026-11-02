@@ -173,7 +173,6 @@ export default function TradesPage() {
                       </td>
                       <td className="px-3 py-2 align-middle">
                         <SideBadge side={t.side} />
-                        <div className="mt-1 text-[10px] text-muted">{t.has_fix_report ? (t.has_quik_record ? "FIX · QUIK" : "FIX") : "История QUIK"}</div>
                       </td>
                       <td className="px-3 py-2 align-middle">
                         <span className="font-mono text-sm tabular-nums">{t.last_qty}</span>

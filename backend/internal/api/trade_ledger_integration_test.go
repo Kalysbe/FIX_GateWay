@@ -5,11 +5,13 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http/httptest"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/fix-gateway/backend/internal/domain"
 	"github.com/fix-gateway/backend/internal/orders"
@@ -38,8 +40,10 @@ func TestTradeLedgerIncomingExternalOrderPersistsAndDetailReturnsRealSides(t *te
 	defer pool.Close()
 	ledger := tradeledger.NewStore(pool)
 	s := &Server{tradeLedger: ledger, orderStore: orders.NewStore(pool), hub: realtime.NewHub(), log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	num := fmt.Sprint(time.Now().UnixNano() % 1_000_000_000)
+	match := "261019-LEDGER_TEST-" + num
 	report := domain.ExecutionReport{AdapterID: "ledger-test", ClOrdID: "external-sell", OrderID: "261019-LEDGER_TEST-901", ExecID: "external-test-exec", ExecType: "2", OrdStatus: "2", TradeDate: "20261019", LastQty: "2", LastPx: "99", CumQty: "2", LeavesQty: "0",
-		RawFIX: "8=FIX.4.2|35=8|37=261019-LEDGER_TEST-901|11=external-sell|17=external-test-exec|880=261019-LEDGER_TEST-90901|20=0|150=2|39=2|75=20261019|100=LEDGER_TEST|48=NO_LOCAL_INSTRUMENT|54=2|32=2|31=99|14=2|151=0|5001=90901|5002=901|109=real-seller|5018=2040|"}
+		RawFIX: "8=FIX.4.2|35=8|37=261019-LEDGER_TEST-901|11=external-sell|17=external-test-exec|880=" + match + "|20=0|150=2|39=2|75=20261019|100=LEDGER_TEST|48=NO_LOCAL_INSTRUMENT|54=2|32=2|31=99|14=2|151=0|5001=" + num + "|5002=901|109=real-seller|5018=2040|"}
 	var ordersBefore int
 	_ = pool.QueryRow(ctx, `SELECT count(*) FROM orders`).Scan(&ordersBefore)
 	if err := s.OnExecution(ctx, report); err != nil {
@@ -48,12 +52,20 @@ func TestTradeLedgerIncomingExternalOrderPersistsAndDetailReturnsRealSides(t *te
 	if err := s.OnExecution(ctx, report); err != nil {
 		t.Fatal("replay failed", err)
 	}
-	raw := json.RawMessage(`{"TradeNum":"90901","TradeDate":"19-10-2026","ClassCode":"LEDGER_TEST","SecCode":"NO_LOCAL_INSTRUMENT","Operation":"Купля","OrderNum":"902","Qty":"2","Price":"99","ClientCode":"real-buyer","FirmId":"2040"}`)
-	if err := ledger.RecordQUIK(ctx, raw); err != nil {
-		t.Fatal(err)
+	var fromFIX int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM trades WHERE trade_match_id=$1`, match).Scan(&fromFIX); err != nil || fromFIX != 0 {
+		t.Fatal("FIX report created a trade", fromFIX, err)
+	}
+	for _, row := range []string{
+		`{"TradeNum":"` + num + `","TradeDate":"19-10-2026","ClassCode":"LEDGER_TEST","SecCode":"NO_LOCAL_INSTRUMENT","Operation":"Купля","OrderNum":"902","Qty":"2","Price":"99","ClientCode":"real-buyer","FirmId":"2040"}`,
+		`{"TradeNum":"` + num + `","TradeDate":"19-10-2026","ClassCode":"LEDGER_TEST","SecCode":"NO_LOCAL_INSTRUMENT","Operation":"Продажа","OrderNum":"901","Qty":"2","Price":"99","ClientCode":"real-seller","FirmId":"2040"}`,
+	} {
+		if err := ledger.RecordQUIK(ctx, json.RawMessage(row)); err != nil {
+			t.Fatal(err)
+		}
 	}
 	var id string
-	if err := pool.QueryRow(ctx, `SELECT id::text FROM trades WHERE trade_match_id='261019-LEDGER_TEST-90901'`).Scan(&id); err != nil {
+	if err := pool.QueryRow(ctx, `SELECT id::text FROM trades WHERE trade_match_id=$1`, match).Scan(&id); err != nil {
 		t.Fatal(err)
 	}
 	req := httptest.NewRequest("GET", "/api/v1/admin/trades/"+id, nil)

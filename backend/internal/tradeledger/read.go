@@ -17,7 +17,7 @@ const sideJSON = `SELECT jsonb_build_object(
 'quik_order_id',NULLIF(s.quik_order_id,''),'quik_order_num',s.quik_order_num,'fix_cl_ord_id',NULLIF(s.fix_cl_ord_id,''),
 'quik_firm',s.firm_id,'firm_name',COALESCE(NULLIF(s.firm_name,''),f.firm_name,''),'client_code',s.client_code,
 'account',s.account,'contra_broker',s.contra_broker,'adapter_id',NULLIF(s.adapter_id,''),
-'client_order_id',o.client_order_id,'broker_id',o.broker_id,'has_fix_report',s.has_fix_report,'has_quik_record',s.has_quik_record)
+'client_order_id',o.client_order_id,'broker_id',o.broker_id)
 FROM trades t JOIN trade_sides s ON s.trade_id=t.id
 LEFT JOIN orders o ON o.id=s.order_id LEFT JOIN quik_firms f ON f.firm_id=s.firm_id `
 
@@ -25,11 +25,22 @@ func (s *Store) List(ctx context.Context, limit int) ([]json.RawMessage, error) 
 	if limit <= 0 || limit > 500 {
 		limit = 500
 	}
-	return s.query(ctx, sideJSON+`WHERE t.id IN (SELECT id FROM trades ORDER BY trade_date DESC,length(quik_trade_num) DESC,quik_trade_num DESC,id LIMIT $1)
-ORDER BY t.trade_date DESC,length(t.quik_trade_num) DESC,t.quik_trade_num DESC,s.side`, limit)
+	classes, err := s.servedClasses(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return s.query(ctx, sideJSON+`WHERE s.has_quik_record AND t.id IN (SELECT id FROM trades x WHERE EXISTS(SELECT 1 FROM trade_sides q WHERE q.trade_id=x.id AND q.has_quik_record)
+AND ($2::text[] IS NULL OR btrim(x.board)=ANY($2::text[]))
+ORDER BY trade_date DESC,length(quik_trade_num) DESC,quik_trade_num DESC,id LIMIT $1)
+ORDER BY t.trade_date DESC,length(t.quik_trade_num) DESC,t.quik_trade_num DESC,s.side`, limit, classes)
 }
 func (s *Store) Get(ctx context.Context, id uuid.UUID) ([]json.RawMessage, error) {
-	return s.query(ctx, sideJSON+`WHERE t.id=$1 OR t.id IN(SELECT trade_id FROM trade_sides WHERE id=$1 OR execution_id=$1) ORDER BY s.side`, id)
+	classes, err := s.servedClasses(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return s.query(ctx, sideJSON+`WHERE s.has_quik_record AND ($2::text[] IS NULL OR btrim(t.board)=ANY($2::text[]))
+AND (t.id=$1 OR t.id IN(SELECT trade_id FROM trade_sides WHERE id=$1 OR execution_id=$1)) ORDER BY s.side`, id, classes)
 }
 func (s *Store) query(ctx context.Context, sql string, args ...any) ([]json.RawMessage, error) {
 	rows, err := s.Pool.Query(ctx, sql, args...)
@@ -48,15 +59,20 @@ func (s *Store) query(ctx context.Context, sql string, args ...any) ([]json.RawM
 	return out, rows.Err()
 }
 func (s *Store) Coverage(ctx context.Context) (json.RawMessage, error) {
+	classes, err := s.servedClasses(ctx)
+	if err != nil {
+		return nil, err
+	}
 	var out json.RawMessage
-	err := s.Pool.QueryRow(ctx, `WITH counts AS(SELECT t.id,count(s.id) sides FROM trades t LEFT JOIN trade_sides s ON s.trade_id=t.id GROUP BY t.id),
+	err = s.Pool.QueryRow(ctx, `WITH counts AS(SELECT t.id,count(s.id) sides FROM trades t JOIN trade_sides s ON s.trade_id=t.id
+WHERE s.has_quik_record AND ($1::text[] IS NULL OR btrim(t.board)=ANY($1::text[])) GROUP BY t.id),
 last_sync AS(SELECT * FROM trade_sync_runs ORDER BY id DESC LIMIT 1)
 SELECT jsonb_build_object('trades',count(*),'complete',count(*) FILTER(WHERE sides=2),'incomplete',count(*) FILTER(WHERE sides<>2),
 'sides',COALESCE(sum(sides),0),'report_errors',(SELECT count(*) FROM trade_reports WHERE status='ERROR'),
 'last_sync_at',(SELECT finished_at FROM last_sync),'last_sync_records',(SELECT records FROM last_sync),
 'last_sync_error',(SELECT error FROM last_sync),'sync_running',COALESCE((SELECT finished_at IS NULL FROM last_sync),false),
 'last_success_at',(SELECT max(finished_at) FROM trade_sync_runs WHERE error='' AND errors=0 AND records>0),
-'sync_stale',COALESCE((SELECT max(finished_at)<now()-interval '5 minutes' FROM trade_sync_runs WHERE error='' AND errors=0 AND records>0),true)) FROM counts`).Scan(&out)
+'sync_stale',COALESCE((SELECT max(finished_at)<now()-interval '5 minutes' FROM trade_sync_runs WHERE error='' AND errors=0 AND records>0),true)) FROM counts`, classes).Scan(&out)
 	return out, err
 }
 

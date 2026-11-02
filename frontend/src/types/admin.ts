@@ -133,8 +133,6 @@ export type AdminTrade = {
   quik_trade_num?: string;
   ledger_trade_id?: string;
   execution_id?: string | null;
-  has_fix_report?: boolean;
-  has_quik_record?: boolean;
   received_at?: string;
   trade_time_known?: boolean;
   account?: string;

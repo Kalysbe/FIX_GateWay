@@ -12,7 +12,9 @@ const MaxTradeRows = 200000
 
 // Trades reads the whole QUIK trade history quik_export2.public."Trades" as
 // database JSON rows (row_to_json, unchanged) over the read-only connection.
-// It is the only source of QUIK trades for the trade ledger reconciliation.
+// It is the only source of QUIK trades for the trade ledger reconciliation. The
+// read stays whole, so an empty table can be told from a class without trades;
+// the ledger itself keeps only the served classes (tradeledger.Import).
 func (s *Store) Trades(ctx context.Context) ([]json.RawMessage, error) {
 	if s == nil || s.pool == nil {
 		return nil, ErrNotConfigured

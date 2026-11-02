@@ -116,6 +116,9 @@ func (s *Server) SetQuikExport(store *quikexport.Store) {
 func (s *Server) SetMarketDataClasses(settings *quikexport.ClassSettings) {
 	s.marketClasses = settings
 	s.servedClasses = settings.Classes
+	if s.tradeLedger != nil {
+		s.tradeLedger.SetClasses(settings.Classes)
+	}
 }
 
 func (s *Server) SetExecutionInbox(in *executioninbox.Inbox, cases *executioninbox.CaseStore) {
@@ -534,7 +537,8 @@ func (s *Server) cancelBrokerOrder(w http.ResponseWriter, r *http.Request) {
 		s.writeOrderReadError(w, err)
 		return
 	}
-	current, local, err := s.currentQuikOrder(r.Context(), r.PathValue("id"), firm, brokerID, true)
+	// An active order stays cancellable after its class leaves the served choice.
+	current, local, err := s.currentQuikOrder(quikexport.WithAllClasses(r.Context()), r.PathValue("id"), firm, brokerID, true)
 	if err != nil {
 		s.writeOrderReadError(w, err)
 		return
@@ -1607,11 +1611,8 @@ func mapEvents(list []domain.OrderEvent) []map[string]any {
 
 // OnExecution is invoked by the durable inbox worker, never by the FIX callback.
 func (s *Server) OnExecution(ctx context.Context, report adapters.ExecutionReport) error {
-	ledgerSaved := false
 	if s.tradeLedger != nil && s.tradeLedger.Pool != nil {
-		var err error
-		ledgerSaved, err = s.tradeLedger.RecordFIX(ctx, report)
-		if err != nil {
+		if err := s.tradeLedger.RecordFIX(ctx, report); err != nil {
 			return err
 		}
 	}
@@ -1673,11 +1674,8 @@ func (s *Server) OnExecution(ctx context.Context, report adapters.ExecutionRepor
 		report.OrderID, lastQty, lastPx, cumQty, leaves, report.AdapterID, report.Text, report.OrdRejReason, report.RawFIX)
 	if err != nil {
 		if errors.Is(err, orders.ErrNotFound) && s.tradeLedger != nil && s.tradeLedger.Pool != nil && report.RawFIX != "" {
-			// Raw evidence has been committed even for external orders. A real fill
-			// has also been recorded without manufacturing a local order.
-			if ledgerSaved && s.hub != nil {
-				s.hub.Broadcast("trade.created", map[string]any{"source": "fix"})
-			}
+			// Raw evidence has been committed even for external orders. The trade
+			// itself comes from the next QUIK reconciliation.
 			return nil
 		}
 		s.log.Error("apply execution report failed", "error", err, "cl_ord_id", report.ClOrdID,
@@ -1695,11 +1693,6 @@ func (s *Server) OnExecution(ctx context.Context, report adapters.ExecutionRepor
 		}
 	}
 	if exec != nil {
-		if ledgerSaved {
-			if err := s.tradeLedger.LinkExecution(ctx, exec.ID, order.ID, exec.ExecID, exec.TradeMatchID); err != nil {
-				return err
-			}
-		}
 		// Admin trigger only: brokers receive the QUIK Trades row from the Trades feed.
 		s.hub.Broadcast("trade.created", exec)
 	}

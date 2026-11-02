@@ -15,9 +15,28 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-type Store struct{ Pool *pgxpool.Pool }
+type Store struct {
+	Pool    *pgxpool.Pool
+	classes func(context.Context) ([]string, error)
+}
 
 func NewStore(pool *pgxpool.Pool) *Store { return &Store{Pool: pool} }
+
+// SetClasses limits the ledger to the served QUIK classes; it is called once
+// before the store is used. Without it, or with an empty choice, every class is served.
+func (s *Store) SetClasses(classes func(context.Context) ([]string, error)) { s.classes = classes }
+
+// servedClasses returns nil when every class is served: the queries read NULL so.
+func (s *Store) servedClasses(ctx context.Context) ([]string, error) {
+	if s.classes == nil {
+		return nil, nil
+	}
+	list, err := s.classes(ctx)
+	if err != nil || len(list) == 0 {
+		return nil, err
+	}
+	return list, nil
+}
 
 func (s *Store) archive(ctx context.Context, source, adapter string, payload json.RawMessage) (int64, string, error) {
 	var object map[string]json.RawMessage
@@ -50,30 +69,28 @@ func (s *Store) failure(ctx context.Context, id int64, err error) error {
 	return errors.Join(err, e)
 }
 
-// RecordFIX commits source evidence independently of the local order state machine.
-// An external order must never make the gateway discard its exchange trade.
-func (s *Store) RecordFIX(ctx context.Context, r domain.ExecutionReport) (bool, error) {
+// RecordFIX keeps the original report as evidence, independently of the local
+// order state machine. Trades come only from QUIK public."Trades": a FIX report
+// never creates a trade or a side.
+func (s *Store) RecordFIX(ctx context.Context, r domain.ExecutionReport) error {
 	if r.RawFIX == "" {
-		return false, fmt.Errorf("original FIX report is required; delivery retained for reconciliation")
+		return fmt.Errorf("original FIX report is required; delivery retained for reconciliation")
 	}
 	raw, _ := json.Marshal(map[string]string{"raw_fix": r.RawFIX})
 	id, _, err := s.archive(ctx, "fix", r.AdapterID, raw)
 	if err != nil {
-		return false, err
+		return err
 	}
-	p, fill, err := ParseFIX(r.RawFIX, r.AdapterID)
+	_, fill, err := ParseFIX(r.RawFIX, r.AdapterID)
 	if err != nil {
-		return false, s.failure(ctx, id, err)
+		return s.failure(ctx, id, err)
 	}
-	if !fill {
-		_, err = s.Pool.Exec(ctx, `UPDATE trade_reports SET status='NO_FILL',error='' WHERE id=$1`, id)
-		return false, err
+	status := "NO_FILL"
+	if fill {
+		status = "ARCHIVED"
 	}
-	err = s.record(ctx, id, "fix", p)
-	if err != nil {
-		return false, s.failure(ctx, id, err)
-	}
-	return true, nil
+	_, err = s.Pool.Exec(ctx, `UPDATE trade_reports SET status=$2,error='' WHERE id=$1`, id, status)
+	return err
 }
 
 func (s *Store) RecordQUIK(ctx context.Context, raw json.RawMessage) error {
@@ -86,7 +103,7 @@ func (s *Store) RecordQUIK(ctx context.Context, raw json.RawMessage) error {
 	}
 	p, err := ParseQUIK(raw)
 	if err == nil {
-		err = s.record(ctx, id, "quik", p)
+		err = s.record(ctx, id, p)
 	}
 	if err != nil {
 		return s.failure(ctx, id, err)
@@ -94,7 +111,7 @@ func (s *Store) RecordQUIK(ctx context.Context, raw json.RawMessage) error {
 	return nil
 }
 
-func (s *Store) record(ctx context.Context, report int64, source string, p Input) error {
+func (s *Store) record(ctx context.Context, report int64, p Input) error {
 	tx, err := s.Pool.Begin(ctx)
 	if err != nil {
 		return err
@@ -155,7 +172,7 @@ AND COALESCE(NULLIF(o.board,''),i.board)=$5 AND ($6='' OR o.fix_firm=$6) LIMIT 2
 	var side uuid.UUID
 	err = tx.QueryRow(ctx, `INSERT INTO trade_sides(trade_id,side,quik_order_id,quik_order_num,order_id,execution_id,exec_id,fix_cl_ord_id,
 firm_id,firm_name,client_code,account,contra_broker,cum_qty,leaves_qty,adapter_id,has_fix_report,has_quik_record)
-VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
+VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,false,true)
 ON CONFLICT(trade_id,side) DO UPDATE SET
 order_id=COALESCE(trade_sides.order_id,EXCLUDED.order_id), execution_id=COALESCE(trade_sides.execution_id,EXCLUDED.execution_id),
 quik_order_id=COALESCE(NULLIF(trade_sides.quik_order_id,''),EXCLUDED.quik_order_id),
@@ -170,7 +187,7 @@ WHERE trade_sides.quik_order_num=EXCLUDED.quik_order_num
 AND (trade_sides.firm_id='' OR EXCLUDED.firm_id='' OR trade_sides.firm_id=EXCLUDED.firm_id)
 AND (trade_sides.client_code='' OR EXCLUDED.client_code='' OR trade_sides.client_code=EXCLUDED.client_code)
 AND (trade_sides.exec_id='' OR EXCLUDED.exec_id='' OR trade_sides.exec_id=EXCLUDED.exec_id)
-RETURNING id`, trade, p.Side, p.OrderID, p.OrderNumber, order, execution, p.ExecID, p.ClOrdID, p.Firm, p.FirmName, p.Client, p.Account, p.Contra, p.Cum, p.Leaves, p.Adapter, source == "fix", source == "quik").Scan(&side)
+RETURNING id`, trade, p.Side, p.OrderID, p.OrderNumber, order, execution, p.ExecID, p.ClOrdID, p.Firm, p.FirmName, p.Client, p.Account, p.Contra, p.Cum, p.Leaves, p.Adapter).Scan(&side)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return fmt.Errorf("conflicting %s party/order for %s", p.Side, p.Match)
 	}
@@ -186,40 +203,17 @@ RETURNING id`, trade, p.Side, p.OrderID, p.OrderNumber, order, execution, p.Exec
 	return tx.Commit(ctx)
 }
 
-// Backfill only uses actual persisted reports. It never recalculates order totals.
-func (s *Store) Backfill(ctx context.Context) (int, int, error) {
-	rows, err := s.Pool.Query(ctx, `SELECT COALESCE(adapter_id,''),payload->>'raw_fix' FROM order_events
-WHERE event_type IN ('ORDER_EXECUTION_REPORT','EXECUTION_REPORT') AND payload->>'raw_fix' LIKE '%|880=%'
-ORDER BY id`)
-	if err != nil {
-		return 0, 0, err
-	}
-	var reports []domain.ExecutionReport
-	for rows.Next() {
-		var r domain.ExecutionReport
-		if err := rows.Scan(&r.AdapterID, &r.RawFIX); err != nil {
-			rows.Close()
-			return 0, 0, err
-		}
-		reports = append(reports, r)
-	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
-		return 0, 0, err
-	}
-	failures := 0
-	for _, r := range reports {
-		if _, err := s.RecordFIX(ctx, r); err != nil {
-			if ctx.Err() != nil {
-				return len(reports), failures, ctx.Err()
-			}
-			failures++
-		}
-	}
-	return len(reports), failures, nil
-}
-
-func (s *Store) LinkExecution(ctx context.Context, id, order uuid.UUID, execID, match string) error {
-	_, err := s.Pool.Exec(ctx, `UPDATE trade_sides s SET execution_id=$1 FROM trades t WHERE t.id=s.trade_id AND s.order_id=$2 AND s.exec_id=$3 AND t.trade_match_id=$4`, id, order, execID, match)
+// LinkLocal attaches QUIK sides to the local order and execution of the same
+// trade. It runs after each QUIK import, so it does not matter whether the FIX
+// report or the QUIK row arrived first. It never creates a side or changes
+// amounts.
+func (s *Store) LinkLocal(ctx context.Context) error {
+	_, err := s.Pool.Exec(ctx, `UPDATE trade_sides s SET execution_id=e.id,order_id=e.order_id,exec_id=e.exec_id,
+quik_order_id=COALESCE(NULLIF(o.quik_order_id,''),s.quik_order_id),fix_cl_ord_id=COALESCE(o.fix_cl_ord_id,s.fix_cl_ord_id),
+adapter_id=COALESCE(e.adapter_id::text,s.adapter_id),cum_qty=e.cum_qty,leaves_qty=e.leaves_qty
+FROM trades t,executions e JOIN orders o ON o.id=e.order_id
+WHERE t.id=s.trade_id AND s.execution_id IS NULL AND s.has_quik_record
+AND e.trade_match_id=t.trade_match_id AND e.last_qty=t.quantity AND e.last_px=t.price
+AND o.side::text=s.side AND substring(o.quik_order_id from '[0-9]+$')=s.quik_order_num`)
 	return err
 }

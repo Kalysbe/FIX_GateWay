@@ -68,6 +68,6 @@ export function tradeRows(deal: Deal): TradeRow[] {
 export function exportDeals(deals: Deal[]) {
   return {
     headers: ["deal_id", "both_sides_recorded", "created_at", "exec_id", "order_id", "client_order_id", "firm_name", "quik_firm", "client_code", "symbol", "board", "side", "last_qty", "last_px", "cum_qty", "leaves_qty", "adapter_id", "source", "quik_order_num", "trade_match_id"],
-    rows: deals.flatMap(deal => tradeRows(deal).map(row => [deal.label, deal.paired, row.created_at, row.exec_id, row.order_id, row.client_order_id, row.firm_name, row.quik_firm, row.client_code, row.symbol, row.board, row.side, row.last_qty, row.last_px, row.cum_qty, row.leaves_qty, row.adapter_id, row.has_fix_report ? (row.has_quik_record ? "fix+quik" : "fix") : "quik", row.quik_order_num, row.trade_match_id])),
+    rows: deals.flatMap(deal => tradeRows(deal).map(row => [deal.label, deal.paired, row.created_at, row.exec_id, row.order_id, row.client_order_id, row.firm_name, row.quik_firm, row.client_code, row.symbol, row.board, row.side, row.last_qty, row.last_px, row.cum_qty, row.leaves_qty, row.adapter_id, "quik", row.quik_order_num, row.trade_match_id])),
   };
 }

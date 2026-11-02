@@ -17,7 +17,6 @@ import (
 
 func main() {
 	quik := flag.Bool("quik", false, `reconcile with QUIK public."Trades" over read-only QUIK_EXPORT_DATABASE_URL`)
-	backfill := flag.Bool("backfill", true, "restore ledger from persisted FIX reports")
 	applyMigrations := flag.Bool("migrate", false, "apply forward migrations before reconciliation")
 	flag.Parse()
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
@@ -33,13 +32,7 @@ func main() {
 	}
 	defer pool.Close()
 	store := tradeledger.NewStore(pool)
-	if *backfill {
-		n, bad, err := store.Backfill(ctx)
-		if err != nil {
-			fail(err)
-		}
-		fmt.Printf("FIX source reports: %d; errors: %d\n", n, bad)
-	}
+	store.SetClasses(quikexport.NewClassSettings(pool).Classes)
 	if *quik {
 		quikPool, err := db.OpenReadOnly(ctx, os.Getenv("QUIK_EXPORT_DATABASE_URL"))
 		if err != nil {

@@ -22,8 +22,8 @@ var (
 const maxOrders = 1000
 
 type Store struct {
-	pool         *pgxpool.Pool
-	paramClasses func(context.Context) ([]string, error)
+	pool    *pgxpool.Pool
+	classes func(context.Context) ([]string, error)
 }
 
 func NewStore(pool *pgxpool.Pool) *Store {

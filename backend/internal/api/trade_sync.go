@@ -8,9 +8,9 @@ import (
 	"github.com/fix-gateway/backend/internal/quikexport"
 )
 
-// RunTradeReconciliation restores local evidence, then compares with the QUIK
-// trade table public."Trades", read directly over the read-only QUIK database
-// connection, on startup and every minute.
+// RunTradeReconciliation loads trades from the QUIK table public."Trades", read
+// directly over the read-only QUIK database connection, on startup and every
+// minute. It is the only source of the trade ledger.
 // Failures remain visible in trade_sync_runs and the admin coverage response.
 // Without the QUIK connection each run fails visibly (ErrNotConfigured).
 func (s *Server) RunTradeReconciliation(ctx context.Context, quik *quikexport.Store) {
@@ -19,12 +19,6 @@ func (s *Server) RunTradeReconciliation(ctx context.Context, quik *quikexport.St
 	}
 	metrics.TradeReconciliationEnabled.Set(1)
 	go s.runTradeSafetyMonitor(ctx)
-	init, cancel := context.WithTimeout(ctx, 10*time.Minute)
-	n, bad, err := s.tradeLedger.Backfill(init)
-	cancel()
-	if err != nil || bad > 0 {
-		s.log.Error("trade ledger backfill needs reconciliation", "reports", n, "errors", bad, "error", err)
-	}
 	ticker := time.NewTicker(time.Minute)
 	defer ticker.Stop()
 	for {

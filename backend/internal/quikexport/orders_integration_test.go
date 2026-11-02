@@ -90,6 +90,68 @@ INSERT INTO public."Orders" VALUES
 	if err != nil || len(all.Orders) != 4 {
 		t.Fatal(all, err)
 	}
+	// The served classes limit every read of Orders, except for cancelling.
+	s.SetServedClasses(func(context.Context) ([]string, error) { return []string{"OTHER"}, nil })
+	if page, err := s.ListOrders(ctx, OrderFilter{}); err != nil || len(page.Orders) != 1 || page.Orders[0].Text("ClassCode") != "OTHER" {
+		t.Fatal("class filter", page, err)
+	}
+	if counts, err := s.CountOrdersByState(ctx); err != nil || len(counts) != 1 || counts["Снята"] != 1 {
+		t.Fatal("class filter in counters", counts, err)
+	}
+	key := first.Orders[0].VenueID()
+	if _, err := s.GetOrder(ctx, key, nil); !errors.Is(err, ErrOrderNotFound) {
+		t.Fatal("order of another class served", err)
+	}
+	if _, err := s.GetOrder(WithAllClasses(ctx), key, nil); err != nil {
+		t.Fatal("order must stay cancellable", err)
+	}
+	s.SetServedClasses(func(context.Context) ([]string, error) { return nil, errors.New("settings down") })
+	if _, err := s.ListOrders(ctx, OrderFilter{}); err == nil {
+		t.Fatal("settings failure served unfiltered rows")
+	}
+	if _, err := s.GetOrder(ctx, key, nil); err == nil || errors.Is(err, ErrOrderNotFound) {
+		t.Fatal("settings failure must not read as a missing order", err)
+	}
+}
+
+func TestQUIKTradesLimitedToServedClasses(t *testing.T) {
+	dsn := os.Getenv("QUIK_ORDERS_STORE_TEST_DATABASE_URL")
+	if dsn == "" {
+		dsn = os.Getenv("QUIK_ORDERS_TEST_DATABASE_URL")
+	}
+	if dsn == "" {
+		t.Skip("disposable QUIK_ORDERS_TEST_DATABASE_URL required")
+	}
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	var name string
+	if err := pool.QueryRow(ctx, `SELECT current_database()`).Scan(&name); err != nil || !strings.HasSuffix(name, "_test") {
+		t.Fatal("disposable database name must end in _test", name, err)
+	}
+	_, err = pool.Exec(ctx, `CREATE TABLE public."Trades" ("TradeNum" numeric,"ClassCode" char(12),"TradeDate" timestamp,"FirmId" text,"Operation" text);
+INSERT INTO public."Trades" VALUES (1,'LIST_GD','2026-10-22','2040','Купля'),(2,'LIST_GBA','2026-10-22','2040','Купля'),(3,'REPO','2026-10-22','2040','Купля')`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = pool.Exec(ctx, `DROP TABLE public."Trades"`) })
+	s := NewStore(pool)
+	s.SetServedClasses(func(context.Context) ([]string, error) { return []string{"LIST_GD", "LIST_GBA"}, nil })
+	page, err := s.ListTrades(ctx, TradeFilter{Limit: 10})
+	if err != nil || len(page.Trades) != 2 {
+		t.Fatal("class filter", page, err)
+	}
+	// The ledger's own read stays whole: it filters on import.
+	if rows, err := s.Trades(ctx); err != nil || len(rows) != 3 {
+		t.Fatal(rows, err)
+	}
+	s.SetServedClasses(func(context.Context) ([]string, error) { return []string{}, nil })
+	if page, err := s.ListTrades(ctx, TradeFilter{Limit: 10}); err != nil || len(page.Trades) != 3 {
+		t.Fatal("empty choice serves every class", page, err)
+	}
 }
 
 func TestQUIKParamsVerbatimFiltersAndPaging(t *testing.T) {
@@ -165,7 +227,7 @@ INSERT INTO public."Classes" VALUES (current_date,'LIST_GBA','Листинг Г�
 	}
 	// Served classes come from the administrator setting.
 	var classes []string
-	s.SetParamClasses(func(context.Context) ([]string, error) { return classes, nil })
+	s.SetServedClasses(func(context.Context) ([]string, error) { return classes, nil })
 	classes = []string{"TQBR"}
 	if page, err := s.ListParams(ctx, ParamFilter{}); err != nil || len(page.Params) != 1 || !bytes.Contains(page.Params[0].Raw, []byte(`"SecCode":"SBER`)) {
 		t.Fatal("class filter", page, err)
@@ -173,16 +235,27 @@ INSERT INTO public."Classes" VALUES (current_date,'LIST_GBA','Листинг Г�
 	if _, err := s.GetParam(ctx, "LIST_GBA", "GBA02280810"); !errors.Is(err, ErrParamNotFound) {
 		t.Fatal("instrument of another class served", err)
 	}
-	classes = []string{}
-	if page, err := s.ListParams(ctx, ParamFilter{}); err != nil || len(page.Params) != 0 {
-		t.Fatal("empty class list served rows", page, err)
+	// The instrument page with its Securities and Classes rows follows the choice;
+	// the list to choose from does not.
+	if _, err := s.GetParamDetails(ctx, "LIST_GBA", "GBA02280810"); !errors.Is(err, ErrParamNotFound) {
+		t.Fatal("instrument page of another class served", err)
 	}
-	s.SetParamClasses(func(context.Context) ([]string, error) { return nil, errors.New("settings down") })
+	if list, err := s.ListClasses(ctx); err != nil || len(list) != 2 {
+		t.Fatal("classes to choose from limited by the choice", list, err)
+	}
+	classes = []string{}
+	if page, err := s.ListParams(ctx, ParamFilter{}); err != nil || len(page.Params) != 3 {
+		t.Fatal("empty choice serves every class", page, err)
+	}
+	s.SetServedClasses(func(context.Context) ([]string, error) { return nil, errors.New("settings down") })
 	if _, err := s.ListParams(ctx, ParamFilter{}); err == nil {
 		t.Fatal("settings failure served unfiltered rows")
 	}
-	s.SetParamClasses(nil)
-	// The instrument page ignores the served classes and keeps every stored column.
+	if _, err := s.GetParamDetails(ctx, "LIST_GBA", "GBA02280810"); err == nil {
+		t.Fatal("settings failure served unfiltered rows")
+	}
+	s.SetServedClasses(nil)
+	// The instrument page keeps every stored column.
 	d, err := s.GetParamDetails(ctx, "LIST_GBA", "GBA02280810")
 	if err != nil || !bytes.Contains(d.Params.Raw, []byte(`"last":123.45`)) || !bytes.Contains(d.Params.Raw, []byte(`"couponvalue":7`)) ||
 		d.Security == nil || !bytes.Contains(d.Security.Raw, []byte(`"ISINCode":"KG1"`)) || !bytes.Contains(d.Security.Raw, []byte(`"SecShortName":"ГКО-2"`)) ||

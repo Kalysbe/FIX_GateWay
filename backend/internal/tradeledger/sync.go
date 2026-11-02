@@ -3,7 +3,10 @@ package tradeledger
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"slices"
+	"strings"
 	"time"
 )
 
@@ -20,7 +23,16 @@ type Source interface {
 
 // Import keeps each source record even on validation failure. It does not invent
 // local orders or update their fills from a historical snapshot.
+// Rows of classes outside the served choice are read but not kept or checked;
+// they load by themselves once their class is chosen.
 func (s *Store) Import(ctx context.Context, records []json.RawMessage) (int, int, error) {
+	classes, err := s.servedClasses(ctx)
+	if err != nil {
+		return 0, 0, err
+	}
+	served := func(board string) bool {
+		return classes == nil || slices.Contains(classes, strings.TrimSpace(board))
+	}
 	count, failures := 0, 0
 	seen := make(map[string]int)
 	for _, raw := range records {
@@ -29,6 +41,9 @@ func (s *Store) Import(ctx context.Context, records []json.RawMessage) (int, int
 			return count, failures, fmt.Errorf("QUIK trade snapshot exceeds record limit")
 		}
 		p, parseErr := ParseQUIK(raw)
+		if p.Board != "" && !served(p.Board) {
+			continue
+		}
 		if parseErr == nil {
 			key := p.Match + "\x00" + p.Symbol + "\x00" + p.Board
 			mask := 1
@@ -74,6 +89,9 @@ FROM trade_sides s JOIN trades t ON t.id=s.trade_id WHERE s.has_quik_record`)
 		if err := rows.Scan(&match, &symbol, &board, &side); err != nil {
 			return count, 0, err
 		}
+		if !served(board) {
+			continue
+		}
 		mask := 1
 		if side == "SELL" {
 			mask = 2
@@ -104,7 +122,7 @@ func (s *Store) Sync(ctx context.Context, src Source) (int, error) {
 			return err
 		}
 		records, failures, err = s.Import(ctx, rows)
-		return err
+		return errors.Join(err, s.LinkLocal(ctx))
 	}()
 	// Preserve failure evidence even when the request context expired.
 	finish, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)

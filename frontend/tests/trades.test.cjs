@@ -187,11 +187,11 @@ test('TradeMatchID groups different execution ids and separates different actual
 });
 
 test('only actual persisted sides render and recovered QUIK buyer retains its order and client', () => {
-  const report = leg('sell', 'SELL', { ledger_trade_id: 'ledger-id', quik_trade_num: '11094', trade_match_id: '261006-LIST_GBA-11094', quik_firm: '2040', firm_name: 'Freedom', contra_broker: '2040', client_code: 'imar', has_fix_report: true, has_quik_record: true });
+  const report = leg('sell', 'SELL', { ledger_trade_id: 'ledger-id', quik_trade_num: '11094', trade_match_id: '261006-LIST_GBA-11094', quik_firm: '2040', firm_name: 'Freedom', contra_broker: '2040', client_code: 'imar' });
   const incomplete = groupDeals([report])[0];
   assert.equal(tradeRows(incomplete).length, 1);
   assert.equal(incomplete.paired, false);
-  const buyer = leg('real-buyer-id', 'BUY', { ledger_trade_id: 'ledger-id', quik_trade_num: '11094', trade_match_id: report.trade_match_id, order_id: null, exec_id: '', quik_order_num: '22450', client_code: 'Kalys', has_fix_report: false, has_quik_record: true, cum_qty: null, leaves_qty: null });
+  const buyer = leg('real-buyer-id', 'BUY', { ledger_trade_id: 'ledger-id', quik_trade_num: '11094', trade_match_id: report.trade_match_id, order_id: null, exec_id: '', quik_order_num: '22450', client_code: 'Kalys', cum_qty: null, leaves_qty: null });
   const deal = groupDeals([report, buyer])[0];
   const rows = tradeRows(deal);
   assert.deepEqual(Array.from(rows, r => r.side), ['BUY', 'SELL']);
@@ -201,7 +201,7 @@ test('only actual persisted sides render and recovered QUIK buyer retains its or
   assert.equal(rows[0].quik_order_num, '22450');
   const csv = exportDeals([deal]);
   assert.equal(csv.rows.length, 2);
-  assert.deepEqual(Array.from(csv.rows, r => r[17]), ['quik', 'fix+quik']);
+  assert.deepEqual(Array.from(csv.rows, r => r[17]), ['quik', 'quik']);
   assert.equal(csv.rows[0][4], null);
   const detail = detailHarness(() => ({ data: { trades: [report, buyer] } }));
   assert.match(detail.html(), /Kalys/);

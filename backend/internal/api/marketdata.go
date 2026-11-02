@@ -12,7 +12,7 @@ import (
 )
 
 // Market data is the QUIK current trades table quik_export2.public."Params"
-// of today and of the administrator-chosen classes, with instrument and class
+// of today and of the served classes, with instrument and class
 // names, served as database rows: original column names, numbers, strings and nulls.
 type quikParamReader interface {
 	ListParams(context.Context, quikexport.ParamFilter) (quikexport.ParamPage, error)
@@ -127,7 +127,8 @@ func (s *Server) getMarketInstrument(w http.ResponseWriter, r *http.Request) {
 	}{details, quotes.Orders, quotes.HasMore})
 }
 
-// The served QUIK classes are an administrator setting; empty serves every class.
+// The served QUIK classes are a global administrator setting for Params, Trades,
+// Orders, Securities and Classes; empty serves every class.
 func (s *Server) getMarketDataSettings(w http.ResponseWriter, r *http.Request) {
 	classes, err := s.marketClasses.Classes(r.Context())
 	if err != nil {
