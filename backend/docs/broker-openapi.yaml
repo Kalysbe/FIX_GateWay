@@ -157,7 +157,8 @@ paths:
         Возвращает JSON-массив инструментов из `quik_export2.public."Params"` с полями
         `ClassCode`, `SecCode`, `status` (из `Params`), `CouponValue`, `FaceUnit`, `SecShortName`,
         `SecFullName` (из `Securities`, инструмент сопоставляется по `ClassCode` и `SecCode`)
-        и `ClassName` (из `Classes`, по `ClassCode`). Значения в исходном виде: числа
+        и `ClassName` (из `Classes`, по `ClassCode`), а также торговыми полями `Params`,
+        перечисленными в схеме `MarketDataRow`. Значения в исходном виде: числа
         JSON-числами с исходной точностью, строки и `null`; без записи в справочнике — `null`.
         Данные рынка не зависят от фирмы токена. Возвращаются только строки текущего
         торгового дня (`TradeDate` — сегодняшняя дата по Бишкеку, UTC+6) и только классов,
@@ -191,7 +192,7 @@ paths:
                 items:
                   $ref: "#/components/schemas/MarketDataRow"
               example:
-                - {ClassCode: LIST_GBA, SecCode: GBA02270915, CouponValue: 2.5, status: торгуется, FaceUnit: KGS, SecShortName: "ГКО-2 летние (GBA02270915)", SecFullName: "ГКО-2 летние (GBA02270915)", ClassName: "Листинговые:облигации"}
+                - {ClassCode: LIST_GBA, SecCode: GBA02270915, CouponValue: 2.5, status: торгуется, FaceUnit: KGS, SecShortName: "ГКО-2 летние (GBA02270915)", SecFullName: "ГКО-2 летние (GBA02270915)", ClassName: "Листинговые:облигации", lotsize: 1, tradingstatus: открыта, pricemin: 86, pricemax: 100, realminstep: null, bid: 100, biddepth: 16, offer: null, offerdepth: null, last: 95, qty: 15, time: "1900-01-01T16:40:15", open: null, high: 100, low: 95, prevprice: 95, waprice: 95.4, numtrades: 3, voltoday: 125, valtoday: 11925, accruedint: null, yield: 16.92, nextcoupon: "2027-01-31T00:00:00", couponperiod: 184}
         "400":
           description: Неверные limit/offset
         "401":
@@ -501,15 +502,16 @@ paths:
       security:
         - bearerAuth: []
       description: |
-        Требует `orders:read`. То же, что `GET /api/v1/orders`, но только строки QUIK `Orders`
-        с `State` = `Активна`. Фильтр применяется в БД до пагинации; формат строк не меняется.
+        Требует `orders:read`. То же, что `GET /api/v1/orders`, но только сегодняшние строки QUIK
+        `Orders` (`TradeDate` = сегодня по Бишкеку, UTC+6) с `State` = `Активна`. Фильтр применяется
+        в БД до пагинации; формат строк не меняется.
         Страницы: заголовки `X-Has-More` и `X-Next-Offset`.
       parameters:
         - {in: query, name: limit, schema: {type: integer, minimum: 1, maximum: 1000, default: 200}}
         - {in: query, name: offset, schema: {type: integer, minimum: 0, maximum: 10000000, default: 0}}
       responses:
         "200":
-          description: Исходные строки QUIK Orders в состоянии «Активна»
+          description: Исходные сегодняшние строки QUIK Orders в состоянии «Активна»
           headers:
             X-Has-More: {schema: {type: boolean}, description: Есть ли следующая страница}
             X-Next-Offset: {schema: {type: integer}, description: offset следующей страницы}
@@ -856,6 +858,30 @@ components:
         SecShortName: {type: string, nullable: true, description: Securities.SecShortName}
         SecFullName: {type: string, nullable: true, description: Securities.SecFullName}
         ClassName: {type: string, nullable: true, description: Classes.ClassName}
+        lotsize: {type: number, nullable: true, description: Размер лота}
+        tradingstatus: {type: string, nullable: true, description: Состояние сессии}
+        pricemin: {type: number, nullable: true, description: Минимально возможная цена}
+        pricemax: {type: number, nullable: true, description: Максимально возможная цена}
+        realminstep: {type: number, nullable: true, description: Минимальный шаг цены}
+        bid: {type: number, nullable: true, description: Лучшая цена спроса}
+        biddepth: {type: number, nullable: true, description: Спрос по лучшей цене}
+        offer: {type: number, nullable: true, description: Лучшая цена предложения}
+        offerdepth: {type: number, nullable: true, description: Предложение по лучшей цене}
+        last: {type: number, nullable: true, description: Цена последней сделки}
+        qty: {type: number, nullable: true, description: Количество инструментов в последней сделке}
+        time: {type: string, nullable: true, description: "Время последней сделки; значимо только время, дата фиктивная"}
+        open: {type: number, nullable: true, description: Цена открытия}
+        high: {type: number, nullable: true, description: Максимальная цена сделки}
+        low: {type: number, nullable: true, description: Минимальная цена сделки}
+        prevprice: {type: number, nullable: true, description: Цена закрытия}
+        waprice: {type: number, nullable: true, description: Средневзвешенная цена}
+        numtrades: {type: number, nullable: true, description: Количество сделок за сегодня}
+        voltoday: {type: number, nullable: true, description: Количество во всех сделках}
+        valtoday: {type: number, nullable: true, description: Оборот в деньгах}
+        accruedint: {type: number, nullable: true, description: Накопленный купонный доход}
+        yield: {type: number, nullable: true, description: Доходность последней сделки}
+        nextcoupon: {type: string, nullable: true, description: Дата выплаты купона}
+        couponperiod: {type: number, nullable: true, description: Длительность купона}
     OrderBook:
       type: object
       properties:

@@ -523,7 +523,7 @@ func (s *Server) listBrokerOrders(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) listBrokerActiveOrders(w http.ResponseWriter, r *http.Request) {
-	s.listQuikOrdersInState(w, r, false, quikActiveState)
+	s.listQuikOrdersMatching(w, r, false, quikexport.OrderFilter{State: quikActiveState, Today: true})
 }
 
 func (s *Server) getBrokerOrder(w http.ResponseWriter, r *http.Request) {

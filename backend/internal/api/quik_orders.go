@@ -97,11 +97,7 @@ func (s *Server) writeOrderReadError(w http.ResponseWriter, err error) {
 const quikActiveState = "Активна"
 
 func (s *Server) listQuikOrders(w http.ResponseWriter, r *http.Request, admin bool) {
-	s.listQuikOrdersInState(w, r, admin, "")
-}
-
-func (s *Server) listQuikOrdersInState(w http.ResponseWriter, r *http.Request, admin bool, state string) {
-	s.listQuikOrdersMatching(w, r, admin, quikexport.OrderFilter{State: state})
+	s.listQuikOrdersMatching(w, r, admin, quikexport.OrderFilter{})
 }
 
 // listAdminQuotes serves the quotes of the admin "Котировки" page: today's

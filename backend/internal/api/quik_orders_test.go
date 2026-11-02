@@ -99,8 +99,8 @@ func TestBrokerOrdersUseAuthenticatedFirmBeforePagination(t *testing.T) {
 	if strings.TrimSpace(w.Body.String()) != "["+raw+"]" {
 		t.Fatal("list added or changed fields", w.Body.String())
 	}
-	if source.filter.State != "" {
-		t.Fatal("full list must not filter by state", source.filter.State)
+	if source.filter.State != "" || source.filter.Today {
+		t.Fatal("full list must not filter by state or date", source.filter)
 	}
 	w = httptest.NewRecorder()
 	s.listBrokerActiveOrders(w, brokerOrderRequest("/api/v1/orders/active?firm_id=9999&limit=5"))
@@ -110,8 +110,8 @@ func TestBrokerOrdersUseAuthenticatedFirmBeforePagination(t *testing.T) {
 	if strings.TrimSpace(w.Body.String()) != "["+raw+"]" {
 		t.Fatal("active list added or changed fields", w.Body.String())
 	}
-	if source.filter.Today {
-		t.Fatal("broker active orders are not limited to today")
+	if !source.filter.Today {
+		t.Fatal("broker active orders must be limited to today")
 	}
 	// Admin quotes: today's active orders of every firm.
 	w = httptest.NewRecorder()

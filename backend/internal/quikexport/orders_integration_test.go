@@ -174,8 +174,11 @@ func TestQUIKParamsVerbatimFiltersAndPaging(t *testing.T) {
 	}
 	// char(n) columns, as QUIK exports often use, are matched after trimming.
 	_, err = pool.Exec(ctx, `CREATE TABLE public."Params" (
-"ClassCode" char(12),"SecCode" char(12),"last" numeric,"couponvalue" numeric,"TradeDate" timestamp,"status" text);
-INSERT INTO public."Params" SELECT c, s, l, 7, d, st FROM (VALUES
+"ClassCode" char(12),"SecCode" char(12),"last" numeric,"couponvalue" numeric,"TradeDate" timestamp,"status" text,
+lotsize numeric(19,0) DEFAULT 1,tradingstatus varchar DEFAULT 'открыта',pricemin numeric(19,8) DEFAULT 86,pricemax numeric,realminstep numeric,bid numeric,biddepth numeric,"offer" numeric,offerdepth numeric,qty numeric,"time" timestamp DEFAULT '1900-01-01 16:40:15',
+"open" numeric,high numeric,low numeric,prevprice numeric,waprice numeric,numtrades numeric,voltoday numeric,valtoday numeric,accruedint numeric,yield numeric,nextcoupon timestamp,couponperiod numeric,
+theorprice numeric DEFAULT 1);
+INSERT INTO public."Params" ("ClassCode","SecCode","last","couponvalue","TradeDate","status") SELECT c, s, l, 7, d, st FROM (VALUES
 ('LIST_GBA','GBA02280810',123.45,0,'торгуется'),
 ('LIST_GBA','KG0105166315',10.10,0,'торгуется'),
 ('TQBR','SBER',1,0,NULL),
@@ -208,7 +211,9 @@ INSERT INTO public."Classes" VALUES (current_date,'LIST_GBA','Листинг Г�
 	}
 	// Only the chosen columns, values as stored; the instrument is matched by
 	// ClassCode and SecCode on its latest TradeDate.
-	if got, want := string(page.Params[0].Raw), `{"ClassCode":"LIST_GBA    ","SecCode":"GBA02280810 ","CouponValue":9007199254740993.000001,"status":"торгуется","FaceUnit":"KGS","SecShortName":"ГКО-2","SecFullName":"ГКО-2 летние","ClassName":"Листинг ГБА"}`; got != want {
+	if got, want := string(page.Params[0].Raw), `{"ClassCode":"LIST_GBA    ","SecCode":"GBA02280810 ","CouponValue":9007199254740993.000001,"status":"торгуется","FaceUnit":"KGS","SecShortName":"ГКО-2","SecFullName":"ГКО-2 летние","ClassName":"Листинг ГБА",` +
+		`"lotsize":1,"tradingstatus":"открыта","pricemin":86.00000000,"pricemax":null,"realminstep":null,"bid":null,"biddepth":null,"offer":null,"offerdepth":null,"last":123.45,"qty":null,"time":"1900-01-01T16:40:15",` +
+		`"open":null,"high":null,"low":null,"prevprice":null,"waprice":null,"numtrades":null,"voltoday":null,"valtoday":null,"accruedint":null,"yield":null,"nextcoupon":null,"couponperiod":null}`; got != want {
 		t.Fatalf("row:\n%s\n%s", got, want)
 	}
 	page, err = s.ListParams(ctx, ParamFilter{ClassCode: "LIST_GBA", SecCode: "KG0105166315"})
@@ -222,7 +227,7 @@ INSERT INTO public."Classes" VALUES (current_date,'LIST_GBA','Листинг Г�
 		t.Fatal("earlier TradeDate rows listed", page, err)
 	}
 	p, err := s.GetParam(ctx, "TQBR", "SBER")
-	if err != nil || !bytes.HasSuffix(p.Raw, []byte(`"CouponValue":null,"status":null,"FaceUnit":null,"SecShortName":null,"SecFullName":null,"ClassName":null}`)) {
+	if err != nil || !bytes.Contains(p.Raw, []byte(`"CouponValue":null,"status":null,"FaceUnit":null,"SecShortName":null,"SecFullName":null,"ClassName":null,"lotsize":1`)) {
 		t.Fatal(string(p.Raw), err)
 	}
 	// Served classes come from the administrator setting.

@@ -7,8 +7,8 @@
 не используется). Роли Gateway нужен `SELECT` на `Orders`, `Params`,
 `Securities`, `Classes`, `Firms`, `Trdaccs` и `Trades`.
 
-По решению пользователя от 26.10.2026 строка содержит только поля, в этом
-порядке:
+По решению пользователя (26.10.2026, дополнено 02.11.2026) строка содержит только
+поля, в этом порядке:
 
 | Поле | Источник |
 |---|---|
@@ -17,6 +17,15 @@
 | `status` | `Params` |
 | `FaceUnit`, `SecShortName`, `SecFullName` | `Securities` |
 | `ClassName` | `Classes` |
+| `lotsize`, `tradingstatus`, `pricemin`, `pricemax`, `realminstep` | `Params`: условия заявки |
+| `bid`, `biddepth`, `offer`, `offerdepth`, `last`, `qty`, `time` | `Params`: рынок сейчас |
+| `open`, `high`, `low`, `prevprice`, `waprice`, `numtrades`, `voltoday`, `valtoday` | `Params`: итоги дня |
+| `accruedint`, `yield`, `nextcoupon`, `couponperiod` | `Params`: облигации |
+
+`change` и `lastchange` намеренно не передаются: в данных QUIK они считаются как будто
+от нуля (`change` = 95 при `last` = 95). В колонке `time` дата фиктивная
+(`1900-01-01T16:40:15`), значимо только время. `realminstep`, `offer`, `offerdepth`,
+`open` и `accruedint` по `LIST_GBA` и `LIST_GD` на 02.11.2026 пусты или нулевые.
 
 Значения передаются как результат `row_to_json`: числа остаются JSON-числами
 с исходной точностью, строки — без обрезки и перевода, `null` сохраняется.

@@ -69,7 +69,7 @@ REST создаёт и отменяет заявки, изменяет пози�
 |---|---|---|---|
 | `POST /api/v1/orders` | Создать заявку | Заявка в именах колонок QUIK `Orders` после ответа QUIK; `201` — принята QUIK, `422` — отклонена QUIK, `202` — QUIK ещё не ответил | `orders:create` |
 | `GET /api/v1/orders` | Строки Orders своей фирмы | Массив исходных строк БД | `orders:read` |
-| `GET /api/v1/orders/active` | Строки Orders своей фирмы с `State` = `Активна` | Массив исходных строк БД | `orders:read` |
+| `GET /api/v1/orders/active` | Сегодняшние строки Orders своей фирмы с `State` = `Активна` | Массив исходных строк БД | `orders:read` |
 | `GET /api/v1/orders/{id}` | Одна текущая строка Orders | Исходная строка БД в `data` | `orders:read` |
 | `POST /api/v1/orders/{id}/cancel` | Снять заявку; тело не требуется | Заявка в именах колонок `Orders` после ответа QUIK; `200` — снята, `409` — QUIK не снял, `202` — QUIK ещё не ответил | `orders:cancel` |
 | gRPC `order.updated` | Изменения строк Orders своей фирмы | `event.data_json` — исходный JSON строки; `event.removed=true` удаляет её из текущего набора | `orders:read` |
@@ -216,16 +216,16 @@ GET также принимает UUID исходной заявки Gateway и 
 
 | REST / gRPC | Назначение | Возвращаемые данные |
 |---|---|---|
-| `GET /api/v1/market-data` | Текущие торги | JSON-массив инструментов (8 полей, см. ниже); при недоступности источника — HTTP 503 |
+| `GET /api/v1/market-data` | Текущие торги | JSON-массив инструментов (32 поля, см. ниже); при недоступности источника — HTTP 503 |
 | `GET /api/v1/market-data/{board}/{symbol}` | Один инструмент | Строка по `ClassCode` и `SecCode`; 404, если её нет за сегодня или класс не выбран |
 | `GET /api/v1/quotes` | Котировки инструмента без участников | JSON-массив `{side, price, quantity, volume}` (см. ниже) |
 | `GET /api/v1/orderbook` | Стаканы: спрос и предложение рынка (FIX) | `{source: "live", live, books: [OrderBook]}`; без доступных данных — `live: false`, `books: []`, `note` |
 | gRPC `marketdata.tick` | Изменения строк `Params` | `event.data_json` — исходная строка, `event.removed` — строка исчезла |
 
-Строка содержит только поля `ClassCode`, `SecCode`, `CouponValue`, `status`, `FaceUnit`, `SecShortName`, `SecFullName`, `ClassName` — из таблиц QUIK `Params`, `Securities` (по `ClassCode` + `SecCode`) и `Classes`, значения в исходном виде: числа JSON-числами с исходной точностью, строки и `null`. Разбирайте JSON с сохранением точности чисел. Отдаются только инструменты текущего торгового дня (по Бишкеку, UTC+6) из классов, выбранных администратором шлюза (если классы не выбраны — всех классов). Рыночные данные общие для всех брокеров.
+Строка содержит только поля `ClassCode`, `SecCode`, `CouponValue`, `status`, `FaceUnit`, `SecShortName`, `SecFullName`, `ClassName`, `lotsize`, `tradingstatus`, `pricemin`, `pricemax`, `realminstep`, `bid`, `biddepth`, `offer`, `offerdepth`, `last`, `qty`, `time`, `open`, `high`, `low`, `prevprice`, `waprice`, `numtrades`, `voltoday`, `valtoday`, `accruedint`, `yield`, `nextcoupon`, `couponperiod` — из таблиц QUIK `Params`, `Securities` (по `ClassCode` + `SecCode`) и `Classes`. В `time` значимо только время: дата в нём фиктивная. Значения в исходном виде: числа JSON-числами с исходной точностью, строки и `null`. Разбирайте JSON с сохранением точности чисел. Отдаются только инструменты текущего торгового дня (по Бишкеку, UTC+6) из классов, выбранных администратором шлюза (если классы не выбраны — всех классов). Рыночные данные общие для всех брокеров.
 
 ```json
-{"ClassCode":"LIST_GBA","SecCode":"GBA02270915","CouponValue":2.500000,"status":"торгуется","FaceUnit":"KGS","SecShortName":"ГКО-2 летние (GBA02270915)","SecFullName":"ГКО-2 летние (GBA02270915)","ClassName":"Листинговые:облигации"}
+{"ClassCode":"LIST_GBA","SecCode":"GBA02270915","CouponValue":2.500000,"status":"торгуется","FaceUnit":"KGS","SecShortName":"ГКО-2 летние (GBA02270915)","SecFullName":"ГКО-2 летние (GBA02270915)","ClassName":"Листинговые:облигации","lotsize":1,"tradingstatus":"открыта","pricemin":86.00000000,"pricemax":100.00000000,"realminstep":null,"bid":100.00000000,"biddepth":16.00000000,"offer":null,"offerdepth":null,"last":95.00000000,"qty":15.00000000,"time":"1900-01-01T16:40:15","open":null,"high":100.00000000,"low":95.00000000,"prevprice":95.00000000,"waprice":95.40000000,"numtrades":3,"voltoday":125.0000,"valtoday":11925.0000,"accruedint":null,"yield":16.9200,"nextcoupon":"2027-01-31T00:00:00","couponperiod":184}
 ```
 
 REST-фильтры: `?board=<ClassCode>&symbol=<SecCode>`, оба необязательны; `limit` (1–5000, по умолчанию 1000) и `offset`, продолжение — в заголовках `X-Has-More` и `X-Next-Offset`. Если источник недоступен, ответ — HTTP 503 с `{"error":"market data unavailable"}` и `Retry-After`; пустая успешная выборка — `[]`.
@@ -251,6 +251,8 @@ REST-фильтры: `?board=<ClassCode>&symbol=<SecCode>`, оба необяз�
 `GET /api/v1/market-data` и gRPC `marketdata.tick` переведены с FIX Market Data на таблицу QUIK `Params`. Вместо `{quotes: [MarketQuote]}` REST возвращает массив исходных строк; в gRPC строка передаётся в `data_json`, без `quotes`, `live` и `replace`, и начальный снимок при подписке больше не приходит. Фильтры `board`/`symbol` относятся к `ClassCode`/`SecCode`. Стакан `/api/v1/orderbook` не изменился.
 
 В тот же день строка сокращена до 8 полей (`ClassCode`, `SecCode`, `CouponValue`, `status`, `FaceUnit`, `SecShortName`, `SecFullName`, `ClassName`); остальные колонки `Params`, включая `TradeDate`, больше не передаются. Отдаются только строки сегодняшнего торгового дня из классов, выбранных администратором (если классы не выбраны — всех классов).
+
+02.11.2026 в конец строки добавлены 24 поля `Params`: условия заявки, рынок, итоги дня и данные облигаций. Прежние поля и их порядок не изменились. `TradeDate` по-прежнему не передаётся.
 
 ## Позиции
 

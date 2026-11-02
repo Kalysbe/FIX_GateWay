@@ -43,14 +43,18 @@ func (p Param) Key() string {
 const paramsToday = `p."TradeDate"::date=(now() AT TIME ZONE 'Asia/Bishkek')::date`
 
 // paramRows selects only the columns the user asked for, values as stored:
-// ClassCode, SecCode and status of Params, CouponValue, FaceUnit, SecShortName
-// and SecFullName of the instrument from Securities, ClassName from Classes.
-// A SecCode can be listed in several classes with different names, so the
+// ClassCode, SecCode, status and the trading columns of Params, CouponValue,
+// FaceUnit, SecShortName and SecFullName of the instrument from Securities,
+// ClassName from Classes. A SecCode can be listed in several classes with different names, so the
 // instrument is matched by ClassCode and SecCode. Both reference tables are
 // kept per TradeDate; the latest row is used, so the names stay available
 // until QUIK reloads them for the new day. A missing reference row gives null.
 // $1 is the list of served classes (see SetServedClasses); NULL serves all.
-const paramRows = `SELECT p."ClassCode", p."SecCode", s."CouponValue", p.status, s."FaceUnit", s."SecShortName", s."SecFullName", c."ClassName"
+const paramRows = `SELECT p."ClassCode", p."SecCode", s."CouponValue", p.status, s."FaceUnit", s."SecShortName", s."SecFullName", c."ClassName",
+p.lotsize, p.tradingstatus, p.pricemin, p.pricemax, p.realminstep,
+p.bid, p.biddepth, p."offer", p.offerdepth, p."last", p.qty, p."time",
+p."open", p.high, p.low, p.prevprice, p.waprice, p.numtrades, p.voltoday, p.valtoday,
+p.accruedint, p.yield, p.nextcoupon, p.couponperiod
 FROM public."Params" p
 LEFT JOIN LATERAL (SELECT s."CouponValue", s."FaceUnit", s."SecShortName", s."SecFullName" FROM public."Securities" s
   WHERE btrim(s."ClassCode"::text)=btrim(p."ClassCode"::text) AND btrim(s."SecCode"::text)=btrim(p."SecCode"::text)

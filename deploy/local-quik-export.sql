@@ -55,6 +55,18 @@ INSERT INTO public."Params" VALUES
   ('LIST_GBA', 'GBA02280810', 'Local simulator bond', current_date, 'торгуется', 99.5, 100.5, 100, 99.5, 101, 99, 3, 1500, 150000),
   ('LISTEDSTOCKK', 'KG0105166315', 'Local simulator share', current_date, 'торгуется', NULL, 400, 400, 400, 400, 400, 1, 1, 400)
 ON CONFLICT DO NOTHING;
+-- The columns the Gateway selects, named as in the real QUIK table.
+ALTER TABLE public."Params"
+  ADD COLUMN IF NOT EXISTS lotsize numeric, ADD COLUMN IF NOT EXISTS tradingstatus text,
+  ADD COLUMN IF NOT EXISTS pricemin numeric, ADD COLUMN IF NOT EXISTS pricemax numeric, ADD COLUMN IF NOT EXISTS realminstep numeric,
+  ADD COLUMN IF NOT EXISTS bid numeric, ADD COLUMN IF NOT EXISTS biddepth numeric, ADD COLUMN IF NOT EXISTS "offer" numeric, ADD COLUMN IF NOT EXISTS offerdepth numeric,
+  ADD COLUMN IF NOT EXISTS "last" numeric, ADD COLUMN IF NOT EXISTS qty numeric, ADD COLUMN IF NOT EXISTS "time" timestamp,
+  ADD COLUMN IF NOT EXISTS "open" numeric, ADD COLUMN IF NOT EXISTS high numeric, ADD COLUMN IF NOT EXISTS low numeric,
+  ADD COLUMN IF NOT EXISTS prevprice numeric, ADD COLUMN IF NOT EXISTS waprice numeric, ADD COLUMN IF NOT EXISTS numtrades numeric,
+  ADD COLUMN IF NOT EXISTS voltoday numeric, ADD COLUMN IF NOT EXISTS valtoday numeric,
+  ADD COLUMN IF NOT EXISTS accruedint numeric, ADD COLUMN IF NOT EXISTS yield numeric, ADD COLUMN IF NOT EXISTS nextcoupon timestamp, ADD COLUMN IF NOT EXISTS couponperiod numeric;
+UPDATE public."Params" SET lotsize = 1, tradingstatus = 'открыта', bid = "Bid", "offer" = "Offer", "last" = "Last", "open" = "Open", high = "High", low = "Low",
+  numtrades = "NumTrades", voltoday = "VolToday", valtoday = "ValToday";
 -- Instrument and class names that the Gateway joins to Params rows. The
 -- local classes are not LIST_GBA: choose them on the "Текущие торги" page.
 CREATE TABLE IF NOT EXISTS public."Securities" (

@@ -51,8 +51,11 @@ func TestQUIKParamsHTTPRowsAsStored(t *testing.T) {
 ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`); err != nil {
 		t.Fatal(err)
 	}
-	_, err = pool.Exec(ctx, `CREATE TABLE public."Params" ("ClassCode" text,"SecCode" text,"last" numeric,"status" text,"TradeDate" timestamp);
-INSERT INTO public."Params" SELECT c, s, l, st, (now() AT TIME ZONE 'Asia/Bishkek')::date - ago FROM (VALUES
+	_, err = pool.Exec(ctx, `CREATE TABLE public."Params" ("ClassCode" text,"SecCode" text,"last" numeric,"status" text,"TradeDate" timestamp,
+lotsize numeric,tradingstatus text,pricemin numeric,pricemax numeric,realminstep numeric,bid numeric,biddepth numeric,"offer" numeric,offerdepth numeric,qty numeric,"time" timestamp,
+"open" numeric,high numeric,low numeric,prevprice numeric,waprice numeric,numtrades numeric,voltoday numeric,valtoday numeric,accruedint numeric,yield numeric,nextcoupon timestamp,couponperiod numeric,
+theorprice numeric DEFAULT 1);
+INSERT INTO public."Params" ("ClassCode","SecCode","last","status","TradeDate") SELECT c, s, l, st, (now() AT TIME ZONE 'Asia/Bishkek')::date - ago FROM (VALUES
 ('LIST_GBA','GBA02270915',100.5,'торгуется',0),('LIST_GBA','GD052260119',99,NULL,0),('AUCT_GBA','GBA02270915',1,'торгуется',0),
 ('LIST_GBA','OLD',2,'вчера',1)) v(c, s, l, st, ago);
 CREATE TABLE public."Securities" ("TradeDate" timestamp,"ClassCode" text,"SecCode" text,"CouponValue" numeric,"FaceUnit" text,"SecShortName" text,"SecFullName" text);
@@ -138,8 +141,12 @@ INSERT INTO public."Orders" SELECT n, c, (now() AT TIME ZONE 'Asia/Bishkek')::da
 	s.SetMarketDataClasses(classes)
 	// Today's LIST_GBA rows (the chosen class), only the chosen columns, as stored.
 	// Market data is not firm-scoped.
-	bond := `{"ClassCode":"LIST_GBA","SecCode":"GBA02270915","CouponValue":2.500000,"status":"торгуется","FaceUnit":"KGS","SecShortName":"ГКО-2","SecFullName":"ГКО-2 летние","ClassName":"Листинговые:облигации"}`
-	bare := `{"ClassCode":"LIST_GBA","SecCode":"GD052260119","CouponValue":null,"status":null,"FaceUnit":null,"SecShortName":null,"SecFullName":null,"ClassName":"Листинговые:облигации"}`
+	trading := func(last string) string {
+		return `"lotsize":null,"tradingstatus":null,"pricemin":null,"pricemax":null,"realminstep":null,"bid":null,"biddepth":null,"offer":null,"offerdepth":null,"last":` + last + `,"qty":null,"time":null,` +
+			`"open":null,"high":null,"low":null,"prevprice":null,"waprice":null,"numtrades":null,"voltoday":null,"valtoday":null,"accruedint":null,"yield":null,"nextcoupon":null,"couponperiod":null}`
+	}
+	bond := `{"ClassCode":"LIST_GBA","SecCode":"GBA02270915","CouponValue":2.500000,"status":"торгуется","FaceUnit":"KGS","SecShortName":"ГКО-2","SecFullName":"ГКО-2 летние","ClassName":"Листинговые:облигации",` + trading("100.5")
+	bare := `{"ClassCode":"LIST_GBA","SecCode":"GD052260119","CouponValue":null,"status":null,"FaceUnit":null,"SecShortName":null,"SecFullName":null,"ClassName":"Листинговые:облигации",` + trading("99")
 	if got, want := get("/api/v1/market-data", 200), "["+bond+","+bare+"]"; got != want {
 		t.Fatalf("rows changed:\n%s\n%s", got, want)
 	}
@@ -159,7 +166,7 @@ INSERT INTO public."Orders" SELECT n, c, (now() AT TIME ZONE 'Asia/Bishkek')::da
 	if got := call("PATCH", "/api/v1/admin/market-data/settings", jwt, map[string]any{"classes": []string{" AUCT_GBA ", "AUCT_GBA"}}, 200); got != `{"classes":["AUCT_GBA"]}` {
 		t.Fatal(got)
 	}
-	if got := get("/api/v1/market-data", 200); got != `[{"ClassCode":"AUCT_GBA","SecCode":"GBA02270915","CouponValue":2.5,"status":"торгуется","FaceUnit":"KGS","SecShortName":"ГКО аукцион","SecFullName":"ГКО аукцион","ClassName":"Аукцион ГКО"}]` {
+	if got := get("/api/v1/market-data", 200); got != `[{"ClassCode":"AUCT_GBA","SecCode":"GBA02270915","CouponValue":2.5,"status":"торгуется","FaceUnit":"KGS","SecShortName":"ГКО аукцион","SecFullName":"ГКО аукцион","ClassName":"Аукцион ГКО",`+trading("1")+`]` {
 		t.Fatal(got)
 	}
 	var audited int
@@ -210,7 +217,9 @@ INSERT INTO public."Orders" SELECT n, c, (now() AT TIME ZONE 'Asia/Bishkek')::da
 
 	// The instrument page: every column of its Params, Securities and Classes rows and its quotes.
 	got := call("GET", "/api/v1/admin/market-data/LIST_GBA/GBA02270915/details", jwt, nil, 200)
-	want := `{"params":{"ClassCode":"LIST_GBA","SecCode":"GBA02270915","last":100.5,"status":"торгуется","TradeDate":"` + today + `"},` +
+	want := `{"params":{"ClassCode":"LIST_GBA","SecCode":"GBA02270915","last":100.5,"status":"торгуется","TradeDate":"` + today + `",` +
+		`"lotsize":null,"tradingstatus":null,"pricemin":null,"pricemax":null,"realminstep":null,"bid":null,"biddepth":null,"offer":null,"offerdepth":null,"qty":null,"time":null,` +
+		`"open":null,"high":null,"low":null,"prevprice":null,"waprice":null,"numtrades":null,"voltoday":null,"valtoday":null,"accruedint":null,"yield":null,"nextcoupon":null,"couponperiod":null,"theorprice":1},` +
 		`"security":{"TradeDate":"` + refDate + `","ClassCode":"LIST_GBA","SecCode":"GBA02270915","CouponValue":2.500000,"FaceUnit":"KGS","SecShortName":"ГКО-2","SecFullName":"ГКО-2 летние"},` +
 		`"class":{"TradeDate":"` + refDate + `","ClassCode":"LIST_GBA","ClassName":"Листинговые:облигации","FirmsId":"KSE"},"quotes":[` + active7412 + `],"quotes_has_more":false}`
 	if got != want {
