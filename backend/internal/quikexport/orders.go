@@ -84,9 +84,11 @@ type OrderFilter struct {
 	ClassCode string
 	SecCode   string
 	// Today keeps only rows whose TradeDate is today's KSE trading day (UTC+6).
-	Today  bool
-	Limit  int
-	Offset int
+	Today bool
+	// TradeDay keeps only rows of this YYYY-MM-DD trading date; empty means any.
+	TradeDay string
+	Limit    int
+	Offset   int
 }
 
 type OrderPage struct {
@@ -123,8 +125,9 @@ AND ($4::text='' OR btrim(o."State"::text)=$4)
 AND ($5::text='' OR btrim(o."ClassCode"::text)=$5) AND ($6::text='' OR btrim(o."SecCode"::text)=$6)
 AND (NOT $7::boolean OR o."TradeDate"::date=(now() AT TIME ZONE 'Asia/Bishkek')::date)
 AND ($8::text[] IS NULL OR btrim(o."ClassCode"::text)=ANY($8::text[]))
+AND ($9::text='' OR o."TradeDate"::date=NULLIF($9::text,'')::date)
 ORDER BY o."TradeDate" DESC, o."OrderNum" DESC, o."ClassCode"
-LIMIT NULLIF($2,0) OFFSET $3`, f.Firm, limit, f.Offset, f.State, strings.TrimSpace(f.ClassCode), strings.TrimSpace(f.SecCode), f.Today, classes)
+LIMIT NULLIF($2,0) OFFSET $3`, f.Firm, limit, f.Offset, f.State, strings.TrimSpace(f.ClassCode), strings.TrimSpace(f.SecCode), f.Today, classes, f.TradeDay)
 	if err != nil {
 		return out, err
 	}

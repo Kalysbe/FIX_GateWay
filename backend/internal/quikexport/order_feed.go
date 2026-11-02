@@ -14,11 +14,15 @@ type OrderChange struct {
 }
 
 func (s *Store) RunOrders(ctx context.Context, publish func(OrderChange), failure func(error)) {
-	runOrderFeed(ctx, s.ListOrders, 2*time.Second, publish, failure)
+	runOrderFeed(ctx, s.ListOrders, 500*time.Millisecond, time.Now, publish, failure)
 }
 
-func runOrderFeed(ctx context.Context, readOrders func(context.Context, OrderFilter) (OrderPage, error), interval time.Duration, publish func(OrderChange), failure func(error)) {
+// tradingZone is the KSE trading day's zone (UTC+6).
+var tradingZone = time.FixedZone("Asia/Bishkek", 6*60*60)
+
+func runOrderFeed(ctx context.Context, readOrders func(context.Context, OrderFilter) (OrderPage, error), interval time.Duration, now func() time.Time, publish func(OrderChange), failure func(error)) {
 	previous := map[string]Order{}
+	previousDay := ""
 	// The first complete selection is the baseline, not a change: clients load
 	// current rows over REST, and replaying the whole table would overflow
 	// every subscriber queue at startup.
@@ -26,8 +30,11 @@ func runOrderFeed(ctx context.Context, readOrders func(context.Context, OrderFil
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
+		// The feed names the day itself, so one clock decides both the selection
+		// and the rollover below.
+		day := now().In(tradingZone).Format(time.DateOnly)
 		read, cancel := context.WithTimeout(ctx, 10*time.Second)
-		page, err := readOrders(read, OrderFilter{})
+		page, err := readOrders(read, OrderFilter{TradeDay: day})
 		cancel()
 		if err != nil {
 			if ctx.Err() == nil && failure != nil {
@@ -38,12 +45,17 @@ func runOrderFeed(ctx context.Context, readOrders func(context.Context, OrderFil
 			for _, o := range page.Orders {
 				current[o.Key()] = o
 			}
+			// Yesterday's rows leave the selection at rollover but are still in
+			// QUIK: that is not a removal.
+			if day != previousDay {
+				previous = map[string]Order{}
+			}
 			if primed {
 				for _, o := range orderChanges(previous, current) {
 					publish(o)
 				}
 			}
-			previous, primed = current, true
+			previous, previousDay, primed = current, day, true
 		}
 		select {
 		case <-ctx.Done():

@@ -72,7 +72,7 @@ REST создаёт и отменяет заявки, изменяет пози�
 | `GET /api/v1/orders/active` | Сегодняшние строки Orders своей фирмы с `State` = `Активна` | Массив исходных строк БД | `orders:read` |
 | `GET /api/v1/orders/{id}` | Одна текущая строка Orders | Исходная строка БД в `data` | `orders:read` |
 | `POST /api/v1/orders/{id}/cancel` | Снять заявку; тело не требуется | Заявка в именах колонок `Orders` после ответа QUIK; `200` — снята, `409` — QUIK не снял, `202` — QUIK ещё не ответил | `orders:cancel` |
-| gRPC `order.updated` | Изменения строк Orders своей фирмы | `event.data_json` — исходный JSON строки; `event.removed=true` удаляет её из текущего набора | `orders:read` |
+| gRPC `order.updated` | Изменения сегодняшних строк Orders своей фирмы (проверка раз в 500 мс) | `event.data_json` — исходный JSON строки; `event.removed=true` удаляет её из текущего набора | `orders:read` |
 
 Источник чтения — `quik_export2.public."Orders"`. `FirmId` ограничен `quik_firm`
 авторизованного токена (при пустом значении — кодом брокера). Параметры клиента

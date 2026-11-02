@@ -90,6 +90,10 @@ INSERT INTO public."Orders" VALUES
 	if err != nil || len(all.Orders) != 4 {
 		t.Fatal(all, err)
 	}
+	day, err := s.ListOrders(ctx, OrderFilter{TradeDay: "2026-10-21"})
+	if err != nil || len(day.Orders) != 1 || day.Orders[0].Text("ClassCode") != "OTHER" {
+		t.Fatal("trade day filter", day, err)
+	}
 	// The served classes limit every read of Orders, except for cancelling.
 	s.SetServedClasses(func(context.Context) ([]string, error) { return []string{"OTHER"}, nil })
 	if page, err := s.ListOrders(ctx, OrderFilter{}); err != nil || len(page.Orders) != 1 || page.Orders[0].Text("ClassCode") != "OTHER" {
