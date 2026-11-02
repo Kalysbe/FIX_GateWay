@@ -32,13 +32,13 @@ func (s *Server) writeParamReadError(w http.ResponseWriter, err error) {
 }
 
 // servedClassSet is the administrator-chosen classes that broker instruments,
-// quotes and order books are limited to; nil means no settings are attached.
+// quotes and order books are limited to; nil means every class is served.
 func (s *Server) servedClassSet(ctx context.Context) (map[string]bool, error) {
 	if s.servedClasses == nil {
 		return nil, nil
 	}
 	classes, err := s.servedClasses(ctx)
-	if err != nil {
+	if err != nil || len(classes) == 0 {
 		return nil, err
 	}
 	set := make(map[string]bool, len(classes))
@@ -127,14 +127,14 @@ func (s *Server) getMarketInstrument(w http.ResponseWriter, r *http.Request) {
 	}{details, quotes.Orders, quotes.HasMore})
 }
 
-// The served QUIK classes are an administrator setting (LISTBND until changed).
+// The served QUIK classes are an administrator setting; empty serves every class.
 func (s *Server) getMarketDataSettings(w http.ResponseWriter, r *http.Request) {
 	classes, err := s.marketClasses.Classes(r.Context())
 	if err != nil {
 		s.writeInternal(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"classes": classes, "default_classes": []string{quikexport.DefaultParamClass}})
+	writeJSON(w, http.StatusOK, map[string]any{"classes": classes})
 }
 
 func (s *Server) patchMarketDataSettings(w http.ResponseWriter, r *http.Request) {
@@ -160,7 +160,7 @@ func (s *Server) patchMarketDataSettings(w http.ResponseWriter, r *http.Request)
 		s.writeAdminAudit(r, "MARKET_DATA_CLASSES_UPDATED", "gateway_settings", quikexport.ParamClassesKey, nil,
 			map[string]any{"classes": before}, map[string]any{"classes": classes})
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"classes": classes, "default_classes": []string{quikexport.DefaultParamClass}})
+	writeJSON(w, http.StatusOK, map[string]any{"classes": classes})
 }
 
 func (s *Server) getMarketData(w http.ResponseWriter, r *http.Request) {

@@ -31,8 +31,8 @@
 и только выбранных классов. Классы выбирает администратор на странице
 «Текущие торги» (роль оператора и выше) или через
 `PATCH /api/v1/admin/market-data/settings` `{"classes": ["LISTBND"]}`; список
-хранится в `gateway_settings.market_data_classes`, по умолчанию `LISTBND`
-(миграция `000033`), изменение пишется в аудит как
+хранится в `gateway_settings.market_data_classes`, пустой список (по умолчанию)
+отдаёт все классы, изменение пишется в аудит как
 `MARKET_DATA_CLASSES_UPDATED`. Список классов для выбора —
 `GET /api/v1/admin/classes`. Если настройку прочитать нельзя, строки не
 отдаются (503), а не отдаются без фильтра.
@@ -88,5 +88,4 @@ FIX-подписка Market Data (`35=V/W/X`) продолжает работа�
 
 Интеграционные тесты используют те же `QUIK_ORDERS_*TEST_DATABASE_URL`, что и
 тесты `Orders`; локальный стенд создаёт таблицы `Params`, `Securities` и
-`Classes` (`deploy/local-quik-export.sql`). Его классы — не `LISTBND`: выберите
-`LIST_GBA` или `LISTEDSTOCKK` на странице «Текущие торги».
+`Classes` (`deploy/local-quik-export.sql`).

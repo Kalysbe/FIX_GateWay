@@ -60,20 +60,21 @@ LEFT JOIN LATERAL (SELECT c."ClassName" FROM public."Classes" c
 WHERE ` + paramsToday + ` AND ($1::text[] IS NULL OR btrim(p."ClassCode"::text)=ANY($1::text[]))`
 
 // SetParamClasses sets where the served classes come from; it is called once
-// before the store is used. Without it every class is served.
+// before the store is used. Without it, or with an empty choice, every class is served.
 func (s *Store) SetParamClasses(classes func(context.Context) ([]string, error)) {
 	s.paramClasses = classes
 }
 
+// servedClasses returns nil when every class is served: paramRows reads NULL so.
 func (s *Store) servedClasses(ctx context.Context) ([]string, error) {
 	if s.paramClasses == nil {
 		return nil, nil
 	}
 	list, err := s.paramClasses(ctx)
-	if err == nil && list == nil {
-		list = []string{}
+	if err != nil || len(list) == 0 {
+		return nil, err
 	}
-	return list, err
+	return list, nil
 }
 
 type ParamFilter struct {

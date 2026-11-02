@@ -12,15 +12,14 @@ import (
 
 // Market data serves the Params rows of the QUIK classes chosen by an
 // administrator. The choice is kept in the gateway's own gateway_settings,
-// comma-separated; until it is changed, LISTBND is served.
+// comma-separated; an empty choice, the default, serves every class.
 const (
 	ParamClassesKey     = "market_data_classes"
-	DefaultParamClass   = "LISTBND"
 	maxParamClasses     = 50
 	paramClassSeparator = ","
 )
 
-var ErrInvalidClasses = errors.New("укажите от 1 до 50 кодов классов QUIK: латиница, цифры и _")
+var ErrInvalidClasses = errors.New("укажите до 50 кодов классов QUIK: латиница, цифры и _")
 
 var classCodePattern = regexp.MustCompile(`^[A-Za-z0-9_]{1,32}$`)
 
@@ -38,7 +37,7 @@ func NormalizeClasses(list []string) ([]string, error) {
 			out = append(out, code)
 		}
 	}
-	if len(out) == 0 || len(out) > maxParamClasses {
+	if len(out) > maxParamClasses {
 		return nil, ErrInvalidClasses
 	}
 	return out, nil
@@ -60,10 +59,13 @@ func (c *ClassSettings) Classes(ctx context.Context) ([]string, error) {
 	var value string
 	err := c.pool.QueryRow(ctx, `SELECT value FROM gateway_settings WHERE key=$1`, ParamClassesKey).Scan(&value)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return []string{DefaultParamClass}, nil
+		return []string{}, nil
 	}
 	if err != nil {
 		return nil, err
+	}
+	if strings.TrimSpace(value) == "" {
+		return []string{}, nil
 	}
 	return NormalizeClasses(strings.Split(value, paramClassSeparator))
 }

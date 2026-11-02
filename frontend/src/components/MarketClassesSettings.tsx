@@ -4,7 +4,7 @@ import { api, apiWithHeaders, getSessionUser } from "../api";
 import { useToast } from "./Toast";
 import { dbValue, parseDBJSON, type DBOrder } from "../lib/rawOrders";
 
-type Settings = { classes: string[]; default_classes: string[] };
+type Settings = { classes: string[] };
 
 const WRITE_ROLES = new Set(["SUPER_ADMIN", "ADMIN", "OPERATOR"]);
 
@@ -52,7 +52,7 @@ export function MarketClassesSettings() {
   const changed = draft != null && draft.join(",") !== saved.join(",");
 
   return <div className="card space-y-3">
-    <div className="text-[12px] font-medium text-muted">Классы текущих торгов{settingsQ.data ? `: ${saved.join(", ")}` : ""}</div>
+    <div className="text-[12px] font-medium text-muted">Классы текущих торгов{settingsQ.data ? `: ${saved.length ? saved.join(", ") : "все"}` : ""}</div>
     {classesQ.error ? <div className="text-xs text-muted">Таблица QUIK Classes недоступна</div> : null}
     <div className="flex flex-wrap gap-x-4 gap-y-2">
       {options.map(o => <label key={o.code} className="flex items-center gap-2 text-sm">
@@ -61,7 +61,7 @@ export function MarketClassesSettings() {
       </label>)}
     </div>
     {canWrite && <div className="flex gap-2">
-      <button className="btn" type="button" disabled={!changed || chosen.length === 0 || save.isPending} onClick={() => save.mutate()}>{save.isPending ? "Сохранение…" : "Сохранить"}</button>
+      <button className="btn" type="button" disabled={!changed || save.isPending} onClick={() => save.mutate()}>{save.isPending ? "Сохранение…" : "Сохранить"}</button>
       {changed && <button className="btn-muted" type="button" onClick={() => setDraft(null)}>Отменить</button>}
     </div>}
   </div>;

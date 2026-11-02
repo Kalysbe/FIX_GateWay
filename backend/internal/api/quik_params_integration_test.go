@@ -46,8 +46,9 @@ func TestQUIKParamsHTTPRowsAsStored(t *testing.T) {
 	if err := migrate.Up(dsn, "../../migrations"); err != nil {
 		t.Fatal(err)
 	}
-	// The migration's default; a previous run may have changed it.
-	if _, err := pool.Exec(ctx, `UPDATE gateway_settings SET value='LISTBND' WHERE key='market_data_classes'`); err != nil {
+	// A chosen class; a previous run may have changed it.
+	if _, err := pool.Exec(ctx, `INSERT INTO gateway_settings (key, value) VALUES ('market_data_classes', 'LISTBND')
+ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`); err != nil {
 		t.Fatal(err)
 	}
 	_, err = pool.Exec(ctx, `CREATE TABLE public."Params" ("ClassCode" text,"SecCode" text,"last" numeric,"status" text,"TradeDate" timestamp);
@@ -135,7 +136,7 @@ INSERT INTO public."Orders" SELECT n, c, (now() AT TIME ZONE 'Asia/Bishkek')::da
 	store.SetParamClasses(classes.Classes)
 	s.SetQuikExport(store)
 	s.SetMarketDataClasses(classes)
-	// Today's LISTBND rows (the default class), only the chosen columns, as stored.
+	// Today's LISTBND rows (the chosen class), only the chosen columns, as stored.
 	// Market data is not firm-scoped.
 	bond := `{"ClassCode":"LISTBND","SecCode":"GBA02270915","CouponValue":2.500000,"status":"торгуется","FaceUnit":"KGS","SecShortName":"ГКО-2","SecFullName":"ГКО-2 летние","ClassName":"Листинговые:облигации"}`
 	bare := `{"ClassCode":"LISTBND","SecCode":"GD052260119","CouponValue":null,"status":null,"FaceUnit":null,"SecShortName":null,"SecFullName":null,"ClassName":"Листинговые:облигации"}`
@@ -150,13 +151,12 @@ INSERT INTO public."Orders" SELECT n, c, (now() AT TIME ZONE 'Asia/Bishkek')::da
 	get("/api/v1/market-data?limit=0", 400)
 
 	// Administrators choose the classes; brokers cannot.
-	if got := call("GET", "/api/v1/admin/market-data/settings", jwt, nil, 200); got != `{"classes":["LISTBND"],"default_classes":["LISTBND"]}` {
+	if got := call("GET", "/api/v1/admin/market-data/settings", jwt, nil, 200); got != `{"classes":["LISTBND"]}` {
 		t.Fatal(got)
 	}
 	call("PATCH", "/api/v1/admin/market-data/settings", token.Raw, map[string]any{"classes": []string{"AUCT_GBA"}}, 401)
-	call("PATCH", "/api/v1/admin/market-data/settings", jwt, map[string]any{"classes": []string{}}, 400)
 	call("PATCH", "/api/v1/admin/market-data/settings", jwt, map[string]any{"classes": []string{"LIST BND"}}, 400)
-	if got := call("PATCH", "/api/v1/admin/market-data/settings", jwt, map[string]any{"classes": []string{" AUCT_GBA ", "AUCT_GBA"}}, 200); got != `{"classes":["AUCT_GBA"],"default_classes":["LISTBND"]}` {
+	if got := call("PATCH", "/api/v1/admin/market-data/settings", jwt, map[string]any{"classes": []string{" AUCT_GBA ", "AUCT_GBA"}}, 200); got != `{"classes":["AUCT_GBA"]}` {
 		t.Fatal(got)
 	}
 	if got := get("/api/v1/market-data", 200); got != `[{"ClassCode":"AUCT_GBA","SecCode":"GBA02270915","CouponValue":2.5,"status":"торгуется","FaceUnit":"KGS","SecShortName":"ГКО аукцион","SecFullName":"ГКО аукцион","ClassName":"Аукцион ГКО"}]` {
@@ -168,6 +168,25 @@ INSERT INTO public."Orders" SELECT n, c, (now() AT TIME ZONE 'Asia/Bishkek')::da
 	}
 	if got := call("GET", "/api/v1/admin/classes", jwt, nil, 200); got != `[{"ClassCode":"AUCT_GBA","ClassName":"Аукцион ГКО"},{"ClassCode":"LISTBND","ClassName":"Листинговые:облигации"}]` {
 		t.Fatal(got)
+	}
+	// Brokers' instruments follow the choice too.
+	if _, err := pool.Exec(ctx, `INSERT INTO instruments (internal_symbol, quik_symbol, board, currency, security_type, status) VALUES
+('TEST_AUCT','TEST_AUCT','AUCT_GBA','KGS','BOND','ACTIVE'),('TEST_LIST','TEST_LIST','LISTBND','KGS','BOND','ACTIVE')`); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { pool.Exec(ctx, `DELETE FROM instruments WHERE internal_symbol IN ('TEST_AUCT','TEST_LIST')`) })
+	if got := get("/api/v1/instruments", 200); !strings.Contains(got, "TEST_AUCT") || strings.Contains(got, "TEST_LIST") {
+		t.Fatal("instruments ignore the chosen classes:", got)
+	}
+	// No chosen classes: every class is served, to every consumer.
+	if got := call("PATCH", "/api/v1/admin/market-data/settings", jwt, map[string]any{"classes": []string{}}, 200); got != `{"classes":[]}` {
+		t.Fatal(got)
+	}
+	if got := get("/api/v1/market-data", 200); !strings.Contains(got, `"ClassCode":"AUCT_GBA"`) || !strings.Contains(got, `"ClassCode":"LISTBND"`) {
+		t.Fatal("empty choice must serve every class:", got)
+	}
+	if got := get("/api/v1/instruments", 200); !strings.Contains(got, "TEST_AUCT") || !strings.Contains(got, "TEST_LIST") {
+		t.Fatal("empty choice must serve every instrument:", got)
 	}
 	call("PATCH", "/api/v1/admin/market-data/settings", jwt, map[string]any{"classes": []string{"LISTBND"}}, 200)
 
