@@ -30,7 +30,7 @@
 сегодняшняя дата по Бишкеку, UTC+6; сервер БД QUIK работает в другом поясе)
 и только выбранных классов. Классы выбирает администратор на странице
 «Текущие торги» (роль оператора и выше) или через
-`PATCH /api/v1/admin/market-data/settings` `{"classes": ["LISTBND"]}`; список
+`PATCH /api/v1/admin/market-data/settings` `{"classes": ["LIST_GBA"]}`; список
 хранится в `gateway_settings.market_data_classes`, пустой список (по умолчанию)
 отдаёт все классы, изменение пишется в аудит как
 `MARKET_DATA_CLASSES_UPDATED`. Список классов для выбора —

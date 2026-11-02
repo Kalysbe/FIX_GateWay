@@ -188,7 +188,7 @@ paths:
                 items:
                   $ref: "#/components/schemas/MarketDataRow"
               example:
-                - {ClassCode: LISTBND, SecCode: GBA02270915, CouponValue: 2.5, status: торгуется, FaceUnit: KGS, SecShortName: "ГКО-2 летние (GBA02270915)", SecFullName: "ГКО-2 летние (GBA02270915)", ClassName: "Листинговые:облигации"}
+                - {ClassCode: LIST_GBA, SecCode: GBA02270915, CouponValue: 2.5, status: торгуется, FaceUnit: KGS, SecShortName: "ГКО-2 летние (GBA02270915)", SecFullName: "ГКО-2 летние (GBA02270915)", ClassName: "Листинговые:облигации"}
         "400":
           description: Неверные limit/offset
         "401":
@@ -245,7 +245,7 @@ paths:
         следующую страницу запрашивайте с `offset` = `X-Next-Offset`. Страницы не являются
         снимком: если заявки меняются между запросами, перечитайте список с первой страницы.
       parameters:
-        - {in: query, name: board, required: true, schema: {type: string}, description: ClassCode инструмента, example: LISTBND}
+        - {in: query, name: board, required: true, schema: {type: string}, description: ClassCode инструмента, example: LIST_GBA}
         - {in: query, name: symbol, required: true, schema: {type: string}, description: SecCode инструмента, example: GBA02270915}
         - {in: query, name: limit, schema: {type: integer, minimum: 1, maximum: 1000, default: 200}}
         - {in: query, name: offset, schema: {type: integer, minimum: 0, maximum: 10000000, default: 0}}

@@ -31,18 +31,18 @@ function component(role, settings, classes) {
 }
 
 test('chosen classes are checked among QUIK Classes; a vanished class is still shown', () => {
-  const classes = raw.parseDBJSON('[{"ClassCode":"LISTBND","ClassName":"Листинговые:облигации"},{"ClassCode":"AUCT_GBA","ClassName":null}]');
-  const m = component('ADMIN', { classes: ['LISTBND', 'OLD'], default_classes: ['LISTBND'] }, classes);
+  const classes = raw.parseDBJSON('[{"ClassCode":"LIST_GBA","ClassName":"Листинговые:облигации"},{"ClassCode":"AUCT_GBA","ClassName":null}]');
+  const m = component('ADMIN', { classes: ['LIST_GBA', 'OLD'], default_classes: ['LIST_GBA'] }, classes);
   const html = renderToStaticMarkup(React.createElement(m.MarketClassesSettings));
-  assert.match(html, /Классы текущих торгов: LISTBND, OLD/);
-  assert.match(html, /checked=""[^>]*\/><span class="font-mono">LISTBND<\/span><span class="text-muted">Листинговые:облигации/);
+  assert.match(html, /Классы текущих торгов: LIST_GBA, OLD/);
+  assert.match(html, /checked=""[^>]*\/><span class="font-mono">LIST_GBA<\/span><span class="text-muted">Листинговые:облигации/);
   assert.doesNotMatch(html, /checked=""[^>]*\/><span class="font-mono">AUCT_GBA/);
   assert.match(html, /OLD<\/span><span class="text-muted">нет в QUIK Classes/);
   assert.match(html, /Сохранить/);
 });
 
 test('read-only roles see the classes but cannot change them', () => {
-  const m = component('AUDITOR', { classes: ['LISTBND'], default_classes: ['LISTBND'] }, []);
+  const m = component('AUDITOR', { classes: ['LIST_GBA'], default_classes: ['LIST_GBA'] }, []);
   const html = renderToStaticMarkup(React.createElement(m.MarketClassesSettings));
   assert.match(html, /disabled=""/);
   assert.doesNotMatch(html, /Сохранить/);

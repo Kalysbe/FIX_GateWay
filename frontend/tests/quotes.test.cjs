@@ -17,7 +17,7 @@ function load(file, imports = {}) {
 }
 const raw = load('lib/rawOrders.ts');
 const jsx = require('react/jsx-runtime');
-const router = { Link: ({ to, className, children }) => React.createElement('a', { href: to, className }, children), useParams: () => ({ board: 'LISTBND', symbol: 'GBA02270915' }) };
+const router = { Link: ({ to, className, children }) => React.createElement('a', { href: to, className }, children), useParams: () => ({ board: 'LIST_GBA', symbol: 'GBA02270915' }) };
 const quotes = load('lib/quotes.tsx', { 'react/jsx-runtime': jsx, 'react-router-dom': router, './rawOrders': raw });
 const table = { DataTable: ({ title, rows, columns, emptyTitle }) => React.createElement('section', null, React.createElement('h2', null, title),
   React.createElement('div', null, columns.map(c => React.createElement('b', { key: c.id }, c.header))),
@@ -51,14 +51,14 @@ test('quotes come from QUIK Orders rows and link to the order and the instrument
 });
 
 test('the instrument page shows every stored column of Params, Securities and Classes and its quotes', () => {
-  const details = '{"params":{"ClassCode":"LISTBND","SecCode":"GBA02270915","last":100.5,"bid":null,"yield":12.345678901234567},"security":{"SecShortName":"ГКО-2","FaceUnit":"KGS"},"class":null,"quotes":[' + quote + '],"quotes_has_more":false}';
+  const details = '{"params":{"ClassCode":"LIST_GBA","SecCode":"GBA02270915","last":100.5,"bid":null,"yield":12.345678901234567},"security":{"SecShortName":"ГКО-2","FaceUnit":"KGS"},"class":null,"quotes":[' + quote + '],"quotes_has_more":false}';
   const page = load('pages/MarketInstrumentPage.tsx', { ...common,
     '@tanstack/react-query': { useQuery: () => ({ data: raw.parseDBJSON(details), isLoading: false, error: null, refetch() {} }) },
     '../api': { api() { throw Error('unexpected request'); } },
     '../hooks/useAdminStream': { useAdminStream: () => ({ connected: true }) },
   });
   const html = renderToStaticMarkup(React.createElement(page.default));
-  assert.match(html, /LISTBND · GBA02270915/);
+  assert.match(html, /LIST_GBA · GBA02270915/);
   assert.match(html, /ГКО-2/);
   for (const field of ['last', 'bid', 'yield', 'SecShortName', 'FaceUnit']) assert.match(html, new RegExp(`<th class="text-left font-mono">${field}</th>`));
   assert.match(html, />12\.345678901234567</);

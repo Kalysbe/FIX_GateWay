@@ -56,7 +56,7 @@ INSERT INTO public."Params" VALUES
   ('LISTEDSTOCKK', 'KG0105166315', 'Local simulator share', current_date, 'торгуется', NULL, 400, 400, 400, 400, 400, 1, 1, 400)
 ON CONFLICT DO NOTHING;
 -- Instrument and class names that the Gateway joins to Params rows. The
--- local classes are not LISTBND: choose them on the "Текущие торги" page.
+-- local classes are not LIST_GBA: choose them on the "Текущие торги" page.
 CREATE TABLE IF NOT EXISTS public."Securities" (
   "TradeDate" timestamp NOT NULL, "ClassCode" text NOT NULL, "SecCode" text NOT NULL,
   "CouponValue" numeric, "FaceUnit" text, "SecShortName" text, "SecFullName" text,

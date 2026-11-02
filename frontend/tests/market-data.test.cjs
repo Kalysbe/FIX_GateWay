@@ -41,7 +41,7 @@ function renderPage(text, error = null) {
 }
 
 test('Params rows render with database column names and unrounded values', () => {
-  const html = renderPage('[{"ClassCode":"LISTBND","SecCode":"GBA02270915","CouponValue":2.500000,"status":"торгуется","FaceUnit":"KGS","SecShortName":"ГКО-2","SecFullName":"ГКО-2 летние","ClassName":"Листинговые:облигации"},{"ClassCode":"TQBR","SecCode":"SBER","CouponValue":9007199254740993,"status":null,"FaceUnit":null,"SecShortName":null,"SecFullName":null,"ClassName":null}]');
+  const html = renderPage('[{"ClassCode":"LIST_GBA","SecCode":"GBA02270915","CouponValue":2.500000,"status":"торгуется","FaceUnit":"KGS","SecShortName":"ГКО-2","SecFullName":"ГКО-2 летние","ClassName":"Листинговые:облигации"},{"ClassCode":"TQBR","SecCode":"SBER","CouponValue":9007199254740993,"status":null,"FaceUnit":null,"SecShortName":null,"SecFullName":null,"ClassName":null}]');
   const columns = ['ClassCode', 'SecCode', 'CouponValue', 'status', 'FaceUnit', 'SecShortName', 'SecFullName', 'ClassName'];
   assert.match(html, new RegExp(columns.map(c => `<b>${c}</b>`).join('')));
   assert.match(html, />2\.500000</);
@@ -49,8 +49,8 @@ test('Params rows render with database column names and unrounded values', () =>
   assert.match(html, />null</);
   assert.match(html, /class-settings/);
   // Each instrument links to its own page with all of its market data.
-  assert.match(html, /<a href="\/market-data\/LISTBND\/GBA02270915" class="whitespace-pre-wrap text-accent">GBA02270915<\/a>/);
-  assert.match(html, /<option value="LISTBND">LISTBND<\/option><option value="TQBR">TQBR<\/option>/);
+  assert.match(html, /<a href="\/market-data\/LIST_GBA\/GBA02270915" class="whitespace-pre-wrap text-accent">GBA02270915<\/a>/);
+  assert.match(html, /<option value="LIST_GBA">LIST_GBA<\/option><option value="TQBR">TQBR<\/option>/);
   assert.doesNotMatch(html, /Подписка|FIX|Стакан/);
 });
 

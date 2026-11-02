@@ -225,7 +225,7 @@ GET также принимает UUID исходной заявки Gateway и 
 Строка содержит только поля `ClassCode`, `SecCode`, `CouponValue`, `status`, `FaceUnit`, `SecShortName`, `SecFullName`, `ClassName` — из таблиц QUIK `Params`, `Securities` (по `ClassCode` + `SecCode`) и `Classes`, значения в исходном виде: числа JSON-числами с исходной точностью, строки и `null`. Разбирайте JSON с сохранением точности чисел. Отдаются только инструменты текущего торгового дня (по Бишкеку, UTC+6) из классов, выбранных администратором шлюза (если классы не выбраны — всех классов). Рыночные данные общие для всех брокеров.
 
 ```json
-{"ClassCode":"LISTBND","SecCode":"GBA02270915","CouponValue":2.500000,"status":"торгуется","FaceUnit":"KGS","SecShortName":"ГКО-2 летние (GBA02270915)","SecFullName":"ГКО-2 летние (GBA02270915)","ClassName":"Листинговые:облигации"}
+{"ClassCode":"LIST_GBA","SecCode":"GBA02270915","CouponValue":2.500000,"status":"торгуется","FaceUnit":"KGS","SecShortName":"ГКО-2 летние (GBA02270915)","SecFullName":"ГКО-2 летние (GBA02270915)","ClassName":"Листинговые:облигации"}
 ```
 
 REST-фильтры: `?board=<ClassCode>&symbol=<SecCode>`, оба необязательны; `limit` (1–5000, по умолчанию 1000) и `offset`, продолжение — в заголовках `X-Has-More` и `X-Next-Offset`. Если источник недоступен, ответ — HTTP 503 с `{"error":"market data unavailable"}` и `Retry-After`; пустая успешная выборка — `[]`.
