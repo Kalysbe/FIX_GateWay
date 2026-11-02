@@ -47,7 +47,6 @@ assert.equal(sql(`SELECT fix_send_attempted_at IS NOT NULL FROM orders WHERE id=
 // Real socket fault: simulator accepts D, drops the connection before ACK and
 // emits the retained ACK after reconnect. Durable crash-window state is injected
 // separately so both the unconfirmed and confirmed reconciliation paths run.
-sql("INSERT INTO instruments(internal_symbol,quik_symbol,board,currency) VALUES('FAULT_RECOVER','FAULT_RECOVER','TQBR','RUB') ON CONFLICT(internal_symbol) DO NOTHING;");
 // The ACK may arrive only after reconnect, i.e. after the reply wait (202).
 const fault=await call('/api/v1/orders',token,'POST',{...payload,SecCode:'FAULT_RECOVER'},[201,202]);
 const clOrdID=sql(`SELECT fix_cl_ord_id FROM orders WHERE id='${fault.id}'`);
@@ -65,7 +64,7 @@ command(['restart','gateway']);
 await until(async()=>{const value=await call('/api/v1/admin/trading-limits',admin);return value.policies.some(p=>p.broker_id===broker.id && p.paused);});
 // Restore into a separate disposable database, never overwrite the source.
 command(['stop','gateway']);
-const snapshotSQL=`SELECT json_build_object('orders',(SELECT count(*) FROM orders),'executions',(SELECT count(*) FROM executions),'outbox',(SELECT count(*) FROM outbox_events),'reconciliations',(SELECT count(*) FROM outbox_reconciliations),'history',(SELECT count(*) FROM trading_limit_history),'fences',(SELECT count(*) FROM orders WHERE fix_send_attempted_at IS NOT NULL))::text`;
+const snapshotSQL=`SELECT json_build_object('orders',(SELECT count(*) FROM orders),'outbox',(SELECT count(*) FROM outbox_events),'reconciliations',(SELECT count(*) FROM outbox_reconciliations),'history',(SELECT count(*) FROM trading_limit_history),'fences',(SELECT count(*) FROM orders WHERE fix_send_attempted_at IS NOT NULL))::text`;
 const snapshot=sql(snapshotSQL);
 const restoreDB=`restore_${randomUUID().replaceAll('-','')}`;
 sql(`CREATE DATABASE ${restoreDB}`);

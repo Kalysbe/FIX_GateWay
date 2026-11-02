@@ -118,16 +118,6 @@ type APIToken struct {
 	RotatedFrom *uuid.UUID  `json:"rotated_from,omitempty"`
 }
 
-type Instrument struct {
-	ID             int64  `json:"id"`
-	InternalSymbol string `json:"internal_symbol"`
-	QuikSymbol     string `json:"quik_symbol"`
-	Board          string `json:"board"`
-	Currency       string `json:"currency"`
-	SecurityType   string `json:"security_type"`
-	Status         string `json:"status"`
-}
-
 type Adapter struct {
 	ID                  string        `json:"id"`
 	Name                string        `json:"name"`
@@ -160,16 +150,13 @@ type Order struct {
 	ExecutionBecameTerminal bool             `json:"-"`
 	ID                      uuid.UUID        `json:"id"`
 	BrokerID                int64            `json:"broker_id"`
-	AccountID               int64            `json:"account_id"`
 	ClientOrderID           string           `json:"client_order_id"`
-	InstrumentID            int64            `json:"instrument_id"`
 	Side                    Side             `json:"side"`
 	OrderType               OrderType        `json:"order_type"`
 	TimeInForce             string           `json:"time_in_force"`
 	Quantity                decimal.Decimal  `json:"quantity"`
 	Price                   *decimal.Decimal `json:"price,omitempty"`
 	FilledQuantity          decimal.Decimal  `json:"filled_quantity"`
-	AvgPrice                decimal.Decimal  `json:"avg_price"`
 	Status                  OrderStatus      `json:"status"`
 	AdapterID               *string          `json:"adapter_id,omitempty"`
 	FixClOrdID              *string          `json:"fix_cl_ord_id,omitempty"`
@@ -185,7 +172,6 @@ type Order struct {
 	Currency       string `json:"currency,omitempty"`
 	ClientCode     string `json:"client_code,omitempty"` // FIX tag 109
 	QuikFirm       string `json:"quik_firm,omitempty"`   // FIX tag 5018
-	FirmName       string `json:"firm_name,omitempty"`   // from quik_firms
 	RequestID      string `json:"request_id,omitempty"`
 	TraceID        string `json:"trace_id,omitempty"`
 }
@@ -200,48 +186,6 @@ type OrderEvent struct {
 	Message    string    `json:"message"`
 	Payload    []byte    `json:"payload,omitempty"`
 	CreatedAt  time.Time `json:"created_at"`
-}
-
-type Execution struct {
-	ID           uuid.UUID       `json:"id"`
-	OrderID      uuid.UUID       `json:"order_id"`
-	ExecID       string          `json:"exec_id"`
-	TradeMatchID string          `json:"trade_match_id,omitempty"`
-	ContraBroker string          `json:"contra_broker,omitempty"`
-	ContraTrader string          `json:"contra_trader,omitempty"`
-	LastQty      decimal.Decimal `json:"last_qty"`
-	LastPx       decimal.Decimal `json:"last_px"`
-	CumQty       decimal.Decimal `json:"cum_qty"`
-	LeavesQty    decimal.Decimal `json:"leaves_qty"`
-	AdapterID    *string         `json:"adapter_id,omitempty"`
-	CreatedAt    time.Time       `json:"created_at"`
-}
-
-// Trade is an execution enriched with order/FIX context for list APIs.
-type Trade struct {
-	ID            uuid.UUID       `json:"id"`
-	OrderID       uuid.UUID       `json:"order_id"`
-	ExecID        string          `json:"exec_id"`
-	LastQty       decimal.Decimal `json:"last_qty"`
-	LastPx        decimal.Decimal `json:"last_px"`
-	CumQty        decimal.Decimal `json:"cum_qty"`
-	LeavesQty     decimal.Decimal `json:"leaves_qty"`
-	AdapterID     *string         `json:"adapter_id,omitempty"`
-	CreatedAt     time.Time       `json:"created_at"`
-	ExecutionDate string          `json:"execution_date"`
-	TradeMatchID  string          `json:"trade_match_id"`
-	ContraBroker  string          `json:"contra_broker"`
-	ContraTrader  string          `json:"contra_trader"`
-	BrokerID      int64           `json:"broker_id"`
-	ClientOrderID string          `json:"client_order_id"`
-	Symbol        string          `json:"symbol"`
-	Board         string          `json:"board"`
-	Side          string          `json:"side"`
-	ClientCode    string          `json:"client_code"`
-	QuikFirm      string          `json:"quik_firm"`
-	FirmName      string          `json:"firm_name"`
-	FixClOrdID    *string         `json:"fix_cl_ord_id,omitempty"`
-	QuikOrderID   *string         `json:"quik_order_id,omitempty"`
 }
 
 type OutboxEvent struct {

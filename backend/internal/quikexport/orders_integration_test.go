@@ -9,6 +9,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/fix-gateway/backend/internal/platform/db"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -148,13 +149,66 @@ INSERT INTO public."Trades" VALUES (1,'LIST_GD','2026-10-22','2040','Купля'
 	if err != nil || len(page.Trades) != 2 {
 		t.Fatal("class filter", page, err)
 	}
-	// The ledger's own read stays whole: it filters on import.
-	if rows, err := s.Trades(ctx); err != nil || len(rows) != 3 {
-		t.Fatal(rows, err)
-	}
 	s.SetServedClasses(func(context.Context) ([]string, error) { return []string{}, nil })
 	if page, err := s.ListTrades(ctx, TradeFilter{Limit: 10}); err != nil || len(page.Trades) != 3 {
 		t.Fatal("empty choice serves every class", page, err)
+	}
+}
+
+func TestSecuritiesCurrentRowsAndOrderCounts(t *testing.T) {
+	dsn := os.Getenv("QUIK_ORDERS_STORE_TEST_DATABASE_URL")
+	if dsn == "" {
+		dsn = os.Getenv("QUIK_ORDERS_TEST_DATABASE_URL")
+	}
+	if dsn == "" {
+		t.Skip("disposable QUIK_ORDERS_TEST_DATABASE_URL required")
+	}
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	_, err = pool.Exec(ctx, `CREATE TABLE public."Securities" ("TradeDate" timestamp,"ClassCode" char(12),"SecCode" char(12),"FaceUnit" text);
+INSERT INTO public."Securities" VALUES ('2026-11-02','LIST_GBA','GBA02281026','EUR'),('2026-11-02','LIST_GD','GD052270215','KGS'),
+('2026-11-01','LIST_GBA','GBA02281026','KGS'),('2026-11-01','LIST_GBA','DELISTED','KGS');
+CREATE TABLE public."Orders" ("TradeDate" timestamp,"ClassCode" char(12),"FirmId" char(12),"State" text);
+INSERT INTO public."Orders" VALUES ('2026-11-02','LIST_GBA','2040','Активна'),('2026-11-02','LIST_GBA','2040','Активна'),
+('2026-11-01','LIST_GBA','2040','Снята'),('2026-10-01','LIST_GBA','2040','Снята'),('2026-11-02','LIST_GD','2040','Снята'),('2026-11-02','LIST_GBA','9999','Активна');`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = pool.Exec(ctx, `DROP TABLE public."Securities"; DROP TABLE public."Orders"`) })
+	s := NewStore(pool)
+	page, err := s.ListSecurities(ctx, SecurityFilter{Limit: 1})
+	if err != nil || len(page.Securities) != 1 || !page.HasMore || page.NextOffset != 1 {
+		t.Fatalf("paging: %+v %v", page, err)
+	}
+	all, err := s.ListSecurities(ctx, SecurityFilter{})
+	if err != nil || len(all.Securities) != 2 || all.HasMore {
+		t.Fatalf("only the latest date is current: %+v %v", all, err)
+	}
+	row, err := s.Instrument(ctx, " LIST_GBA ", "GBA02281026")
+	if err != nil || row.Text("FaceUnit") != "EUR" {
+		t.Fatalf("instrument of the latest date: %+v %v", row, err)
+	}
+	if _, err := s.Instrument(ctx, "LIST_GBA", "DELISTED"); !errors.Is(err, ErrInstrumentNotFound) {
+		t.Fatal("an instrument QUIK no longer exports must not be tradable", err)
+	}
+	if _, err := s.Instrument(ctx, "LIST_GD", "GBA02281026"); !errors.Is(err, ErrInstrumentNotFound) {
+		t.Fatal("the class is part of the key", err)
+	}
+	s.SetServedClasses(func(context.Context) ([]string, error) { return []string{"LIST_GD"}, nil })
+	if all, err = s.ListSecurities(ctx, SecurityFilter{}); err != nil || len(all.Securities) != 1 || strings.TrimSpace(all.Securities[0].Text("ClassCode")) != "LIST_GD" {
+		t.Fatalf("served classes: %+v %v", all, err)
+	}
+	counts, err := s.CountOrdersByDay(ctx, []string{"2040"}, time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC))
+	if err != nil || len(counts) != 1 || counts[0] != (OrderDayCount{Date: "2026-11-02", State: "Снята", Count: 1}) {
+		t.Fatalf("counts for the firm, served classes and dates: %+v %v", counts, err)
+	}
+	s.SetServedClasses(nil)
+	if counts, err = s.CountOrdersByDay(ctx, []string{"2040"}, time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)); err != nil || len(counts) != 3 {
+		t.Fatalf("counts: %+v %v", counts, err)
 	}
 }
 

@@ -125,26 +125,32 @@ paths:
   /api/v1/instruments:
     get:
       tags: [Справочники]
-      summary: Список активных инструментов
+      summary: Инструменты — строки QUIK Securities
       security:
         - bearerAuth: []
       description: |
-        Требует `orders:read`. Используйте `quik_symbol` + `board` при создании заявки.
+        Требует `orders:read`. Строки таблицы QUIK `Securities` за последнюю дату как есть.
+        Используйте `SecCode` + `ClassCode` при создании заявки.
         Только инструменты классов, выбранных биржей (те же, что в `/api/v1/market-data`).
+      parameters:
+        - {in: query, name: limit, schema: {type: integer, minimum: 1, maximum: 1000, default: 200}}
+        - {in: query, name: offset, schema: {type: integer, minimum: 0, maximum: 10000000, default: 0}}
       responses:
         "200":
-          description: OK
+          description: Исходные строки QUIK Securities
+          headers:
+            X-Has-More: {schema: {type: boolean}, description: Есть ли следующая страница}
+            X-Next-Offset: {schema: {type: integer}, description: offset следующей страницы}
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  instruments:
-                    type: array
-                    items:
-                      $ref: "#/components/schemas/Instrument"
+                type: array
+                items:
+                  $ref: "#/components/schemas/Instrument"
         "401":
           description: Unauthorized
+        "503":
+          description: Источник QUIK недоступен; данные не подменяются
   /api/v1/market-data:
     get:
       tags: [Рыночные данные]
@@ -545,7 +551,8 @@ paths:
             type: string
           description: |
             Ключ `quik-ГГГГММДД-КЛАСС-НОМЕР` (дата торгов, `ClassCode`, `OrderNum`)
-            или UUID заявки из ответа шлюза (`order.id`), если её строка есть в `Orders`.
+            или UUID заявки из ответа шлюза (`order.id`), пока заявка открыта: через несколько
+            минут после закрытия в QUIK шлюз её не хранит, и UUID даёт 404.
       responses:
         "200":
           description: Исходная строка QUIK Orders
@@ -558,7 +565,7 @@ paths:
         "401":
           description: Unauthorized
         "404":
-          description: Строки нет в Orders, она другой фирмы или UUID принадлежит другому брокеру. Отсутствие строки не означает снятие или исполнение.
+          description: Строки нет в Orders, она другой фирмы, UUID принадлежит другому брокеру или заявка закрыта и шлюз её уже не хранит. Отсутствие строки не означает снятие или исполнение.
         "503":
           description: Источник QUIK Orders недоступен; данные не подменяются
   /api/v1/orders/{id}/cancel:
@@ -757,7 +764,8 @@ components:
       type: object
       description: |
         Заявка в именах колонок QUIK `Orders`. `FirmId` — `quik_firm` токена.
-        `id` — номер заявки в шлюзе: передавайте его в `GET /api/v1/orders/{id}` и в отмену.
+        `id` — номер заявки в шлюзе: передавайте его в `GET /api/v1/orders/{id}` и в отмену,
+        пока заявка открыта. Закрытую заявку ищите по ключу `quik-ГГГГММДД-КЛАСС-НОМЕР`.
       properties:
         OrderNum: {type: integer, format: int64, nullable: true, description: "Номер заявки в QUIK; null, пока QUIK не принял заявку"}
         State: {type: string, nullable: true, description: "Активна, Исполнена, Снята или Отклонена; null, пока QUIK не ответил"}
@@ -787,18 +795,6 @@ components:
         Operation: {type: string}
         State: {type: string}
       example: {"OrderNum": 9007199254740993123, "ClassCode": "LIST_GBA", "TradeDate": "2026-10-22T00:00:00", "SecCode": "GBA02280810", "FirmId": "2040", "Operation": "Купля", "State": "Активна", "Qty": 10, "Balance": 8, "Price": 105.12345678}
-    OrderEvent:
-      type: object
-      properties:
-        id: {type: integer, format: int64}
-        order_id: {type: string, format: uuid}
-        event_type: {type: string}
-        from_status: {type: string, nullable: true}
-        to_status: {type: string, nullable: true}
-        adapter_id: {type: string, nullable: true}
-        message: {type: string}
-        raw_fix: {type: string}
-        created_at: {type: string, format: date-time}
     QuikTradingAccountRow:
       type: object
       additionalProperties: true
@@ -815,25 +811,18 @@ components:
         FirmName: {type: string, nullable: true}
     Instrument:
       type: object
+      additionalProperties: true
+      description: |
+        Строка `quik_export2.public."Securities"` как есть (`row_to_json`). Набор колонок задаёт QUIK;
+        шлюз не добавляет и не переименовывает поля.
       properties:
-        id:
-          type: integer
-        internal_symbol:
-          type: string
-        quik_symbol:
-          type: string
-          example: KG0105166315
-        board:
-          type: string
-          example: LISTEDSTOCKK
-        currency:
-          type: string
-          example: KZT
-        security_type:
-          type: string
-        status:
-          type: string
-          example: ACTIVE
+        TradeDate: {type: string}
+        ClassCode: {type: string}
+        SecCode: {type: string}
+        FaceUnit: {type: string, nullable: true, description: Валюта}
+        SecShortName: {type: string, nullable: true}
+        SecFullName: {type: string, nullable: true}
+      example: {"TradeDate": "2026-11-02T00:00:00", "ClassCode": "LIST_GBA", "SecCode": "GBA02280810", "FaceUnit": "KGS", "SecShortName": "ГКО", "SecFullName": "Государственная бумага"}
     BookLevel:
       type: object
       properties:

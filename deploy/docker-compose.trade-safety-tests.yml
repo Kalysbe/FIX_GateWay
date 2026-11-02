@@ -29,11 +29,9 @@ services:
     entrypoint: [/bin/sh, -ec]
     command:
       - |
-        go test ./internal/fixaudit ./internal/executioninbox ./internal/tradeledger ./internal/adapters/arqa ./internal/adapters ./internal/api ./internal/observability ./internal/metrics ./cmd/gateway
-        go test -tags integration ./internal/tradeledger -count=1 -v
+        go test ./internal/fixaudit ./internal/executioninbox ./internal/adapters/arqa ./internal/adapters ./internal/api ./internal/observability ./internal/metrics ./cmd/gateway
         go test -tags integration ./internal/fixaudit -count=1 -v
-        go test -tags integration ./internal/api -run 'TestTradeLedger' -count=1 -v
-        go test -tags integration ./internal/orders -run 'Test(ExecutionIDs|InboxReceipts|ExecutionReplay)' -count=1 -v
+        go test -tags integration ./internal/orders -run 'Test(InboxReceipts|ExecutionReplay|PurgeFinished)' -count=1 -v
 volumes:
   modcache:
   buildcache:

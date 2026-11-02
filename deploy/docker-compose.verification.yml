@@ -3,9 +3,9 @@
 services:
   gateway:
     environment:
-      # The local QUIK stand-in has no "Trades" table: the failing history
-      # source exercises Gateway notifications.
-      TRADE_RECONCILIATION_ENABLED: "true"
+      # Shorter than the simulator's reconnect, so POST answers 202 before the
+      # retained ACK and the unconfirmed reconciliation case can be observed.
+      ORDER_ANSWER_TIMEOUT: 1s
   access:
     ports: !override
       - "127.0.0.1:38080:8080"

@@ -9,12 +9,11 @@ BEGIN
  END IF;
 END $$;
 INSERT INTO brokers(id,code,name) VALUES (900001,'DASHBOARD-TEST','Test broker');
-INSERT INTO instruments(id,internal_symbol,quik_symbol) VALUES (900001,'DASHBOARD-TEST','TEST');
-INSERT INTO orders(broker_id,instrument_id,client_order_id,side,order_type,quantity,status,created_at)
- SELECT 900001,900001,'dashboard-'||n,'BUY','MARKET',1,status,now()
+INSERT INTO orders(broker_id,symbol,client_order_id,side,order_type,quantity,status,created_at)
+ SELECT 900001,'TEST','dashboard-'||n,'BUY','MARKET',1,status,now()
  FROM (VALUES (1,'FILLED'),(2,'REJECTED'),(3,'FAILED'),(4,'QUEUED'),(5,'ACKNOWLEDGED'),(6,'PARTIALLY_FILLED'),(7,'CANCEL_PENDING')) AS fixture(n,status);
-INSERT INTO orders(broker_id,instrument_id,client_order_id,side,order_type,quantity,status,created_at)
- VALUES (900001,900001,'yesterday','BUY','MARKET',1,'FILLED',date_trunc('day',now())-interval '1 second');
+INSERT INTO orders(broker_id,symbol,client_order_id,side,order_type,quantity,status,created_at)
+ VALUES (900001,'TEST','yesterday','BUY','MARKET',1,'FILLED',date_trunc('day',now())-interval '1 second');
 INSERT INTO obs_events(ts,event_type,subtype,result,broker_id,response_time_ms,error_code) VALUES
  (now(),'API_REQUEST','ORDER_CREATE','SUCCESS',900001,10,NULL),
  (now(),'API_REQUEST','ORDER_CREATE','FAILURE',900001,100,'ORDER_FAILED'),

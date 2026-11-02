@@ -93,6 +93,8 @@ services:
       GRPC_SERVER_NAME: localhost
       MIGRATIONS_PATH: /app/migrations
       FIX_SESSION_DIR: /app/fix-sessions
+      # The local scripts read fills from the orders row after QUIK closes it.
+      FINISHED_ORDER_GRACE: 30m
       ADAPTER_HOST_OVERRIDE: fixsimulator
       # SELECT-only role on the simulator's Orders table (see local-quik-export.sql).
       QUIK_EXPORT_DATABASE_URL: postgres://quik_reader:local-simulator-only@postgres:5432/quik_export_local?sslmode=disable

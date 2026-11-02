@@ -4,9 +4,11 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/fix-gateway/backend/internal/domain"
+	"github.com/fix-gateway/backend/internal/quikexport"
 )
 
 type marketDataManager interface {
@@ -17,6 +19,40 @@ type marketDataReference interface {
 	ListActiveInstruments(context.Context) ([]domain.SecurityRef, error)
 }
 type marketDataPublisher interface{ Broadcast(string, any) }
+
+// quikInstruments lists what to subscribe to from the current QUIK Securities
+// rows of the served classes. A nil store reports ErrNotConfigured on each pass.
+type quikInstruments struct{ store *quikexport.Store }
+
+func (q quikInstruments) ListActiveInstruments(ctx context.Context) ([]domain.SecurityRef, error) {
+	page, err := q.store.ListSecurities(ctx, quikexport.SecurityFilter{})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]domain.SecurityRef, 0, len(page.Securities))
+	for _, row := range page.Securities {
+		symbol := strings.TrimSpace(row.Text("SecCode"))
+		out = append(out, domain.SecurityRef{
+			Symbol: symbol, SecurityID: symbol, Board: strings.TrimSpace(row.Text("ClassCode")),
+			Currency: strings.TrimSpace(row.Text("FaceUnit")), SecurityType: fixSecurityType(row.Text("SecType")),
+		})
+	}
+	return out, nil
+}
+
+// fixSecurityType maps QUIK Securities.SecType to the FIX 167 value the FIX
+// dictionary carried for the same instruments; other types are sent without 167.
+func fixSecurityType(secType string) string {
+	switch strings.TrimSpace(secType) {
+	case "1":
+		return "CS"
+	case "2":
+		return "GO"
+	case "7":
+		return "FXSPOT"
+	}
+	return ""
+}
 
 // The supervisor belongs to the gateway, never to a browser request. Each pass
 // reconciles the dictionary, rejects and connection state; healthy streams are

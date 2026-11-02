@@ -31,8 +31,6 @@ import (
 	"github.com/fix-gateway/backend/internal/quikexport"
 	"github.com/fix-gateway/backend/internal/ratelimit"
 	"github.com/fix-gateway/backend/internal/realtime"
-	"github.com/fix-gateway/backend/internal/refdata"
-	"github.com/fix-gateway/backend/internal/tradeledger"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -49,14 +47,12 @@ type Server struct {
 	brokers            *brokers.Store
 	orders             *orders.Service
 	orderStore         *orders.Store
-	tradeLedger        *tradeledger.Store
 	adapters           *adapters.Store
 	manager            *adapters.Manager
 	outbox             *outbox.Store
 	audit              *audit.Store
 	users              *admin.UserStore
 	hub                *realtime.Hub
-	refdata            *refdata.Store
 	positions          *positions.Store
 	quikExport         *quikexport.Store
 	quikOrders         quikOrderReader
@@ -87,9 +83,7 @@ func NewServer(
 	s := &Server{
 		cfg: cfg, log: log, pool: pool, brokers: brokerStore, orders: orderSvc, orderStore: orderStore,
 		adapters: adapterStore, manager: manager, outbox: outboxStore, audit: auditStore, users: users, hub: hub,
-		refdata:         refdata.NewStore(pool),
 		positions:       positions.NewStore(pool),
-		tradeLedger:     tradeledger.NewStore(pool),
 		obs:             obs,
 		trusted:         observability.ParseTrustedProxies(cfg.TrustedProxies),
 		hmacNonces:      auth.NewNonceCache(10 * time.Minute),
@@ -116,9 +110,6 @@ func (s *Server) SetQuikExport(store *quikexport.Store) {
 func (s *Server) SetMarketDataClasses(settings *quikexport.ClassSettings) {
 	s.marketClasses = settings
 	s.servedClasses = settings.Classes
-	if s.tradeLedger != nil {
-		s.tradeLedger.SetClasses(settings.Classes)
-	}
 }
 
 func (s *Server) SetExecutionInbox(in *executioninbox.Inbox, cases *executioninbox.CaseStore) {
@@ -236,7 +227,6 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/v1/admin/orders/{id}", s.adminRO(s.getAdminOrder))
 	mux.Handle("GET /api/v1/admin/emitents/{symbol}/orders", s.adminRO(s.listEmitentOrders))
 	mux.Handle("GET /api/v1/admin/trades", s.adminRO(s.listAdminTrades))
-	mux.Handle("GET /api/v1/admin/trades/{id}", s.adminRO(s.getAdminTrade))
 	mux.Handle("GET /api/v1/admin/positions", s.adminRO(s.listAdminPositions))
 	mux.Handle("POST /api/v1/admin/positions/sync", s.adminOps(s.syncPositionsFIX))
 	mux.Handle("GET /api/v1/admin/market-data", s.adminRO(s.listMarketData))
@@ -271,10 +261,8 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/v1/admin/notifications/{id}/read", s.adminRO(s.readNotification))
 	mux.Handle("GET /api/v1/admin/orders/{id}/trace", s.adminRO(s.orderTrace))
 	mux.Handle("GET /api/v1/admin/users", s.adminUsers(s.listUsers))
-	mux.Handle("GET /api/v1/admin/instruments", s.adminRO(s.listAdminInstruments))
+	mux.Handle("GET /api/v1/admin/instruments", s.adminRO(s.listInstruments))
 	mux.Handle("GET /api/v1/admin/firms", s.adminRO(s.listQuikFirms))
-	mux.Handle("POST /api/v1/admin/instruments/sync", s.adminOps(s.syncInstrumentsFIX))
-	mux.Handle("POST /api/v1/admin/quik/sync", s.adminOps(s.syncInstrumentsFIX)) // alias
 	mux.Handle("GET /api/v1/admin/events/stream", s.adminRO(s.streamAdminEvents))
 
 	h := s.protectOverload(http.Handler(mux))
@@ -608,32 +596,25 @@ func writeCancelAnswer(w http.ResponseWriter, order domain.Order, rejectReason s
 	}
 }
 
+// listInstruments serves the current QUIK Securities rows of the served classes
+// as stored, to brokers and administrators alike, paged like the Orders list.
 func (s *Server) listInstruments(w http.ResponseWriter, r *http.Request) {
-	served, err := s.servedClassSet(r.Context())
-	if err != nil {
-		s.writeParamReadError(w, err)
+	limit, offset, ok := pageParams(w, r)
+	if !ok {
 		return
 	}
-	rows, err := s.pool.Query(r.Context(), `
-		SELECT id, internal_symbol, quik_symbol, board, currency, security_type, status
-		FROM instruments WHERE status='ACTIVE' ORDER BY id`)
-	if err != nil {
-		s.writeInternal(w, err)
+	if s.quikRefs == nil {
+		s.writeQuikRefError(w, errQuikRefsUnavailable)
 		return
 	}
-	defer rows.Close()
-	out := []domain.Instrument{}
-	for rows.Next() {
-		var i domain.Instrument
-		if err := rows.Scan(&i.ID, &i.InternalSymbol, &i.QuikSymbol, &i.Board, &i.Currency, &i.SecurityType, &i.Status); err != nil {
-			s.writeInternal(w, err)
-			return
-		}
-		if served == nil || served[i.Board] {
-			out = append(out, i)
-		}
+	page, err := s.quikRefs.ListSecurities(r.Context(), quikexport.SecurityFilter{Limit: limit, Offset: offset})
+	if err != nil {
+		s.writeQuikRefError(w, err)
+		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"instruments": out})
+	w.Header().Set("X-Has-More", strconv.FormatBool(page.HasMore))
+	w.Header().Set("X-Next-Offset", strconv.Itoa(page.NextOffset))
+	writeQuikJSON(w, page.Securities)
 }
 
 func (s *Server) listBrokerOrderBook(w http.ResponseWriter, r *http.Request) {
@@ -697,48 +678,19 @@ func bookLevelsOrTop(levels []domain.BookLevel, px, sz string) []domain.BookLeve
 	return []domain.BookLevel{{Price: px, Size: sz}}
 }
 
-func (s *Server) listAdminInstruments(w http.ResponseWriter, r *http.Request) {
-	rows, err := s.pool.Query(r.Context(), `
-		SELECT id, internal_symbol, quik_symbol, board, currency, security_type, status
-		FROM instruments
-		WHERE status = 'ACTIVE'
-		ORDER BY board, quik_symbol, id`)
-	if err != nil {
-		s.writeInternal(w, err)
-		return
-	}
-	defer rows.Close()
-	var out []domain.Instrument
-	for rows.Next() {
-		var i domain.Instrument
-		if err := rows.Scan(&i.ID, &i.InternalSymbol, &i.QuikSymbol, &i.Board, &i.Currency, &i.SecurityType, &i.Status); err != nil {
-			s.writeInternal(w, err)
-			return
-		}
-		out = append(out, i)
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"source": "local", "instruments": out, "count": len(out)})
-}
-
-func (s *Server) syncInstrumentsFIX(w http.ResponseWriter, r *http.Request) {
-	adapterID, items, err := s.manager.FetchSecurities(r.Context())
-	if err != nil {
-		s.writeUpstream(w, err)
-		return
-	}
-	res, err := s.refdata.SyncFromFIX(r.Context(), items)
-	if err != nil {
-		s.writeInternal(w, err)
-		return
-	}
-	res.AdapterID = adapterID
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "result": res})
-}
-
 // listTrades serves the token firm's rows of QUIK "Trades" as stored, newest
 // first, paged like the Orders list.
 func (s *Server) listTrades(w http.ResponseWriter, r *http.Request) {
-	firm, _, err := s.orderReadScope(r, false)
+	s.listQuikTrades(w, r, false)
+}
+
+// listAdminTrades serves the same rows of every firm; firm_id and broker_id narrow them.
+func (s *Server) listAdminTrades(w http.ResponseWriter, r *http.Request) {
+	s.listQuikTrades(w, r, true)
+}
+
+func (s *Server) listQuikTrades(w http.ResponseWriter, r *http.Request, admin bool) {
+	firm, _, err := s.orderReadScope(r, admin)
 	if err != nil {
 		s.writeOrderReadError(w, err)
 		return
@@ -1286,17 +1238,24 @@ func (s *Server) brokerSecurity(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) brokerStats(w http.ResponseWriter, r *http.Request) {
 	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
-	if _, err := s.brokers.GetBroker(r.Context(), id); err != nil {
+	b, err := s.brokers.GetBroker(r.Context(), id)
+	if err != nil {
 		writeErr(w, http.StatusNotFound, "not found")
 		return
 	}
 	days, _ := strconv.Atoi(r.URL.Query().Get("days"))
-	if days <= 0 {
-		days = 7
-	}
-	st, err := s.orderStore.StatsForBroker(r.Context(), id, days)
+	firms, err := s.brokerFirms(r.Context(), b)
 	if err != nil {
 		s.writeInternal(w, err)
+		return
+	}
+	if s.quikRefs == nil {
+		s.writeOrderReadError(w, quikexport.ErrNotConfigured)
+		return
+	}
+	st, err := brokerOrderStats(r.Context(), s.quikRefs, firms, days, time.Now())
+	if err != nil {
+		s.writeOrderReadError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"stats": st})
@@ -1366,20 +1325,6 @@ func (s *Server) listEmitentOrders(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, res)
-}
-
-func (s *Server) listAdminTrades(w http.ResponseWriter, r *http.Request) {
-	list, err := s.tradeLedger.List(r.Context(), 500)
-	if err != nil {
-		s.writeInternal(w, err)
-		return
-	}
-	coverage, err := s.tradeLedger.Coverage(r.Context())
-	if err != nil {
-		s.writeInternal(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"trades": list, "coverage": coverage})
 }
 
 func (s *Server) listAdminPositions(w http.ResponseWriter, r *http.Request) {
@@ -1584,38 +1529,10 @@ func (s *Server) listUsers(w http.ResponseWriter, r *http.Request) {
 }
 
 
-func eventDTO(e domain.OrderEvent) map[string]any {
-	m := map[string]any{
-		"id": e.ID, "order_id": e.OrderID, "event_type": e.EventType,
-		"from_status": e.FromStatus, "to_status": e.ToStatus,
-		"adapter_id": e.AdapterID, "message": e.Message, "created_at": e.CreatedAt,
-	}
-	if len(e.Payload) > 0 {
-		var p map[string]any
-		if err := json.Unmarshal(e.Payload, &p); err == nil {
-			if raw, ok := p["raw_fix"].(string); ok && raw != "" {
-				m["raw_fix"] = raw
-			}
-		}
-	}
-	return m
-}
-
-func mapEvents(list []domain.OrderEvent) []map[string]any {
-	out := make([]map[string]any, 0, len(list))
-	for _, e := range list {
-		out = append(out, eventDTO(e))
-	}
-	return out
-}
-
 // OnExecution is invoked by the durable inbox worker, never by the FIX callback.
+// A report of an order not held here needs nothing: the order was made outside
+// this Gateway or is finished and purged, and QUIK Orders and Trades hold its result.
 func (s *Server) OnExecution(ctx context.Context, report adapters.ExecutionReport) error {
-	if s.tradeLedger != nil && s.tradeLedger.Pool != nil {
-		if err := s.tradeLedger.RecordFIX(ctx, report); err != nil {
-			return err
-		}
-	}
 	if report.ProtocolReject {
 		return fmt.Errorf("FIX protocol reject requires venue reconciliation (message %s sequence %s); report retained", report.RefMessageType, report.RefSeqNum)
 	}
@@ -1636,17 +1553,12 @@ func (s *Server) OnExecution(ctx context.Context, report adapters.ExecutionRepor
 		}
 		values[i] = parsed
 	}
-	lastQty, lastPx, cumQty, leaves := values[0], values[1], values[2], values[3]
-	date, err := reportExecutionDate(report)
-	if err != nil {
-		return err
-	}
-	ctx = orders.WithExecutionDate(ctx, date)
+	lastQty, cumQty := values[0], values[2]
 	if report.CancelReject {
 		order, err := s.orderStore.ApplyCancelReject(ctx, report.ClOrdID, report.OrigClOrdID, report.OrderID, report.AdapterID,
 			cancelRejectReason(report.Text, report.CxlRejReason), report.RawFIX)
 		if err != nil {
-			if errors.Is(err, orders.ErrNotFound) && s.tradeLedger != nil && s.tradeLedger.Pool != nil && report.RawFIX != "" {
+			if errors.Is(err, orders.ErrNotFound) {
 				return nil
 			}
 			s.log.Error("apply cancel reject failed", "error", err, "cl_ord_id", report.ClOrdID, "orig_cl_ord_id", report.OrigClOrdID)
@@ -1670,12 +1582,10 @@ func (s *Server) OnExecution(ctx context.Context, report adapters.ExecutionRepor
 		})
 		return nil
 	}
-	order, exec, err := s.orderStore.ApplyExecutionReport(ctx, report.ClOrdID, report.OrigClOrdID, report.ExecID, report.ExecType, report.OrdStatus,
-		report.OrderID, lastQty, lastPx, cumQty, leaves, report.AdapterID, report.Text, report.OrdRejReason, report.RawFIX)
+	order, err := s.orderStore.ApplyExecutionReport(ctx, report.ClOrdID, report.OrigClOrdID, report.ExecType, report.OrdStatus,
+		report.OrderID, lastQty, cumQty, report.AdapterID, report.Text, report.OrdRejReason, report.RawFIX)
 	if err != nil {
-		if errors.Is(err, orders.ErrNotFound) && s.tradeLedger != nil && s.tradeLedger.Pool != nil && report.RawFIX != "" {
-			// Raw evidence has been committed even for external orders. The trade
-			// itself comes from the next QUIK reconciliation.
+		if errors.Is(err, orders.ErrNotFound) {
 			return nil
 		}
 		s.log.Error("apply execution report failed", "error", err, "cl_ord_id", report.ClOrdID,
@@ -1692,32 +1602,8 @@ func (s *Server) OnExecution(ctx context.Context, report adapters.ExecutionRepor
 			}
 		}
 	}
-	if exec != nil {
-		// Admin trigger only: brokers receive the QUIK Trades row from the Trades feed.
-		s.hub.Broadcast("trade.created", exec)
-	}
 	s.emitOrderLifecycle(order, report)
 	return nil
-}
-
-func reportExecutionDate(report adapters.ExecutionReport) (string, error) {
-	if report.TradeDate != "" {
-		if _, err := time.Parse("20060102", report.TradeDate); err != nil {
-			return "", fmt.Errorf("invalid FIX TradeDate")
-		}
-		return report.TradeDate, nil
-	}
-	value := report.TransactTime
-	if value == "" {
-		value = report.OriginalTime
-	}
-	if value == "" {
-		return "", nil
-	}
-	if _, err := time.Parse("20060102-15:04:05.999999999", value); err != nil {
-		return "", fmt.Errorf("invalid FIX execution timestamp")
-	}
-	return value[:8], nil
 }
 
 func (s *Server) emitOrderLifecycle(order domain.Order, report adapters.ExecutionReport) {

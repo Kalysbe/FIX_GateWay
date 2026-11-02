@@ -34,11 +34,8 @@ func TestActiveCountsOnlySentOpenRecentOrders(t *testing.T) {
 		pool.Exec(ctx, `DELETE FROM orders WHERE adapter_id=$1`, adapter)
 		pool.Exec(ctx, `DELETE FROM adapters WHERE id=$1`, adapter)
 	})
-	var broker, instrument int64
+	var broker int64
 	if err := pool.QueryRow(ctx, `INSERT INTO brokers(code,name) VALUES($1,'active counts') RETURNING id`, uuid.NewString()).Scan(&broker); err != nil {
-		t.Fatal(err)
-	}
-	if err := pool.QueryRow(ctx, `INSERT INTO instruments(internal_symbol,quik_symbol,board) VALUES($1,$1,'ACT') RETURNING id`, uuid.NewString()).Scan(&instrument); err != nil {
 		t.Fatal(err)
 	}
 	for _, o := range []struct {
@@ -52,9 +49,9 @@ func TestActiveCountsOnlySentOpenRecentOrders(t *testing.T) {
 		{"QUEUED", false, "1 minute"},         // not sent
 		{"ACKNOWLEDGED", true, "30 hours"},    // stale, no final report
 	} {
-		if _, err := pool.Exec(ctx, `INSERT INTO orders(id,broker_id,client_order_id,instrument_id,side,order_type,time_in_force,quantity,price,status,adapter_id,fix_send_attempted_at,created_at)
-VALUES($1,$2,$3,$4,'BUY','LIMIT','DAY',1,1,$5,$6,CASE WHEN $7 THEN now() END,now()-$8::interval)`,
-			uuid.New(), broker, uuid.NewString(), instrument, o.status, adapter, o.sent, o.age); err != nil {
+		if _, err := pool.Exec(ctx, `INSERT INTO orders(id,broker_id,client_order_id,side,order_type,time_in_force,quantity,price,status,adapter_id,fix_send_attempted_at,created_at)
+VALUES($1,$2,$3,'BUY','LIMIT','DAY',1,1,$4,$5,CASE WHEN $6 THEN now() END,now()-$7::interval)`,
+			uuid.New(), broker, uuid.NewString(), o.status, adapter, o.sent, o.age); err != nil {
 			t.Fatal(err)
 		}
 	}

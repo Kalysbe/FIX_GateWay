@@ -29,16 +29,13 @@ func productionOrdersFixture(t *testing.T) (context.Context, *Store, *pgxpool.Po
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
-	var broker, instrument int64
+	var broker int64
 	if err = pool.QueryRow(ctx, `INSERT INTO brokers(code,name)VALUES($1,'Production integrity test')RETURNING id`, uuid.NewString()).Scan(&broker); err != nil {
-		t.Fatal(err)
-	}
-	if err = pool.QueryRow(ctx, `INSERT INTO instruments(internal_symbol,quik_symbol,board)VALUES($1,$1,'AUDIT')RETURNING id`, uuid.NewString()).Scan(&instrument); err != nil {
 		t.Fatal(err)
 	}
 	store := NewStore(pool)
 	create := func(adapter string) domain.Order {
-		o, _, err := store.CreateWithOutbox(ctx, CreateInput{BrokerID: broker, InstrumentID: instrument, IdempotencyKey: uuid.NewString(), Quantity: decimal.NewFromInt(10), Side: domain.SideBuy, OrderType: domain.OrderTypeMarket, TimeInForce: "GTC"})
+		o, err := store.CreateWithOutbox(ctx, CreateInput{BrokerID: broker, Symbol: uuid.NewString(), Board: "AUDIT", Quantity: decimal.NewFromInt(10), Side: domain.SideBuy, OrderType: domain.OrderTypeMarket, TimeInForce: "GTC"})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -50,47 +47,24 @@ func productionOrdersFixture(t *testing.T) (context.Context, *Store, *pgxpool.Po
 	return ctx, store, pool, create
 }
 
-func TestExecutionIDsScopedToLogicalOrderAndDate(t *testing.T) {
-	ctx, store, _, create := productionOrdersFixture(t)
-	first, second := create("adapter-1"), create("adapter-2")
-	id := uuid.NewString()
-	apply := func(o domain.Order, date, adapter string, cum int64) (domain.Order, *domain.Execution, error) {
-		return store.ApplyExecutionReport(WithExecutionDate(ctx, date), *o.FixClOrdID, "", id, "1", "1", "", decimal.NewFromInt(2), decimal.NewFromInt(100), decimal.NewFromInt(cum), decimal.NewFromInt(10-cum), adapter, "", "", "")
-	}
-	for _, o := range []domain.Order{first, second} {
-		if _, e, err := apply(o, "20261012", "adapter-1", 2); err != nil || e == nil {
-			t.Fatalf("distinct order execution lost: %v %v", e, err)
-		}
-	}
-	if o, e, err := apply(first, "20261012", "adapter-2", 2); err != nil || e != nil || !o.FilledQuantity.Equal(decimal.NewFromInt(2)) {
-		t.Fatalf("cross-session replay double counted: %v %v", e, err)
-	}
-	if o, e, err := apply(first, "20261013", "adapter-2", 4); err != nil || e == nil || !o.FilledQuantity.Equal(decimal.NewFromInt(4)) {
-		t.Fatalf("next-day execution lost: %v %v", e, err)
-	}
-	if o, e, err := apply(first, "20261012", "adapter-1", 2); err != nil || e != nil || !o.FilledQuantity.Equal(decimal.NewFromInt(4)) {
-		t.Fatalf("old-date replay changed totals: %v %v", e, err)
-	}
-}
-
 func TestInboxReceiptsAtomicAndCoverNonFillReports(t *testing.T) {
 	ctx, store, pool, create := productionOrdersFixture(t)
 	o := create("adapter-1")
 	receipt := uuid.New()
-	apply := func(clID string) (domain.Order, *domain.Execution, error) {
-		return store.ApplyExecutionReport(WithExecutionReceipt(ctx, receipt), clID, "", "ACK", "0", "0", "", decimal.Zero, decimal.Zero, decimal.Zero, decimal.NewFromInt(10), "adapter-1", "", "", "")
+	apply := func(clID string) (domain.Order, error) {
+		return store.ApplyExecutionReport(WithExecutionReceipt(ctx, receipt), clID, "", "0", "0", "", decimal.Zero, decimal.Zero, "adapter-1", "", "", "")
 	}
-	if _, _, err := apply("missing-" + uuid.NewString()); err == nil {
+	if _, err := apply("missing-" + uuid.NewString()); err == nil {
 		t.Fatal("unknown order accepted")
 	}
 	var count int
 	if err := pool.QueryRow(ctx, `SELECT count(*) FROM execution_inbox_receipts WHERE id=$1`, receipt).Scan(&count); err != nil || count != 0 {
 		t.Fatal("failed apply committed receipt")
 	}
-	if got, _, err := apply(*o.FixClOrdID); err != nil || got.Status != domain.OrderAcknowledged {
+	if got, err := apply(*o.FixClOrdID); err != nil || got.Status != domain.OrderAcknowledged {
 		t.Fatalf("retry failed: %+v %v", got, err)
 	}
-	if _, _, err := apply(*o.FixClOrdID); err != nil {
+	if _, err := apply(*o.FixClOrdID); err != nil {
 		t.Fatal(err)
 	}
 	if err := pool.QueryRow(ctx, `SELECT count(*) FROM order_events WHERE order_id=$1 AND event_type='ORDER_EXECUTION_REPORT'`, o.ID).Scan(&count); err != nil || count != 1 {

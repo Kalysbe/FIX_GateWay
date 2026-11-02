@@ -44,11 +44,11 @@ function save(){mkdirSync('artifacts/capacity',{recursive:true});writeFileSync(`
 let stageNo=0;
 async function stats(stage){return JSON.parse(await sql(`
 WITH o AS (SELECT * FROM orders WHERE broker_id=${brokerId} AND fix_client_id='${stage}'),
-e AS (SELECT x.order_id,min(x.created_at) FILTER(WHERE x.last_qty>0) AS fill,count(*) FILTER(WHERE x.last_qty>0) AS fills FROM executions x JOIN o ON o.id=x.order_id GROUP BY x.order_id),
+e AS (SELECT x.order_id,min(x.created_at) AS fill FROM order_events x JOIN o ON o.id=x.order_id WHERE x.to_status='FILLED' GROUP BY x.order_id),
 a AS (SELECT x.order_id,min(x.created_at) AS ack FROM order_events x JOIN o ON o.id=x.order_id WHERE x.to_status='ACKNOWLEDGED' GROUP BY x.order_id),
 q AS (SELECT x.* FROM outbox_events x JOIN o ON o.id::text=x.aggregate_id WHERE x.event_type='ORDER_SEND')
 SELECT json_build_object('orders',(SELECT count(*) FROM o),'filled',(SELECT count(*) FROM o WHERE status='FILLED'),
-'ack',(SELECT count(*) FROM a),'fills',(SELECT coalesce(sum(fills),0) FROM e),
+'ack',(SELECT count(*) FROM a),'fills',(SELECT count(*) FROM e),
 'done',(SELECT count(*) FROM q WHERE status='DONE'),'pending',(SELECT count(*) FROM q WHERE status IN ('PENDING','PROCESSING')),
 'failed',(SELECT count(*) FROM q WHERE status='FAILED'),'outbox',(SELECT count(*) FROM q),
 'oldest_seconds',(SELECT coalesce(max(extract(epoch from now()-created_at)),0) FROM q WHERE status IN ('PENDING','PROCESSING')),

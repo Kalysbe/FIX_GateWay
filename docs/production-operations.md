@@ -82,7 +82,7 @@ CLI работает только для SUPER_ADMIN, обновляет passwor
 
 ## Входящий FIX журнал и остановка торговли
 
-Входящие ER сначала записываются в `/app/fix-sessions/inbox` (fsync + atomic rename); только затем завершается callback FIX. Применение к БД повторяется и receipt коммитится вместе с order/trade. Дубликат после crash между commit и удалением journal не создаёт вторую сделку. ExecID учитывается в пределах логической заявки и venue trade date; при отсутствии даты используется original FIX time, затем nullable legacy identity. Время обработки gateway не подменяет дату исполнения.
+Входящие ER сначала записываются в `/app/fix-sessions/inbox` (fsync + atomic rename); только затем завершается callback FIX. Применение к БД повторяется и receipt коммитится вместе с заявкой. Дубликат после crash между commit и удалением journal не применяется повторно. Отчёт по заявке, которой уже нет в `orders`, не требует действий: сделки и итог заявки читаются из БД QUIK.
 
 При отказе БД FIFO-head сохраняется; новые торговые операции/outbox блокируются при ошибке или задержке. `/health` может быть успешным, а `/ready` — 503. При невозможности устойчивой записи gateway немедленно завершает процесс до подтверждения callback: требуется сохранённая FIX sequence и venue replay. Проверка этого replay на реальной площадке входит в UAT.
 
@@ -137,7 +137,7 @@ node scripts/backup-production.mjs --env-file /srv/fix-gateway/production.env
 1. Остановить и изолировать старый gateway. Не запускать второй на тех же FIX Sender/Target IDs. Сохранить повреждённое состояние для расследования.
 2. Выбрать последний **завершённый полный checkpoint**, проверить оба SHA256; скопировать с независимого узла. Расшифровать в приватном recovery окружении (age identity не передавать приложению).
 3. На отдельной БД применить `pg_restore --exit-on-error --no-owner`, восстановить соответствующий FIX tar в новый приватный volume с UID 10001. Не смешивать БД и session store из разных checkpoints.
-4. Проверить schema/version, orders/trades/outbox/receipts, inbox checksum и FIX sequences. При остановленном gateway согласовать replay и сверку событий после checkpoint с площадкой. Не менять sequences/выполнять reset самостоятельно.
+4. Проверить schema/version, orders/outbox/receipts, inbox checksum и FIX sequences. При остановленном gateway согласовать replay и сверку событий после checkpoint с площадкой. Не менять sequences/выполнять reset самостоятельно.
 5. Обновить операторские PKI/secrets/URL при необходимости, запустить один gateway, проверить readiness, обработку inbox, TLS и Bearer-доступ через VPN, настоящий alert channel. Сверить позиции, исполнения, отмены и лимиты перед разрешением новых заявок.
 6. Зафиксировать реально измеренные RPO/RTO. Если восстановлена только DB sidecar-копия, восстановление FIX state и replay требуют отдельного плана; такую копию не объявлять автоматически полноценным recovery.
 
@@ -147,4 +147,4 @@ node scripts/backup-production.mjs --env-file /srv/fix-gateway/production.env
 
 Перед обновлением сделать полный checkpoint, проверить UAT и релизные тесты, остановить старый gateway; сохранить image digests и compose/env без секретных значений в release record. Запустить новую версию с тем же согласованным volume.
 
-Миграция 26 снимает глобальную уникальность ExecID. Down на заполненной БД с допустимыми повторениями ExecID **намеренно откажется** восстанавливать старый constraint. Не удалять сделки для отката. Откат с потерей новых данных допустим только по согласованному recovery плану: восстановить совместимый DB + FIX checkpoint, сверить поздние события с площадкой. Успешный `up → down → up` на пустой тестовой БД не доказывает безопасный destructive rollback production.
+Миграция 40 удаляет `trades`, `trade_sides`, `trade_reports`, `trade_side_reports`, `trade_sync_runs`, `executions`, `instruments`, `quik_firms` и закрытые заявки (`docs/orders.md`). Её down восстанавливает только схему, поэтому образ версии старше миграции 40 после неё работает с пустыми таблицами; данные сделок и заявок при этом есть в БД QUIK. Откат с потерей новых данных допустим только по согласованному recovery плану: восстановить совместимый DB + FIX checkpoint, сверить поздние события с площадкой. Успешный `up → down → up` на пустой тестовой БД не доказывает безопасный destructive rollback production.

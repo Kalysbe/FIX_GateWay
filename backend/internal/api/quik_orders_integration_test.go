@@ -93,17 +93,9 @@ INSERT INTO public."Orders" VALUES
 	}
 	call("/api/v1/orders/quik-20261022-LIST_GBA-22456", 404)
 	call("/api/v1/orders/quik-20261022-LIST_GBA-22455", 200)
-	var instrument int64
-	err = pool.QueryRow(ctx, `SELECT id FROM instruments WHERE quik_symbol='GBA02280810' AND board='LIST_GBA' LIMIT 1`).Scan(&instrument)
-	if err != nil {
-		err = pool.QueryRow(ctx, `INSERT INTO instruments(internal_symbol,quik_symbol,board) VALUES($1,'GBA02280810','LIST_GBA') RETURNING id`, uuid.NewString()).Scan(&instrument)
-	}
-	if err != nil {
-		t.Fatal(err)
-	}
 	id := uuid.New()
-	_, err = pool.Exec(ctx, `INSERT INTO orders(id,broker_id,client_order_id,instrument_id,side,order_type,time_in_force,quantity,price,status,fix_firm,quik_order_id)
-VALUES($1,$2,$3,$4,'BUY','LIMIT','GTC',196,105,'ACKNOWLEDGED','2040','261022-LIST_GBA-22455')`, id, b.ID, uuid.NewString(), instrument)
+	_, err = pool.Exec(ctx, `INSERT INTO orders(id,broker_id,client_order_id,symbol,board,side,order_type,time_in_force,quantity,price,status,fix_firm,quik_order_id)
+VALUES($1,$2,$3,'GBA02280810','LIST_GBA','BUY','LIMIT','GTC',196,105,'ACKNOWLEDGED','2040','261022-LIST_GBA-22455')`, id, b.ID, uuid.NewString())
 	if err != nil {
 		t.Fatal(err)
 	}

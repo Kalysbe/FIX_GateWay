@@ -5,7 +5,6 @@ package orders
 import (
 	"context"
 	"errors"
-	"fmt"
 	"os"
 	"sync"
 	"testing"
@@ -32,12 +31,8 @@ func TestTradingLimitsIntegration(t *testing.T) {
 	}
 	defer pool.Close()
 	store := NewStore(pool)
-	var brokerID, instrumentID int64
+	var brokerID int64
 	err = pool.QueryRow(ctx, `INSERT INTO brokers(code,name) VALUES($1,'Risk test') RETURNING id`, uuid.NewString()).Scan(&brokerID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	err = pool.QueryRow(ctx, `INSERT INTO instruments(internal_symbol,quik_symbol,board) VALUES($1,$1,'TEST') RETURNING id`, uuid.NewString()).Scan(&instrumentID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -50,8 +45,8 @@ func TestTradingLimitsIntegration(t *testing.T) {
 	if err = store.UpdateTradingLimit(ctx, policy, "operator", "stale overwrite"); !errors.Is(err, ErrRiskPolicyConflict) {
 		t.Fatalf("revision protection: %v", err)
 	}
-	input := func(key string, qty int64) CreateInput {
-		return CreateInput{BrokerID: brokerID, InstrumentID: instrumentID, IdempotencyKey: key, Quantity: decimal.NewFromInt(qty), Side: domain.SideBuy, OrderType: domain.OrderTypeMarket, TimeInForce: "DAY", Board: "TEST", FixAccount: "ACCOUNT"}
+	input := func(qty int64) CreateInput {
+		return CreateInput{BrokerID: brokerID, Symbol: "RISK", Quantity: decimal.NewFromInt(qty), Side: domain.SideBuy, OrderType: domain.OrderTypeMarket, TimeInForce: "DAY", Board: "TEST", FixAccount: "ACCOUNT"}
 	}
 	assertRisk := func(err error, code string) {
 		t.Helper()
@@ -60,17 +55,17 @@ func TestTradingLimitsIntegration(t *testing.T) {
 			t.Fatalf("want %s got %v", code, err)
 		}
 	}
-	_, _, err = store.CreateWithOutbox(ctx, input("too-big", 11))
+	_, err = store.CreateWithOutbox(ctx, input(11))
 	assertRisk(err, "MAX_ORDER_QUANTITY")
 	var wg sync.WaitGroup
 	results := make(chan error, 12)
 	for i := 0; i < 12; i++ {
 		wg.Add(1)
-		go func(i int) {
+		go func() {
 			defer wg.Done()
-			_, _, err := store.CreateWithOutbox(ctx, input(fmt.Sprintf("parallel-%d", i), 10))
+			_, err := store.CreateWithOutbox(ctx, input(10))
 			results <- err
-		}(i)
+		}()
 	}
 	wg.Wait()
 	close(results)
@@ -96,8 +91,7 @@ func TestTradingLimitsIntegration(t *testing.T) {
 		t.Fatalf("rejected requests persisted: orders=%d outbox=%d", orders, queued)
 	}
 	var firstID uuid.UUID
-	var firstKey string
-	err = pool.QueryRow(ctx, `SELECT id,idempotency_key FROM orders WHERE broker_id=$1 ORDER BY id LIMIT 1`, brokerID).Scan(&firstID, &firstKey)
+	err = pool.QueryRow(ctx, `SELECT id FROM orders WHERE broker_id=$1 ORDER BY id LIMIT 1`, brokerID).Scan(&firstID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -106,12 +100,8 @@ func TestTradingLimitsIntegration(t *testing.T) {
 	if err = store.UpdateTradingLimit(ctx, policy, "operator", "pause broker"); err != nil {
 		t.Fatal(err)
 	}
-	_, _, err = store.CreateWithOutbox(ctx, input("paused-new", 1))
+	_, err = store.CreateWithOutbox(ctx, input(1))
 	assertRisk(err, "TRADING_PAUSED")
-	replay, idempotent, err := store.CreateWithOutbox(ctx, input(firstKey, 10))
-	if err != nil || !idempotent || replay.ID != firstID {
-		t.Fatalf("pause blocked replay: %+v %v %v", replay, idempotent, err)
-	}
 	// Cancellation still works while submission is paused.
 	if _, err = pool.Exec(ctx, `UPDATE orders SET status='ACKNOWLEDGED' WHERE id=$1`, firstID); err != nil {
 		t.Fatal(err)
@@ -128,12 +118,12 @@ func TestTradingLimitsIntegration(t *testing.T) {
 	if _, err = pool.Exec(ctx, `UPDATE orders SET status='FAILED' WHERE broker_id=$1 AND id<>$2`, brokerID, firstID); err != nil {
 		t.Fatal(err)
 	}
-	_, _, err = store.CreateWithOutbox(ctx, input("still-full", 1))
+	_, err = store.CreateWithOutbox(ctx, input(1))
 	assertRisk(err, "MAX_OPEN_ORDERS")
 	if _, err = pool.Exec(ctx, `UPDATE orders SET status='CANCELLED' WHERE id=$1`, firstID); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err = store.CreateWithOutbox(ctx, input("capacity-released", 1)); err != nil {
+	if _, err = store.CreateWithOutbox(ctx, input(1)); err != nil {
 		t.Fatalf("terminal order did not release capacity: %v", err)
 	}
 	// History failure must leave policy and its revision unchanged.

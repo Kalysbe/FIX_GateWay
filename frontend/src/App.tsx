@@ -16,7 +16,6 @@ import { PageSpinner } from "./components/feedback";
 import OrdersPage from "./pages/OrdersPage";
 import OrderDetailPage from "./pages/OrderDetailPage";
 import TradesPage from "./pages/TradesPage";
-import TradeDetailPage from "./pages/TradeDetailPage";
 import MarketDataPage from "./pages/MarketDataPage";
 import MarketInstrumentPage from "./pages/MarketInstrumentPage";
 import QuotesPage from "./pages/QuotesPage";
@@ -76,7 +75,6 @@ export default function App() {
         <Route path="/orders" element={<OrdersPage />} />
         <Route path="/orders/:id" element={<OrderDetailPage />} />
         <Route path="/trades" element={<TradesPage />} />
-        <Route path="/trades/:id" element={<TradeDetailPage />} />
         <Route path="/market-data" element={<MarketDataPage />} />
         <Route path="/market-data/:board/:symbol" element={<MarketInstrumentPage />} />
         <Route path="/quotes" element={<QuotesPage />} />

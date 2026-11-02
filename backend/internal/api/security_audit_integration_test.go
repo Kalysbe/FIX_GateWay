@@ -71,13 +71,8 @@ func TestSecurityAuditDatabase(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var instrument int64
-	err = pool.QueryRow(ctx, `INSERT INTO instruments (internal_symbol, quik_symbol) VALUES ($1, $1) RETURNING id`, uuid.NewString()).Scan(&instrument)
-	if err != nil {
-		t.Fatal(err)
-	}
 	orderID := uuid.New()
-	_, err = pool.Exec(ctx, `INSERT INTO orders (id,broker_id,client_order_id,instrument_id,side,order_type,quantity,price,status) VALUES ($1,$2,$3,$4,'BUY','LIMIT',1,1,'NEW')`, orderID, a.ID, uuid.NewString(), instrument)
+	_, err = pool.Exec(ctx, `INSERT INTO orders (id,broker_id,client_order_id,symbol,side,order_type,quantity,price,status) VALUES ($1,$2,$3,'AUDIT','BUY','LIMIT',1,1,'NEW')`, orderID, a.ID, uuid.NewString())
 	if err != nil {
 		t.Fatal(err)
 	}

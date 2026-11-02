@@ -21,8 +21,9 @@ async function call(path,token='',method='GET',body,expected=200){
  const result=unwrap(path,await r.json());assert.equal(r.status,expected,`${method} ${path}: ${JSON.stringify(result)}`);return result;
 }
 function sql(statement){return command(['exec','-T','postgres','psql','-U','gateway','-d','fix_gateway_local','-v','ON_ERROR_STOP=1','-At','-c',statement]).trim();}
-// Broker REST returns only QUIK Orders rows; fills are checked in the local ledger.
-function localOrder(id){assert.match(id,/^[0-9a-f-]{36}$/i);return JSON.parse(sql(`SELECT json_build_object('status',status,'filled_quantity',filled_quantity,'trades',(SELECT count(*) FROM executions e WHERE e.order_id=o.id))::text FROM orders o WHERE id='${id}'`));}
+// Broker REST returns only QUIK Orders rows; fills are checked on the local order,
+// which stays until FINISHED_ORDER_GRACE after QUIK closes it.
+function localOrder(id){assert.match(id,/^[0-9a-f-]{36}$/i);return JSON.parse(sql(`SELECT json_build_object('status',status,'filled_quantity',filled_quantity)::text FROM orders o WHERE id='${id}'`));}
 async function until(fn,timeout=60000){const end=Date.now()+timeout;while(Date.now()<end){try{if(await fn())return;}catch{}await delay(300);}throw Error('Recovery timed out');}
 const {token:admin}=await call('/api/v1/admin/login','','POST',{email:'admin@localhost',password:'admin123'});
 const {broker}=await call('/api/v1/admin/brokers',admin,'POST',{code:`RECOVERY-${randomUUID()}`,name:'Execution journal recovery test'},201);
@@ -43,18 +44,11 @@ for(const restart of [false,true]){
  await until(async()=>{await call('/ready');return true;});
  await until(async()=>localOrder(order.id).status==='FILLED');
  const result=localOrder(order.id);
- assert.equal(Number(result.filled_quantity),1);assert.equal(result.trades,1);
+ assert.equal(Number(result.filled_quantity),1);
  command(['restart','gateway']);await until(async()=>{await call('/ready');return true;});
- assert.equal(localOrder(order.id).trades,1,'restart must not duplicate the fill');
- console.log(`PASS: execution survived DB outage${restart?' and SIGKILL':''}; exactly one trade after restart.`);
+ assert.equal(Number(localOrder(order.id).filled_quantity),1,'restart must not duplicate the fill');
+ console.log(`PASS: execution survived DB outage${restart?' and SIGKILL':''}; one fill counted after restart.`);
 }
-
-// Check real persisted UI notifications, rather than just a metrics/log line.
-await until(async()=>{
- const {notifications=[]}=await call('/api/v1/admin/notifications',admin);
- return notifications.some(n=>n.subtype==='TRADE_SYNC_FAILED');
-});
-console.log('PASS: unavailable QUIK history produced a persistent Gateway notification.');
 
 const audit=command(['exec','-T','gateway','sh','-ec','find /app/fix-sessions -name "*.audit.jsonl" -type f -exec cat {} \\;']);
 const records=audit.trim().split('\n').filter(Boolean).map(line=>JSON.parse(line));

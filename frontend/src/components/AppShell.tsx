@@ -336,7 +336,6 @@ function breadcrumbs(pathname: string): Array<{ label: string; to?: string }> {
   if (pathname === "/rate-limits") return [{ label: "Rate Limits" }];
   if (pathname === "/execution-inbox") return [{ label: "Входящие FIX" }];
   if (pathname === "/") return [{ label: "Дашборд" }];
-  if (pathname.startsWith("/trades/")) return [{ label: "Сделки", to: "/trades" }, { label: "Карточка сделки" }];
   if (pathname.startsWith("/brokers/")) {
     return [{ label: "Брокеры", to: "/brokers" }, { label: "Карточка брокера" }];
   }

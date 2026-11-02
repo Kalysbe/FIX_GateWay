@@ -11,6 +11,14 @@ import (
 	"github.com/fix-gateway/backend/internal/domain"
 )
 
+func TestFIXSecurityTypeFromQUIK(t *testing.T) {
+	for secType, want := range map[string]string{"1": "CS", " 2 ": "GO", "7": "FXSPOT", "29": "", "": ""} {
+		if got := fixSecurityType(secType); got != want {
+			t.Errorf("SecType %q: %q, want %q", secType, got, want)
+		}
+	}
+}
+
 type testMDManager struct {
 	calls   int
 	cancel  context.CancelFunc

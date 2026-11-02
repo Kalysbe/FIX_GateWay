@@ -6,7 +6,6 @@ RUN go mod download
 COPY . .
 # The compiler cache stays outside the layers: otherwise each build keeps a new 424 MB copy.
 RUN --mount=type=cache,target=/root/.cache/go-build CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /out/gateway ./cmd/gateway
-RUN --mount=type=cache,target=/root/.cache/go-build CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /out/trade-reconcile ./cmd/trade-reconcile
 RUN --mount=type=cache,target=/root/.cache/go-build CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /out/fixsimulator ./cmd/fixsimulator
 RUN --mount=type=cache,target=/root/.cache/go-build CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /out/devcerts ./cmd/devcerts
 RUN --mount=type=cache,target=/root/.cache/go-build CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /out/admin-password ./cmd/admin-password
@@ -16,7 +15,6 @@ RUN apk add --no-cache ca-certificates tzdata wget
 RUN addgroup -g 10001 gateway && adduser -D -H -u 10001 -G gateway gateway && mkdir -p /app/fix-sessions && chown -R gateway:gateway /app
 WORKDIR /app
 COPY --from=builder /out/gateway /app/gateway
-COPY --from=builder /out/trade-reconcile /app/trade-reconcile
 COPY --from=builder /out/admin-password /app/admin-password
 COPY migrations /app/migrations
 COPY docs /app/docs

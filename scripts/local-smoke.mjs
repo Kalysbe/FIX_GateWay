@@ -30,11 +30,12 @@ function sql(statement) {
 }
 
 // Broker REST now returns only the current QUIK Orders row, so the Gateway's own
-// request lifecycle (status, adapter, fills) is read from its local ledger.
+// request lifecycle (status, adapter, fills) is read from its local orders row,
+// which stays until FINISHED_ORDER_GRACE after QUIK closes the order.
 function localOrder(id) {
   assert.match(id, /^[0-9a-f-]{36}$/i);
   const raw = sql(`SELECT json_build_object('status',status,'filled_quantity',filled_quantity,'adapter_id',adapter_id,
-    'reject_reason',reject_reason,'trades',(SELECT count(*) FROM executions e WHERE e.order_id=o.id))::text FROM orders o WHERE id='${id}'`);
+    'reject_reason',reject_reason)::text FROM orders o WHERE id='${id}'`);
   return JSON.parse(raw);
 }
 
@@ -139,7 +140,6 @@ async function main() {
   await request(`/api/v1/orders/${created.id}`, second.token, 'GET', undefined, 404);
   const filled = await waitStatus(created.id, 'FILLED');
   assert.equal(Number(filled.filled_quantity), 1);
-  assert.equal(filled.trades, 1);
   const filledRow = await quikRow(created.id, first.token, 'Исполнена');
   assert.equal(filledRow.FirmId, 'SIM');
   const listed = await request('/api/v1/orders?limit=1000', first.token);
@@ -157,7 +157,6 @@ async function main() {
   await delay(3500);
   const cancelled = localOrder(cancel.id);
   assert.equal(cancelled.status, 'CANCELLED');
-  assert.equal(cancelled.trades, 0);
   await quikRow(cancel.id, first.token, 'Снята');
   console.log('PASS cancel stays cancelled after simulator fill deadline');
 
@@ -176,7 +175,7 @@ async function main() {
   const completed = await Promise.all(batch.map((item) => waitStatus(item.id, 'FILLED')));
   assert.equal(new Set(batch.map((item) => item.id)).size, 8);
   assert.equal(new Set(completed.map((item) => item.adapter_id)).size, 2);
-  assert.ok(completed.every((item) => item.trades === 1));
+  assert.ok(completed.every((item) => Number(item.filled_quantity) === 1));
   console.log('PASS concurrent orders balanced across two FIX adapters');
 
   await request('/api/v1/admin/adapters/adapter-1/disable', admin, 'POST');

@@ -4,7 +4,7 @@ import { dbValue, parseDBJSON, type DBOrder } from "../lib/rawOrders";
 
 // Token firms (FIX tag 5018) are chosen from QUIK "Firms"; the server refuses
 // any other value.
-export function FirmSelect({ value, onChange, label = "Код фирмы QUIK (FIX 5018)" }: { value: string; onChange: (v: string) => void; label?: string }) {
+export function FirmSelect({ value, onChange, label = "Код фирмы QUIK (FIX 5018)", emptyLabel = "Выберите фирму" }: { value: string; onChange: (v: string) => void; label?: string; emptyLabel?: string }) {
   const firms = useQuery({
     queryKey: ["admin-firms"],
     queryFn: async ({ signal }) => (await apiWithHeaders<DBOrder[]>("/api/v1/admin/firms", { signal }, parseDBJSON)).data ?? [],
@@ -15,7 +15,7 @@ export function FirmSelect({ value, onChange, label = "Код фирмы QUIK (F
   return <label className="mb-3 block space-y-1 text-sm">
     <span className="text-slate-500">{label}</span>
     <select className="input font-mono" aria-label={label} value={value} onChange={e => onChange(e.target.value)} disabled={firms.isLoading || !!firms.error} required>
-      <option value="">{firms.isLoading ? "Загрузка фирм QUIK…" : "Выберите фирму"}</option>
+      <option value="">{firms.isLoading ? "Загрузка фирм QUIK…" : emptyLabel}</option>
       {value && !ids.includes(value) && <option value={value}>{value} (нет в QUIK Firms)</option>}
       {ids.map(id => <option key={id} value={id}>{names.get(id) ? `${id} · ${names.get(id)}` : id}</option>)}
     </select>

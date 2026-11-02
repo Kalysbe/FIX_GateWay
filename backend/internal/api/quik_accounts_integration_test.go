@@ -50,11 +50,12 @@ func TestQUIKAccountsAndFirmsHTTP(t *testing.T) {
 	_, err = pool.Exec(ctx, `CREATE TABLE public."Trdaccs" ("TrdAccId" text,"FirmId" text,"Status" integer);
 INSERT INTO public."Trdaccs" VALUES ('1-3001-71','2040',0),('1-9999-01','9999',0);
 CREATE TABLE public."Firms" ("Exchange" text,"FirmId" text,"FirmName" text,"Status" text,"StatusFlag" integer);
-INSERT INTO public."Firms" VALUES ('KSE','2040','Сенти',NULL,1),('KSE','9999','Other',NULL,0);`)
+INSERT INTO public."Firms" VALUES ('KSE','2040','Сенти',NULL,1),('KSE','9999','Other',NULL,0);
+CREATE TABLE public."Securities" ("TradeDate" timestamp,"ClassCode" text,"SecCode" text,"FaceUnit" text);`)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _, _ = pool.Exec(ctx, `DROP TABLE public."Trdaccs"; DROP TABLE public."Firms"`) })
+	t.Cleanup(func() { _, _ = pool.Exec(ctx, `DROP TABLE public."Trdaccs"; DROP TABLE public."Firms"; DROP TABLE public."Securities"`) })
 	readOnly, err := db.ConnectReadOnly(ctx, dsn)
 	if err != nil {
 		t.Fatal(err)
@@ -114,6 +115,7 @@ INSERT INTO public."Firms" VALUES ('KSE','2040','Сенти',NULL,1),('KSE','999
 
 	s.SetQuikExport(quikexport.NewStore(readOnly))
 	svc.SetTradingAccounts(quikexport.NewStore(readOnly))
+	svc.SetInstruments(quikexport.NewStore(readOnly))
 	if got := call("GET", "/api/v1/accounts", token.Raw, nil, 200); got != `[{"TrdAccId":"1-3001-71","FirmId":"2040","Status":0}]` {
 		t.Fatal(got)
 	}

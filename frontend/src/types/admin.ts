@@ -106,44 +106,6 @@ export type OrderEvent = {
   raw_fix?: string;
 };
 
-export type AdminTrade = {
-  id: string;
-  order_id?: string | null;
-  exec_id: string;
-  last_qty: string | number;
-  last_px: string | number;
-  cum_qty?: string | number | null;
-  leaves_qty?: string | number | null;
-  adapter_id?: string | null;
-  created_at: string;
-  execution_date?: string;
-  trade_match_id?: string;
-  contra_broker?: string;
-  contra_trader?: string;
-  client_order_id?: string;
-  symbol?: string;
-  board?: string;
-  side?: string;
-  client_code?: string;
-  quik_firm?: string;
-  firm_name?: string;
-  fix_cl_ord_id?: string | null;
-  quik_order_id?: string | null;
-  quik_order_num?: string;
-  quik_trade_num?: string;
-  ledger_trade_id?: string;
-  execution_id?: string | null;
-  received_at?: string;
-  trade_time_known?: boolean;
-  account?: string;
-};
-
-export type TradeCoverage = {
-  trades: number; sides: number; complete: number; incomplete: number; report_errors: number;
-  last_sync_at?: string; last_sync_records?: number; last_sync_error?: string; sync_running?: boolean;
-  last_success_at?: string; sync_stale?: boolean;
-};
-
 export type Dashboard = {
   generated_at?: string;
   stale?: boolean;

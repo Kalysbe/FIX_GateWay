@@ -14,18 +14,18 @@ import (
 	"github.com/fix-gateway/backend/internal/observability"
 	"github.com/fix-gateway/backend/internal/quikexport"
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
 	"github.com/shopspring/decimal"
 )
 
 type Service struct {
-	store    *Store
-	brokers  *brokers.Store
-	audit    *audit.Store
-	obs      observability.Emitter
-	onQueued func()
-	accounts TradingAccounts
-	classes  func(context.Context) ([]string, error)
+	store       *Store
+	brokers     *brokers.Store
+	audit       *audit.Store
+	obs         observability.Emitter
+	onQueued    func()
+	accounts    TradingAccounts
+	instruments Instruments
+	classes     func(context.Context) ([]string, error)
 }
 
 // TradingAccounts is the QUIK Trdaccs source of the accounts a firm may trade.
@@ -192,16 +192,9 @@ func (s *Service) Create(ctx context.Context, broker domain.Broker, ip string, r
 	// FIX tag 1 carries the account as QUIK stores it.
 	fixAccount := strings.TrimSpace(acc.Text("TrdAccId"))
 
-	instr, err := s.store.ResolveInstrument(ctx, broker.ID, req.Symbol, req.Board)
-	if err == nil {
-		board := req.Board
-		if strings.TrimSpace(board) == "" {
-			board = instr.Board
-		}
-		err = s.checkServedClass(ctx, board)
-	}
+	instr, err := s.resolveInstrument(ctx, req.Board, req.Symbol)
 	if err != nil {
-		if !errors.Is(err, pgx.ErrNoRows) && !errors.Is(err, ErrInstrumentNotFound) {
+		if !errors.Is(err, ErrInstrumentNotFound) {
 			return domain.Order{}, fmt.Errorf("%w: %w", ErrPersistenceUnavailable, err)
 		}
 		msg := fmt.Errorf("instrument %q (ClassCode %q) не найден: укажите SecCode и ClassCode из GET /api/v1/instruments", req.Symbol, req.Board)
@@ -213,9 +206,9 @@ func (s *Service) Create(ctx context.Context, broker domain.Broker, ip string, r
 		return domain.Order{}, msg
 	}
 
-	order, _, err := s.store.CreateWithOutbox(ctx, CreateInput{
+	order, err := s.store.CreateWithOutbox(ctx, CreateInput{
 		BrokerID: broker.ID, FixAccount: fixAccount, ClientCode: req.ClientCode, QuikFirm: strings.TrimSpace(quikFirm),
-		InstrumentID: instr.ID, Board: req.Board, Side: req.Side, OrderType: req.OrderType,
+		Symbol: instr.Symbol, Board: instr.Board, Currency: instr.Currency, Side: req.Side, OrderType: req.OrderType,
 		TimeInForce: req.TimeInForce, Quantity: req.Quantity, Price: req.Price,
 		RequestID: observability.RequestIDFrom(ctx), TraceID: observability.TraceIDFrom(ctx),
 	})
@@ -285,7 +278,8 @@ func AwaitingCancel(st domain.OrderStatus) bool { return st == domain.OrderCance
 
 // AwaitVenueAnswer polls the order while pending(status) holds, i.e. until QUIK
 // answers the new order or cancel request, or ctx ends. The outbox worker sends
-// it; the DB stays authoritative, so the wait never changes the order.
+// it; the DB stays authoritative, so the wait never changes the order. The wait
+// is shorter than FinishedOrderGrace, so the order is not purged under it.
 func (s *Service) AwaitVenueAnswer(ctx context.Context, order domain.Order, pending func(domain.OrderStatus) bool) (domain.Order, error) {
 	t := time.NewTicker(venueAnswerPoll)
 	defer t.Stop()
@@ -305,14 +299,6 @@ func (s *Service) AwaitVenueAnswer(ctx context.Context, order domain.Order, pend
 		order = next
 	}
 	return order, nil
-}
-
-func (s *Service) GetForBroker(ctx context.Context, brokerID int64, id uuid.UUID) (domain.Order, error) {
-	return s.store.GetForBroker(ctx, brokerID, id)
-}
-
-func (s *Service) ListForBroker(ctx context.Context, brokerID int64, limit int) ([]domain.Order, error) {
-	return s.store.List(ctx, &brokerID, limit)
 }
 
 func (s *Service) Cancel(ctx context.Context, brokerID int64, id uuid.UUID, ip string) (domain.Order, error) {

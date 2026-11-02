@@ -30,7 +30,4 @@ ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now();
 
 INSERT INTO brokers (code, name) VALUES ('LOCAL_DEMO', 'Local Simulator Demo')
 ON CONFLICT (code) DO NOTHING;
-INSERT INTO instruments (internal_symbol, quik_symbol, board, currency, security_type)
-VALUES ('REJECT', 'REJECT', 'TQBR', 'RUB', 'CS')
-ON CONFLICT (internal_symbol) DO NOTHING;
 COMMIT;

@@ -76,7 +76,12 @@ CREATE TABLE IF NOT EXISTS public."Securities" (
 );
 INSERT INTO public."Securities" VALUES
   (current_date, 'LIST_GBA', 'GBA02280810', 2.5, 'KGS', 'Local bond', 'Local simulator bond'),
-  (current_date, 'LISTEDSTOCKK', 'KG0105166315', 0, 'KGS', 'Local share', 'Local simulator share')
+  (current_date, 'LISTEDSTOCKK', 'KG0105166315', 0, 'KGS', 'Local share', 'Local simulator share'),
+  -- What the local scripts trade; new orders are checked against this table.
+  (current_date, 'TQBR', 'SBER', 0, 'RUB', 'Sber', 'Local simulator Sber'),
+  (current_date, 'TQBR', 'GAZP', 0, 'RUB', 'Gazprom', 'Local simulator Gazprom'),
+  (current_date, 'TQBR', 'REJECT', 0, 'RUB', 'Reject', 'Simulator rejects this instrument'),
+  (current_date, 'TQBR', 'FAULT_RECOVER', 0, 'RUB', 'Fault', 'Simulator fault recovery instrument')
 ON CONFLICT DO NOTHING;
 CREATE TABLE IF NOT EXISTS public."Classes" (
   "TradeDate" timestamp NOT NULL, "ClassCode" text NOT NULL, "ClassName" text,
@@ -85,6 +90,16 @@ CREATE TABLE IF NOT EXISTS public."Classes" (
 INSERT INTO public."Classes" VALUES
   (current_date, 'LIST_GBA', 'Local bonds'),
   (current_date, 'LISTEDSTOCKK', 'Local shares')
+ON CONFLICT DO NOTHING;
+-- The simulator does not write trades; static rows show both sides of one trade.
+CREATE TABLE IF NOT EXISTS public."Trades" (
+  "TradeNum" numeric(19,0) NOT NULL, "ClassCode" text NOT NULL, "TradeDate" timestamp NOT NULL, "SecCode" text, "OrderNum" numeric(19,0),
+  "FirmId" text NOT NULL, "Account" text NOT NULL, "ClientCode" text, "Operation" text NOT NULL, "Qty" numeric, "Price" numeric,
+  PRIMARY KEY ("TradeNum", "ClassCode", "TradeDate", "Operation", "FirmId", "Account")
+);
+INSERT INTO public."Trades" VALUES
+  (1, 'TQBR', current_date, 'SBER', 1, 'SIM', 'SMOKE', 'SMOKE', 'Купля', 1, 100),
+  (1, 'TQBR', current_date, 'SBER', 2, 'LOCAL_FIRM', 'LOCAL_ACCOUNT', 'DEMO', 'Продажа', 1, 100)
 ON CONFLICT DO NOTHING;
 -- Trading accounts and firms the local scripts trade with (QUIK column names).
 CREATE TABLE IF NOT EXISTS public."Firms" (
@@ -108,8 +123,8 @@ FROM (VALUES ('SMOKE', 'SIM'), ('RELIABILITY', 'SIM'), ('RECOVERY', 'SIM'), ('CA
 ON CONFLICT DO NOTHING;
 REVOKE ALL ON public."Orders" FROM PUBLIC;
 REVOKE ALL ON public."Firms", public."Trdaccs" FROM PUBLIC;
-REVOKE ALL ON public."Params", public."Securities", public."Classes" FROM PUBLIC;
+REVOKE ALL ON public."Params", public."Securities", public."Classes", public."Trades" FROM PUBLIC;
 GRANT CONNECT ON DATABASE quik_export_local TO quik_sim_writer, quik_reader;
 GRANT USAGE ON SCHEMA public TO quik_sim_writer, quik_reader;
 GRANT SELECT, INSERT, UPDATE ON public."Orders" TO quik_sim_writer;
-GRANT SELECT ON public."Orders", public."Params", public."Securities", public."Classes", public."Firms", public."Trdaccs" TO quik_reader;
+GRANT SELECT ON public."Orders", public."Params", public."Securities", public."Classes", public."Trades", public."Firms", public."Trdaccs" TO quik_reader;

@@ -7,7 +7,9 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
+	"github.com/fix-gateway/backend/internal/domain"
 	"github.com/fix-gateway/backend/internal/quikexport"
 )
 
@@ -19,6 +21,8 @@ type quikRefReader interface {
 	ListFirms(context.Context) ([]quikexport.Row, error)
 	ListClasses(context.Context) ([]quikexport.Row, error)
 	Firm(context.Context, string) (quikexport.Row, error)
+	ListSecurities(context.Context, quikexport.SecurityFilter) (quikexport.SecurityPage, error)
+	CountOrdersByDay(context.Context, []string, time.Time) ([]quikexport.OrderDayCount, error)
 }
 
 var errQuikRefsUnavailable = errors.New("QUIK accounts and firms source unavailable")
@@ -82,23 +86,11 @@ func (s *Server) getBrokerFirm(w http.ResponseWriter, r *http.Request) {
 	writeQuikJSON(w, row)
 }
 
-// listAccounts shows an admin the Trdaccs rows of the firms the broker's
-// active tokens trade for.
-func (s *Server) listAccounts(w http.ResponseWriter, r *http.Request) {
-	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
-	if err != nil || id <= 0 {
-		writeErr(w, http.StatusBadRequest, "invalid id")
-		return
-	}
-	b, err := s.brokers.GetBroker(r.Context(), id)
+// brokerFirms lists the firms the broker's active tokens trade for.
+func (s *Server) brokerFirms(ctx context.Context, b domain.Broker) ([]string, error) {
+	tokens, err := s.brokers.ListTokens(ctx, b.ID)
 	if err != nil {
-		writeErr(w, http.StatusNotFound, "not found")
-		return
-	}
-	tokens, err := s.brokers.ListTokens(r.Context(), id)
-	if err != nil {
-		s.writeInternal(w, err)
-		return
+		return nil, err
 	}
 	firmSet := map[string]bool{}
 	for _, t := range tokens {
@@ -113,6 +105,27 @@ func (s *Server) listAccounts(w http.ResponseWriter, r *http.Request) {
 		firms = append(firms, firm)
 	}
 	sort.Strings(firms)
+	return firms, nil
+}
+
+// listAccounts shows an admin the Trdaccs rows of the firms the broker's
+// active tokens trade for.
+func (s *Server) listAccounts(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil || id <= 0 {
+		writeErr(w, http.StatusBadRequest, "invalid id")
+		return
+	}
+	b, err := s.brokers.GetBroker(r.Context(), id)
+	if err != nil {
+		writeErr(w, http.StatusNotFound, "not found")
+		return
+	}
+	firms, err := s.brokerFirms(r.Context(), b)
+	if err != nil {
+		s.writeInternal(w, err)
+		return
+	}
 	if s.quikRefs == nil {
 		s.writeQuikRefError(w, errQuikRefsUnavailable)
 		return

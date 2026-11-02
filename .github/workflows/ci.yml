@@ -30,8 +30,6 @@ jobs:
       SECURITY_AUDIT_DATABASE_URL: postgres://gateway:ci-only@localhost:5432/gateway_security_test?sslmode=disable
       SECURITY_AUDIT_MIGRATIONS: ../../migrations
       RATE_LIMIT_TEST_DATABASE_URL: postgres://gateway:ci-only@localhost:5432/rate_limit_test?sslmode=disable
-      TRADE_LEDGER_TEST_DATABASE_URL: postgres://gateway:ci-only@localhost:5432/gateway_trade_ledger_test?sslmode=disable
-      TRADE_LEDGER_API_TEST_DATABASE_URL: postgres://gateway:ci-only@localhost:5432/gateway_trade_ledger_api_test?sslmode=disable
       QUIK_ORDERS_TEST_DATABASE_URL: postgres://gateway:ci-only@localhost:5432/gateway_quik_orders_api_test?sslmode=disable
       QUIK_ORDERS_STORE_TEST_DATABASE_URL: postgres://gateway:ci-only@localhost:5432/gateway_quik_orders_store_test?sslmode=disable
       TOKEN_LOOKUP_TEST_DATABASE_URL: postgres://gateway:ci-only@localhost:5432/gateway_token_lookup_test?sslmode=disable
@@ -45,10 +43,6 @@ jobs:
         run: PGPASSWORD=ci-only psql -h localhost -U gateway -d gateway_test -c 'CREATE DATABASE gateway_security_test'
       - name: Create separate rate limit test database
         run: PGPASSWORD=ci-only psql -h localhost -U gateway -d gateway_test -c 'CREATE DATABASE rate_limit_test'
-      - name: Create isolated trade ledger test database
-        run: PGPASSWORD=ci-only psql -h localhost -U gateway -d gateway_test -c 'CREATE DATABASE gateway_trade_ledger_test'
-      - name: Create isolated trade ledger API test database
-        run: PGPASSWORD=ci-only psql -h localhost -U gateway -d gateway_test -c 'CREATE DATABASE gateway_trade_ledger_api_test'
       - name: Create isolated QUIK Orders and token lookup test databases
         run: |
           for db in gateway_quik_orders_api_test gateway_quik_orders_store_test gateway_token_lookup_test; do
@@ -59,7 +53,8 @@ jobs:
           go install golang.org/x/vuln/cmd/govulncheck@v1.9.0
           govulncheck ./...
       - run: go vet -tags integration ./...
-      - run: go test -race -tags integration ./...
+      # Packages share DATABASE_URL, and migrating it from several at once deadlocks.
+      - run: go test -race -tags integration -p 1 ./...
 
   interfaces:
     runs-on: ubuntu-latest
@@ -83,7 +78,7 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
-      - name: Verify audit disk exhaustion and full QUIK snapshot coverage
+      - name: Verify audit disk exhaustion and durable FIX report handling
         run: docker compose -f deploy/docker-compose.trade-safety-tests.yml run --rm tests
       - name: Remove disposable trade integrity database
         if: always()

@@ -145,7 +145,7 @@ async function main() {
     console.log('PASS FIX outage + abrupt gateway termination: all 142 orders/queue entries retained');
     command(['start','fix-gateway-local-fixsimulator-1']); simulatorStopped=false;
     await waitFilled(142); verifyRetained(142);
-    const trades=sql(`SELECT count(*),count(DISTINCT t.order_id) FROM executions t JOIN orders o ON o.id=t.order_id WHERE o.broker_id=${brokerId} AND t.last_qty>0;`);
+    const trades=sql(`SELECT count(*),count(*) FILTER (WHERE filled_quantity=quantity) FROM orders WHERE broker_id=${brokerId} AND status='FILLED';`);
     assert.equal(trades,'142|142','missing or duplicate fills after recovery');
     command(['stop','fix-gateway-local-postgres-1']); databaseStopped=true;
     assert.equal((await call('/health')).status,200,'liveness must survive DB outage');
@@ -155,7 +155,7 @@ async function main() {
     await delay(3000);
     verifyRetained(142);
     await submit(142); await waitFilled(143); verifyRetained(143);
-    assert.equal(sql(`SELECT count(*),count(DISTINCT t.order_id) FROM executions t JOIN orders o ON o.id=t.order_id WHERE o.broker_id=${brokerId} AND t.last_qty>0;`),'143|143','duplicate or missing fill after database recovery');
+    assert.equal(sql(`SELECT count(*),count(*) FILTER (WHERE filled_quantity=quantity) FROM orders WHERE broker_id=${brokerId} AND status='FILLED';`),'143|143','duplicate or missing fill after database recovery');
     console.log('PASS database outage: explicit 503, liveness responsive, retained queue, retry after 503 succeeds');
     timings.sort((a,b)=>a-b);
     console.log(`PASS recovery: 143 orders preserved; accepted HTTP p95=${Math.round(timings[Math.floor(timings.length*.95)])}ms max=${Math.round(timings.at(-1))}ms`);

@@ -32,7 +32,6 @@ import (
 	"github.com/fix-gateway/backend/internal/quikexport"
 	"github.com/fix-gateway/backend/internal/ratelimit"
 	"github.com/fix-gateway/backend/internal/realtime"
-	"github.com/fix-gateway/backend/internal/refdata"
 	"github.com/fix-gateway/backend/internal/routing"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/keepalive"
@@ -94,12 +93,12 @@ func main() {
 	auditStore := audit.NewStore(pool)
 	orderSvc := orders.NewService(orderStore, brokerStore, auditStore)
 	if quikExportStore != nil {
-		// Accounts a firm may trade come only from QUIK Trdaccs.
+		// Accounts a firm may trade come only from QUIK Trdaccs, instruments from Securities.
 		orderSvc.SetTradingAccounts(quikExportStore)
+		orderSvc.SetInstruments(quikExportStore)
 	}
 	adapterStore := adapters.NewStore(pool)
 	outboxStore := outbox.NewStore(pool)
-	refStore := refdata.NewStore(pool)
 	hub := realtime.NewHub()
 	obsStore := observability.NewStore(pool)
 	obsSettings := observability.DefaultSettings()
@@ -237,9 +236,8 @@ func main() {
 		quikExportStore.SetServedClasses(marketClasses.Classes)
 	}
 	server.SetQuikExport(quikExportStore)
-	if os.Getenv("TRADE_RECONCILIATION_ENABLED") == "true" {
-		go server.RunTradeReconciliation(ctx, quikExportStore)
-	}
+	go server.RunFIXSafetyMonitor(ctx)
+	go orderStore.RunPurge(ctx, log, cfg.FinishedOrderGrace)
 	if quikExportStore != nil {
 		go quikExportStore.RunOrders(ctx, func(change quikexport.OrderChange) {
 			hub.BroadcastOrderForFirm(change.Order.Raw, strings.TrimSpace(change.Order.Text("FirmId")), change.Removed)
@@ -251,7 +249,6 @@ func main() {
 		}, func(err error) {
 			log.Warn("QUIK Trades change read failed; retaining previous selection", "error", err)
 		})
-		go syncFirmNames(ctx, log, quikExportStore, refStore, 5*time.Minute)
 		go quikExportStore.RunParams(ctx, func(change quikexport.ParamChange) {
 			hub.BroadcastMarketData(change.Param.Raw, change.Removed)
 		}, func(err error) {
@@ -305,12 +302,11 @@ func main() {
 		log.Error("adapter manager start failed", "error", err)
 	}
 
-	go syncInstrumentsAfterLogon(ctx, log, manager, refStore)
 	if cfg.PositionStreamEnabled {
 		go positionSubscriptionLoop(ctx, log, manager, hub, 5*time.Second)
 	}
 	go positionSnapshotLoop(ctx, log, manager, positionWriter, cfg.PositionSyncInterval)
-	go syncMarketDataLoop(ctx, log, manager, refStore, cfg.MarketDataSyncInterval, cfg.MarketDataBoards)
+	go syncMarketDataLoop(ctx, log, manager, quikInstruments{quikExportStore}, cfg.MarketDataSyncInterval, cfg.MarketDataBoards)
 
 	worker := outbox.NewWorker(outboxStore, orderStore, manager, log, cfg.WorkerID, cfg.OutboxPollInterval, cfg.OutboxBatchSize)
 	worker.SetObserver(obs)

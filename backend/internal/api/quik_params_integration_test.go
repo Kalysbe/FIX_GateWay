@@ -177,12 +177,7 @@ INSERT INTO public."Orders" SELECT n, c, (now() AT TIME ZONE 'Asia/Bishkek')::da
 		t.Fatal(got)
 	}
 	// Brokers' instruments follow the choice too.
-	if _, err := pool.Exec(ctx, `INSERT INTO instruments (internal_symbol, quik_symbol, board, currency, security_type, status) VALUES
-('TEST_AUCT','TEST_AUCT','AUCT_GBA','KGS','BOND','ACTIVE'),('TEST_LIST','TEST_LIST','LIST_GBA','KGS','BOND','ACTIVE')`); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { pool.Exec(ctx, `DELETE FROM instruments WHERE internal_symbol IN ('TEST_AUCT','TEST_LIST')`) })
-	if got := get("/api/v1/instruments", 200); !strings.Contains(got, "TEST_AUCT") || strings.Contains(got, "TEST_LIST") {
+	if got := get("/api/v1/instruments", 200); !strings.Contains(got, `"ClassCode":"AUCT_GBA"`) || strings.Contains(got, `"ClassCode":"LIST_GBA"`) {
 		t.Fatal("instruments ignore the chosen classes:", got)
 	}
 	// No chosen classes: every class is served, to every consumer.
@@ -192,7 +187,7 @@ INSERT INTO public."Orders" SELECT n, c, (now() AT TIME ZONE 'Asia/Bishkek')::da
 	if got := get("/api/v1/market-data", 200); !strings.Contains(got, `"ClassCode":"AUCT_GBA"`) || !strings.Contains(got, `"ClassCode":"LIST_GBA"`) {
 		t.Fatal("empty choice must serve every class:", got)
 	}
-	if got := get("/api/v1/instruments", 200); !strings.Contains(got, "TEST_AUCT") || !strings.Contains(got, "TEST_LIST") {
+	if got := get("/api/v1/instruments", 200); !strings.Contains(got, `"ClassCode":"AUCT_GBA"`) || !strings.Contains(got, `"ClassCode":"LIST_GBA"`) {
 		t.Fatal("empty choice must serve every instrument:", got)
 	}
 	call("PATCH", "/api/v1/admin/market-data/settings", jwt, map[string]any{"classes": []string{"LIST_GBA"}}, 200)

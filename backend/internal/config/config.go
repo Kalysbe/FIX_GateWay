@@ -26,6 +26,7 @@ type Config struct {
 	APITradeConcurrency      int
 	APIRequestTimeout        time.Duration
 	OrderAnswerTimeout       time.Duration // POST /orders waits this long for the QUIK answer
+	FinishedOrderGrace       time.Duration // an order QUIK closed is deleted after this long
 	HTTPWriteTimeout        time.Duration
 	RateLimitMaxStates       int
 	GRPCAddr                 string
@@ -111,6 +112,7 @@ func Load() Config {
 		APITradeConcurrency:      getInt("API_TRADE_CONCURRENCY", 16),
 		APIRequestTimeout:        getDuration("API_REQUEST_TIMEOUT", 15*time.Second),
 		OrderAnswerTimeout:       getDuration("ORDER_ANSWER_TIMEOUT", 10*time.Second),
+		FinishedOrderGrace:       getDuration("FINISHED_ORDER_GRACE", 2*time.Minute),
 		HTTPWriteTimeout:         getDuration("HTTP_WRITE_TIMEOUT", 60*time.Second),
 		GRPCAddr:                 getEnv("GRPC_ADDR", ":8443"),
 		GRPCCertFile:             getEnv("GRPC_TLS_CERT", "certs/server.crt"),

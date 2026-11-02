@@ -73,6 +73,7 @@ func TestOrderCreateIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 	orderSvc.SetTradingAccounts(fixedAccounts{"FIRM1": {"ACC1"}})
+	orderSvc.SetInstruments(fixedInstrument{})
 	if err := rateStore.Refresh(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -172,6 +173,13 @@ func TestOrderCreateIntegration(t *testing.T) {
 	if riskResponse.Code != http.StatusUnprocessableEntity || !bytes.Contains(riskResponse.Body.Bytes(), []byte("TRADING_PAUSED")) {
 		t.Fatalf("pause rejection: %d %s", riskResponse.Code, riskResponse.Body.String())
 	}
+}
+
+// fixedInstrument stands in for QUIK Securities: every instrument exists.
+type fixedInstrument struct{}
+
+func (fixedInstrument) Instrument(_ context.Context, classCode, secCode string) (quikexport.Row, error) {
+	return quikexport.Row{Raw: json.RawMessage(`{"ClassCode":"` + classCode + `","SecCode":"` + secCode + `","FaceUnit":"RUB"}`)}, nil
 }
 
 // fixedAccounts stands in for QUIK Trdaccs: firm -> TrdAccId values.

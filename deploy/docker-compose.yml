@@ -89,7 +89,6 @@ services:
       # QUIK is 172.23.10.84; simulator adapters remain disabled in the UAT DB.
       ADAPTER_HOST_OVERRIDE: ${ADAPTER_HOST_OVERRIDE:-}
       MARKET_DATA_BOARDS: ${MARKET_DATA_BOARDS:-LISTEDSTOCKK,LIST_GBA}
-      TRADE_RECONCILIATION_ENABLED: ${TRADE_RECONCILIATION_ENABLED:-true}
     ports:
       - "127.0.0.1:8080:8080"
       - "127.0.0.1:8443:8443"
