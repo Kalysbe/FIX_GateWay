@@ -128,6 +128,21 @@ func (s *Server) listBrokerQuotes(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "board and symbol are required")
 		return
 	}
+	served, err := s.servedClassSet(r.Context())
+	if err != nil {
+		s.writeParamReadError(w, err)
+		return
+	}
+	if served != nil && !served[board] {
+		_, offset, ok := pageParams(w, r)
+		if !ok {
+			return
+		}
+		w.Header().Set("X-Has-More", "false")
+		w.Header().Set("X-Next-Offset", strconv.Itoa(offset))
+		writeQuikJSON(w, brokerQuotes(nil))
+		return
+	}
 	s.writeQuikOrderPage(w, r, quotesFilter(board, symbol), brokerQuotes)
 }
 

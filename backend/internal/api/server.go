@@ -63,6 +63,7 @@ type Server struct {
 	quikParams         quikParamReader
 	quikRefs           quikRefReader
 	marketClasses      *quikexport.ClassSettings
+	servedClasses      func(context.Context) ([]string, error)
 	obs                *observability.Pipeline
 	realtimeClient     pb.RealtimeServiceClient
 	ratePolicies       *ratelimit.Store
@@ -114,6 +115,7 @@ func (s *Server) SetQuikExport(store *quikexport.Store) {
 
 func (s *Server) SetMarketDataClasses(settings *quikexport.ClassSettings) {
 	s.marketClasses = settings
+	s.servedClasses = settings.Classes
 }
 
 func (s *Server) SetExecutionInbox(in *executioninbox.Inbox, cases *executioninbox.CaseStore) {
@@ -607,6 +609,11 @@ func writeCancelAnswer(w http.ResponseWriter, order domain.Order, rejectReason s
 }
 
 func (s *Server) listInstruments(w http.ResponseWriter, r *http.Request) {
+	served, err := s.servedClassSet(r.Context())
+	if err != nil {
+		s.writeParamReadError(w, err)
+		return
+	}
 	rows, err := s.pool.Query(r.Context(), `
 		SELECT id, internal_symbol, quik_symbol, board, currency, security_type, status
 		FROM instruments WHERE status='ACTIVE' ORDER BY id`)
@@ -615,14 +622,16 @@ func (s *Server) listInstruments(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer rows.Close()
-	var out []domain.Instrument
+	out := []domain.Instrument{}
 	for rows.Next() {
 		var i domain.Instrument
 		if err := rows.Scan(&i.ID, &i.InternalSymbol, &i.QuikSymbol, &i.Board, &i.Currency, &i.SecurityType, &i.Status); err != nil {
 			s.writeInternal(w, err)
 			return
 		}
-		out = append(out, i)
+		if served == nil || served[i.Board] {
+			out = append(out, i)
+		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"instruments": out})
 }
@@ -630,9 +639,14 @@ func (s *Server) listInstruments(w http.ResponseWriter, r *http.Request) {
 func (s *Server) listBrokerOrderBook(w http.ResponseWriter, r *http.Request) {
 	board := strings.TrimSpace(r.URL.Query().Get("board"))
 	symbol := strings.TrimSpace(r.URL.Query().Get("symbol"))
+	served, err := s.servedClassSet(r.Context())
+	if err != nil {
+		s.writeParamReadError(w, err)
+		return
+	}
 	if s.manager != nil {
 		if _, items, ok := s.manager.LiveQuotes(); ok {
-			items = filterQuotes(items, board, symbol)
+			items = servedQuotes(filterQuotes(items, board, symbol), served)
 			books := make([]map[string]any, 0, len(items))
 			for _, q := range items {
 				books = append(books, orderBookDTO(q))

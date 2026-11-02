@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/fix-gateway/backend/internal/domain"
 	"github.com/fix-gateway/backend/internal/quikexport"
 )
 
@@ -28,6 +29,36 @@ func (s *Server) writeParamReadError(w http.ResponseWriter, err error) {
 		s.log.Error("QUIK Params read failed", "error", err)
 	}
 	writeErr(w, http.StatusServiceUnavailable, "market data unavailable")
+}
+
+// servedClassSet is the administrator-chosen classes that broker instruments,
+// quotes and order books are limited to; nil means no settings are attached.
+func (s *Server) servedClassSet(ctx context.Context) (map[string]bool, error) {
+	if s.servedClasses == nil {
+		return nil, nil
+	}
+	classes, err := s.servedClasses(ctx)
+	if err != nil {
+		return nil, err
+	}
+	set := make(map[string]bool, len(classes))
+	for _, class := range classes {
+		set[class] = true
+	}
+	return set, nil
+}
+
+func servedQuotes(items []domain.MarketQuote, served map[string]bool) []domain.MarketQuote {
+	if served == nil {
+		return items
+	}
+	out := make([]domain.MarketQuote, 0, len(items))
+	for _, q := range items {
+		if served[q.Board] {
+			out = append(out, q)
+		}
+	}
+	return out
 }
 
 // board and symbol filter the raw ClassCode and SecCode columns.
