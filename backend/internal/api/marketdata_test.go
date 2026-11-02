@@ -123,6 +123,18 @@ func TestBrokerGRPCChannelsHaveRESTAndSwagger(t *testing.T) {
 	if item := doc.Paths.Value("/api/v1/market-data/{board}/{symbol}"); item == nil || item.Get == nil {
 		t.Error("market data card missing from broker-swagger")
 	}
+	// Swagger UI types an example into its field, which would narrow the default
+	// request: without values an optional filter must return everything.
+	for _, path := range []string{"/api/v1/market-data", "/api/v1/orderbook"} {
+		for _, param := range doc.Paths.Value(path).Get.Parameters {
+			if param.Value.Required {
+				continue
+			}
+			if param.Value.Example != nil || param.Value.Schema.Value.Example != nil {
+				t.Errorf("%s: optional filter %s prefilled in Swagger", path, param.Value.Name)
+			}
+		}
+	}
 	typeOf := reflect.TypeOf(domain.FIXPosition{})
 	for i := 0; i < typeOf.NumField(); i++ {
 		field := strings.Split(typeOf.Field(i).Tag.Get("json"), ",")[0]

@@ -168,13 +168,11 @@ paths:
         - in: query
           name: board
           schema: {type: string}
-          description: Значение колонки ClassCode
-          example: LISTBND
+          description: Значение колонки ClassCode. Без значения — все классы
         - in: query
           name: symbol
           schema: {type: string}
-          description: Значение колонки SecCode
-          example: GBA02270915
+          description: Значение колонки SecCode. Без значения — все инструменты
         - {in: query, name: limit, schema: {type: integer, minimum: 1, maximum: 5000, default: 1000}}
         - {in: query, name: offset, schema: {type: integer, minimum: 0, maximum: 10000000, default: 0}}
       responses:
@@ -304,13 +302,11 @@ paths:
           schema:
             type: string
           description: Код инструмента
-          example: GBA02280810
         - in: query
           name: board
           schema:
             type: string
           description: Код класса
-          example: LIST_GBA
       responses:
         "200":
           description: OK
