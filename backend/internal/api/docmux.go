@@ -56,7 +56,7 @@ func splitMuxPattern(pattern string) (method, path string, ok bool) {
 
 func skipOpenAPIPath(path string) bool {
 	switch path {
-	case "/swagger", "/broker-swagger", "/api/openapi.yaml", "/api/broker-openapi.yaml":
+	case "/broker-swagger", "/api/broker-openapi.yaml":
 		return true
 	}
 	return strings.HasPrefix(path, "/docs/")

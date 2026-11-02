@@ -10,12 +10,12 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-func (s *Server) serveMergedOpenAPI(w http.ResponseWriter, r *http.Request, routes []docRoute, baseFile string, brokerOnly bool) {
+func (s *Server) serveMergedOpenAPI(w http.ResponseWriter, r *http.Request, routes []docRoute, baseFile string) {
 	if !s.docsEnabled() {
 		writeErr(w, http.StatusNotFound, "not found")
 		return
 	}
-	body, err := mergeOpenAPI(baseFile, routes, brokerOnly, r)
+	body, err := mergeOpenAPI(baseFile, routes, r)
 	if err != nil {
 		s.writeInternal(w, err)
 		return
@@ -25,7 +25,7 @@ func (s *Server) serveMergedOpenAPI(w http.ResponseWriter, r *http.Request, rout
 	_, _ = w.Write(body)
 }
 
-func mergeOpenAPI(baseFile string, routes []docRoute, brokerOnly bool, r *http.Request) ([]byte, error) {
+func mergeOpenAPI(baseFile string, routes []docRoute, r *http.Request) ([]byte, error) {
 	doc, err := loadOpenAPIBase(baseFile)
 	if err != nil {
 		return nil, err
@@ -35,14 +35,12 @@ func mergeOpenAPI(baseFile string, routes []docRoute, brokerOnly bool, r *http.R
 		doc.Paths = openapi3.NewPaths()
 	}
 	for _, rt := range routes {
-		if brokerOnly && !brokerVisiblePath(rt.Path) {
+		if !brokerVisiblePath(rt.Path) {
 			continue
 		}
 		ensureOperation(doc, rt)
 	}
-	if brokerOnly {
-		wrapBrokerResponses(doc)
-	}
+	wrapBrokerResponses(doc)
 	if r != nil && r.Host != "" {
 		scheme := "http"
 		if r.TLS != nil || strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https") {

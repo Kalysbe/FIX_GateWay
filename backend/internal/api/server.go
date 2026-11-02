@@ -170,12 +170,8 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /health", http.HandlerFunc(s.handleHealth))
 	mux.Handle("GET /ready", http.HandlerFunc(s.handleReady))
 	mux.Handle("GET /metrics", s.restrictInternal(promhttp.Handler()))
-	mux.HandleFunc("GET /api/openapi.yaml", func(w http.ResponseWriter, r *http.Request) {
-		s.serveMergedOpenAPI(w, r, mux.routes, "docs/openapi.yaml", false)
-	})
-	mux.HandleFunc("GET /swagger", s.handleSwaggerUI)
 	mux.HandleFunc("GET /api/broker-openapi.yaml", func(w http.ResponseWriter, r *http.Request) {
-		s.serveMergedOpenAPI(w, r, mux.routes, "docs/broker-openapi.yaml", true)
+		s.serveMergedOpenAPI(w, r, mux.routes, "docs/broker-openapi.yaml")
 	})
 	mux.HandleFunc("GET /broker-swagger", s.handleBrokerSwaggerUI)
 	mux.HandleFunc("GET /docs/kse-logo.png", s.handleDocsAsset)
@@ -1794,21 +1790,6 @@ func (s *Server) handleDocsAsset(w http.ResponseWriter, r *http.Request) {
 	default:
 		writeErr(w, http.StatusNotFound, "not found")
 	}
-}
-
-func (s *Server) handleSwaggerUI(w http.ResponseWriter, r *http.Request) {
-	if !s.docsEnabled() {
-		writeErr(w, http.StatusNotFound, "not found")
-		return
-	}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_, _ = w.Write([]byte(`<!doctype html>
-<html><head><meta charset="utf-8"/><title>FIX Gateway API</title>
-<link rel="stylesheet" href="/docs/swagger/swagger-ui.css"/></head>
-<body><div id="swagger-ui"></div>
-<script src="/docs/swagger/swagger-ui-bundle.js"></script>
-<script src="/docs/swagger/init.js"></script>
-</body></html>`))
 }
 
 func (s *Server) handleBrokerSwaggerUI(w http.ResponseWriter, r *http.Request) {

@@ -99,7 +99,7 @@ func adminRoute(path string) string {
 
 func SkipHTTPLog(path string) bool {
 	switch path {
-	case "/metrics", "/api/openapi.yaml", "/swagger", "/api/broker-openapi.yaml", "/broker-swagger":
+	case "/metrics", "/api/broker-openapi.yaml", "/broker-swagger":
 		return true
 	}
 	return path == "/api/v1/admin/events/stream"

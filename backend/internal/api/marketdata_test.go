@@ -72,18 +72,6 @@ func TestBrokerGRPCChannelsHaveRESTAndSwagger(t *testing.T) {
 	if err := doc.Validate(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	w = httptest.NewRecorder()
-	handler.ServeHTTP(w, httptest.NewRequest("GET", "/api/openapi.yaml", nil))
-	general, err := openapi3.NewLoader().LoadFromData(w.Body.Bytes())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := general.Validate(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if item := general.Paths.Value("/api/v1/market-data"); item == nil || item.Get == nil {
-		t.Fatal("market data missing from general Swagger")
-	}
 	sources := map[string]string{
 		"order.updated": "/api/v1/orders", "trade.created": "/api/v1/trades",
 		"positions.updated": "/api/v1/positions", "marketdata.tick": "/api/v1/market-data",
@@ -147,15 +135,13 @@ func TestBrokerGRPCChannelsHaveRESTAndSwagger(t *testing.T) {
 	}
 	// Params rows are passed through: the contract is an open object, not a
 	// Gateway field list.
-	for _, contract := range []*openapi3.T{doc, general} {
-		row := contract.Components.Schemas["MarketDataRow"]
-		if row == nil || row.Value.AdditionalProperties.Has == nil || !*row.Value.AdditionalProperties.Has {
-			t.Error("MarketDataRow must be an open object of Params columns")
-		}
-		for _, name := range []string{"MarketQuote", "MarketDataResponse"} {
-			if contract.Components.Schemas[name] != nil {
-				t.Errorf("FIX schema %s still documented", name)
-			}
+	row := doc.Components.Schemas["MarketDataRow"]
+	if row == nil || row.Value.AdditionalProperties.Has == nil || !*row.Value.AdditionalProperties.Has {
+		t.Error("MarketDataRow must be an open object of Params columns")
+	}
+	for _, name := range []string{"MarketQuote", "MarketDataResponse"} {
+		if doc.Components.Schemas[name] != nil {
+			t.Errorf("FIX schema %s still documented", name)
 		}
 	}
 }

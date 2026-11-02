@@ -36,14 +36,14 @@ paths:
 	}
 	out, err := mergeOpenAPI(base, []docRoute{
 		{Method: http.MethodGet, Path: "/health"},
-		{Method: http.MethodPatch, Path: "/api/v1/admin/brokers/{id}/accounts/{account_id}"},
+		{Method: http.MethodGet, Path: "/api/v1/accounts/{account_id}"},
 		{Method: http.MethodGet, Path: "/api/v1/trades"},
-	}, false, nil)
+	}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	text := string(out)
-	if !strings.Contains(text, "/api/v1/admin/brokers/{id}/accounts/{account_id}") {
+	if !strings.Contains(text, "/api/v1/accounts/{account_id}") {
 		t.Fatalf("missing auto route:\n%s", text)
 	}
 	if !strings.Contains(text, "Liveness") {
@@ -58,30 +58,29 @@ func TestMergeRealOpenAPIFile(t *testing.T) {
 	base := findOpenAPIFile(t)
 	mux := newDocMux()
 	mux.HandleFunc("GET /health", func(http.ResponseWriter, *http.Request) {})
-	mux.HandleFunc("PATCH /api/v1/admin/brokers/{id}/accounts/{account_id}", func(http.ResponseWriter, *http.Request) {})
 	mux.HandleFunc("GET /api/v1/trades", func(http.ResponseWriter, *http.Request) {})
-	mux.HandleFunc("GET /api/v1/admin/definitely-not-in-spec", func(http.ResponseWriter, *http.Request) {})
-	out, err := mergeOpenAPI(base, mux.routes, false, nil)
+	mux.HandleFunc("GET /api/v1/definitely-not-in-spec", func(http.ResponseWriter, *http.Request) {})
+	out, err := mergeOpenAPI(base, mux.routes, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	text := string(out)
-	if !strings.Contains(text, "/api/v1/admin/brokers/{id}/accounts/{account_id}") {
-		t.Fatalf("missing account patch path")
+	if !strings.Contains(text, "/api/v1/trades") {
+		t.Fatalf("missing trades path")
 	}
-	if !strings.Contains(text, "/api/v1/admin/definitely-not-in-spec") {
+	if !strings.Contains(text, "/api/v1/definitely-not-in-spec") {
 		t.Fatalf("auto-discovered route missing from merged spec")
 	}
 }
 
 func findOpenAPIFile(t *testing.T) string {
 	t.Helper()
-	for _, p := range []string{"docs/openapi.yaml", "../../docs/openapi.yaml"} {
+	for _, p := range []string{"docs/broker-openapi.yaml", "../../docs/broker-openapi.yaml"} {
 		if _, err := os.Stat(p); err == nil {
 			return p
 		}
 	}
-	t.Skip("docs/openapi.yaml not found")
+	t.Skip("docs/broker-openapi.yaml not found")
 	return ""
 }
 
@@ -90,7 +89,7 @@ func TestMergeOpenAPIBrokerOnlyHidesAdmin(t *testing.T) {
 	out, err := mergeOpenAPI("", []docRoute{
 		{Method: http.MethodGet, Path: "/api/v1/trades"},
 		{Method: http.MethodGet, Path: "/api/v1/admin/orders"},
-	}, true, nil)
+	}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

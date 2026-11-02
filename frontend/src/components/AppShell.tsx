@@ -51,7 +51,7 @@ const MAIN_NAV: NavItem[] = [
   { group: "Инфраструктура", to: "/notifications", label: "Уведомления", icon: Icons.bell, match: (p) => p.startsWith("/notifications") },
 ];
 
-const BOTTOM_NAV: NavItem[] = import.meta.env.VITE_DOCS_PUBLIC === "false" ? [] : [{ href: "/swagger", label: "API-документация", icon: Icons.docs }];
+const BOTTOM_NAV: NavItem[] = import.meta.env.VITE_DOCS_PUBLIC === "false" ? [] : [{ href: "/broker-swagger", label: "API-документация", icon: Icons.docs }];
 
 function NavLink({ item, active, path, onNavigate }: { item: NavItem; active: boolean; path: string; onNavigate?: () => void }) {
   const className = [

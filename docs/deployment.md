@@ -41,7 +41,7 @@ Services:
 | Service | URL |
 |---------|-----|
 | Gateway API | http://localhost:8080 |
-| Swagger UI | http://localhost:8080/swagger |
+| Swagger UI | http://localhost:8080/broker-swagger |
 | Admin UI | http://localhost:5173 |
 | Prometheus | http://localhost:9090 |
 | FIX simulators | localhost:5001, :5002 |

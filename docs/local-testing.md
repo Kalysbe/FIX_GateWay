@@ -9,7 +9,7 @@ docker compose -f deploy/docker-compose.local.yml up --build -d --wait --wait-ti
 Требуется современный Docker Compose с `dockerfile_inline` (2.17+). Сборка скачивает зависимости; gateway, PostgreSQL и FIX simulator используют внутреннюю Docker-сеть без исходящего доступа в LAN/Интернет. UI и фиксированный TCP bridge `access` подключены также к отдельной сети для публикации loopback-портов. Bridge передаёт HTTP, native gRPC и PostgreSQL без завершения TLS; TLS проверяет сам gateway. Стенд имеет имя `fix-gateway-local`, собственные БД и сертификаты. Админка использует привычный порт 5173, остальные опубликованные порты выделены локальному стенду. Освободите порт 5173 перед запуском: одновременно запустить админки локального и UAT стендов на нём нельзя. Штатный UAT Compose и его данные не используются. Не объединяйте эти Compose-файлы через несколько `-f` и не меняйте имя проекта.
 
 Админка: http://localhost:5173 — `admin@localhost` / `admin123`.
-REST API / Swagger: http://localhost:28080/swagger.
+REST API / Swagger: http://localhost:28080/broker-swagger.
 Native TLS gRPC: localhost:28443; клиентский сертификат по умолчанию не требуется.
 PostgreSQL: localhost:25432, БД `fix_gateway_local`, пользователь `gateway`, пароль `local-simulator-only`.
 Все опубликованные порты привязаны к loopback.

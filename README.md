@@ -25,7 +25,7 @@ environment with a separate database and the admin interface, use
 [Local testing](docs/local-testing.md).
 
 - Admin UI: http://localhost:5173 (`admin@localhost` / `admin123`)
-- API + Swagger: http://localhost:8080/swagger
+- API + Swagger: http://localhost:8080/broker-swagger
 - Prometheus: http://localhost:9090
 - Two FIX simulator acceptors: `:5001`, `:5002`
 
