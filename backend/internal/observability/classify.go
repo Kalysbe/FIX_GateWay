@@ -63,7 +63,7 @@ func classifyBrokerAPI(method, path string) RouteClass {
 		return RouteClass{TypeAPI, SubPositionsList, "/api/v1/positions"}
 	case strings.HasPrefix(path, "/api/v1/instruments"):
 		return RouteClass{TypeAPI, SubInstrumentRead, "/api/v1/instruments"}
-	case strings.HasPrefix(path, "/api/v1/accounts") || path == "/api/v1/firm":
+	case strings.HasPrefix(path, "/api/v1/accounts") || path == "/api/v1/token":
 		return RouteClass{TypeAPI, SubAccountRead, path}
 	default:
 		return RouteClass{TypeAPI, SubUnknown, path}

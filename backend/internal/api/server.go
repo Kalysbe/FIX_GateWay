@@ -176,7 +176,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/v1/orders/{id}",s.brokerAuth(s.requirePermission(auth.PermOrdersRead)(http.HandlerFunc(s.getBrokerOrder))))
 	mux.Handle("POST /api/v1/orders/{id}/cancel", s.brokerAuth(s.requirePermission(auth.PermOrdersCancel)(http.HandlerFunc(s.cancelBrokerOrder))))
 	mux.Handle("GET /api/v1/accounts", s.brokerAuth(s.requirePermission(auth.PermOrdersRead)(http.HandlerFunc(s.listBrokerAccounts))))
-	mux.Handle("GET /api/v1/firm", s.brokerAuth(s.requirePermission(auth.PermOrdersRead)(http.HandlerFunc(s.getBrokerFirm))))
+	mux.Handle("GET /api/v1/token", s.brokerAuth(http.HandlerFunc(s.getBrokerToken)))
 	mux.Handle("GET /api/v1/errors", s.brokerAuth(http.HandlerFunc(s.listErrorCodes)))
 	mux.Handle("GET /api/v1/instruments",s.brokerAuth(s.requirePermission(auth.PermOrdersRead)(http.HandlerFunc(s.listInstruments))))
 	mux.Handle("GET /api/v1/quotes", s.brokerAuth(s.requirePermission(auth.PermOrdersRead)(http.HandlerFunc(s.listBrokerQuotes))))

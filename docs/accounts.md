@@ -27,7 +27,7 @@
 | Метод | Ответ |
 |---|---|
 | `GET /api/v1/accounts` (брокер) | Строки `Trdaccs` фирмы токена |
-| `GET /api/v1/firm` (брокер) | Строка `Firms` фирмы токена или 404 |
+| `GET /api/v1/token` (брокер) | Токен, брокер и в поле `firm` строка `Firms` фирмы токена (или `null`) |
 | `GET /api/v1/admin/brokers/{id}/accounts` | Строки `Trdaccs` фирм активных токенов брокера; фирмы — в заголовке `X-Firms` |
 | `GET /api/v1/admin/firms` | Строки `Firms` |
 

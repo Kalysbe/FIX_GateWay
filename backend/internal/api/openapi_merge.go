@@ -170,7 +170,7 @@ func autoTag(path string) string {
 		return "Trades"
 	case strings.HasPrefix(path, "/api/v1/positions"):
 		return "Positions"
-	case strings.HasPrefix(path, "/api/v1/accounts"), strings.HasPrefix(path, "/api/v1/instruments"), strings.HasPrefix(path, "/api/v1/orderbook"), path == "/api/v1/firm":
+	case strings.HasPrefix(path, "/api/v1/accounts"), strings.HasPrefix(path, "/api/v1/instruments"), strings.HasPrefix(path, "/api/v1/orderbook"), path == "/api/v1/token":
 		return "Reference"
 	default:
 		return "API"

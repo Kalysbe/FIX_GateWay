@@ -119,7 +119,8 @@ CREATE TABLE public."Securities" ("TradeDate" timestamp,"ClassCode" text,"SecCod
 	if got := call("GET", "/api/v1/accounts", token.Raw, nil, 200); got != `[{"TrdAccId":"1-3001-71","FirmId":"2040","Status":0}]` {
 		t.Fatal(got)
 	}
-	if got := call("GET", "/api/v1/firm", token.Raw, nil, 200); got != `{"Exchange":"KSE","FirmId":"2040","FirmName":"Сенти","Status":null,"StatusFlag":1}` {
+	if got := call("GET", "/api/v1/token", token.Raw, nil, 200); !strings.Contains(got, `"firm":{"Exchange":"KSE","FirmId":"2040","FirmName":"Сенти","Status":null,"StatusFlag":1}`) ||
+		!strings.Contains(got, `"firm_id":"2040"`) || !strings.Contains(got, `"name":"trader"`) || !strings.Contains(got, `"code":"`+b.Code+`"`) || strings.Contains(got, "token_hash") {
 		t.Fatal(got)
 	}
 	if got := call("GET", "/api/v1/admin/brokers/"+itoa(b.ID)+"/accounts", jwt, nil, 200); got != `[{"TrdAccId":"1-3001-71","FirmId":"2040","Status":0}]` {

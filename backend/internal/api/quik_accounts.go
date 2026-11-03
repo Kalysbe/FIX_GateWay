@@ -71,7 +71,11 @@ func (s *Server) listBrokerAccounts(w http.ResponseWriter, r *http.Request) {
 	writeQuikJSON(w, rows)
 }
 
-func (s *Server) getBrokerFirm(w http.ResponseWriter, r *http.Request) {
+// getBrokerToken describes the calling token: its own settings, its broker and
+// the QUIK Firms row of its firm as is (null when Firms has no such firm).
+func (s *Server) getBrokerToken(w http.ResponseWriter, r *http.Request) {
+	b, _ := BrokerFromContext(r.Context())
+	tok, _ := TokenFromContext(r.Context())
 	firm, err := s.brokerFirm(r)
 	if err == nil && s.quikRefs == nil {
 		err = errQuikRefsUnavailable
@@ -79,12 +83,34 @@ func (s *Server) getBrokerFirm(w http.ResponseWriter, r *http.Request) {
 	var row quikexport.Row
 	if err == nil {
 		row, err = s.quikRefs.Firm(r.Context(), firm)
+		if errors.Is(err, quikexport.ErrFirmNotFound) {
+			row, err = quikexport.Row{}, nil
+		}
 	}
 	if err != nil {
 		s.writeQuikRefError(w, err)
 		return
 	}
-	writeQuikJSON(w, row)
+	permissions := tok.Permissions
+	if permissions == nil {
+		permissions = []string{}
+	}
+	writeQuikJSON(w, map[string]any{
+		"token": map[string]any{
+			"id":           tok.ID,
+			"name":         tok.Name,
+			"description":  tok.Description,
+			"token_prefix": tok.TokenPrefix,
+			"status":       tok.Status,
+			"permissions":  permissions,
+			"firm_id":      firm,
+			"expires_at":   tok.ExpiresAt,
+			"created_at":   tok.CreatedAt,
+			"last_used_at": tok.LastUsedAt,
+		},
+		"broker": map[string]any{"code": b.Code, "name": b.Name, "status": b.Status},
+		"firm":   row,
+	})
 }
 
 // brokerFirms lists the firms the broker's active tokens trade for.

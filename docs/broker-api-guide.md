@@ -43,17 +43,17 @@ REST создаёт и отменяет заявки и возвращает т�
 ```
 
 Обработка: проверьте `success`; при `false` решение принимайте по `code`, точная причина от QUIK — `error_code`, текст для пользователя — `message`. Все значения `code` и известные `error_code` отдаёт `GET /api/v1/errors`. HTTP-код ответа сохраняется (`200`, `201`, `202`, `4xx`, `5xx`).
-## Фирма, счета, инструменты
+## Токен, счета, инструменты
 
-### Изменение контракта 26.10.2026
+### Изменение контракта 03.11.2026
 
-`GET /api/v1/accounts` возвращает массив строк QUIK `Trdaccs` вместо `{accounts: [...]}`, `GET /api/v1/firm` — строку QUIK `Firms` вместо `{quik_firm, firm_name}`. Счета, заведённые вручную в Gateway, больше не действуют.
+`GET /api/v1/firm` заменён на `GET /api/v1/token`: общая информация о токене, его брокере и фирме. Строка QUIK `Firms` лежит в поле `firm`.
 
-Все три метода требуют `orders:read`. gRPC-событий для этих справочников нет.
+`GET /api/v1/token` доступен любому действующему токену; счета и инструменты требуют `orders:read`. gRPC-событий для этих справочников нет.
 
 | REST | Назначение | Ответ `200` |
 |---|---|---|
-| `GET /api/v1/firm` | Фирма, привязанная к токену | Строка таблицы QUIK `Firms` как есть; 404, если фирмы нет |
+| `GET /api/v1/token` | Информация о токене | `token` — `id`, `name`, `description`, `token_prefix`, `status`, `permissions`, `firm_id` (фирма заявок), `expires_at`, `created_at`, `last_used_at`; `broker` — `code`, `name`, `status`; `firm` — строка QUIK `Firms` как есть или `null`, если фирмы там нет |
 | `GET /api/v1/accounts` | Торговые счета фирмы токена | JSON-массив строк таблицы QUIK `Trdaccs` как есть |
 | `GET /api/v1/instruments` | Инструменты выбранных биржей классов | JSON-массив строк таблицы QUIK `Securities` за последнюю дату как есть; `limit`, `offset`, `has_more`, `next_offset` |
 
