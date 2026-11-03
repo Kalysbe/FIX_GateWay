@@ -50,19 +50,20 @@ export function MarketClassesSettings() {
   const options = classOptions(classesQ.data ?? [], saved);
   const changed = draft != null && draft.join(",") !== saved.join(",");
 
-  return <div className="card space-y-3">
-    <div className="text-[12px] font-medium text-muted">Классы QUIK{settingsQ.data ? `: ${saved.length ? saved.join(", ") : "все"}` : ""}</div>
-    <div className="text-xs text-muted">Настройка действует во всей системе: текущие торги, заявки, котировки, сделки, инструменты, админка и брокерский API. Ничего не выбрано — все классы.</div>
+  return <div className="card space-y-4">
+    <div className="flex flex-wrap items-center gap-3">
+      <div className="text-sm">Сейчас: <strong>{settingsQ.data ? saved.length ? saved.join(", ") : "все классы" : "…"}</strong></div>
+      {canWrite && <div className="ml-auto flex gap-2">
+        {changed && <button className="btn-muted" type="button" onClick={() => setDraft(null)}>Отменить</button>}
+        <button className="btn" type="button" disabled={!changed || save.isPending} onClick={() => save.mutate()}>{save.isPending ? "Сохранение…" : "Сохранить"}</button>
+      </div>}
+    </div>
     {classesQ.error ? <div className="text-xs text-muted">Таблица QUIK Classes недоступна</div> : null}
-    <div className="flex flex-wrap gap-x-4 gap-y-2">
-      {options.map(o => <label key={o.code} className="flex items-center gap-2 text-sm">
+    <div className="class-grid">
+      {options.map(o => <label key={o.code} className={`class-option ${chosen.includes(o.code) ? "class-option-on" : ""}`}>
         <input type="checkbox" checked={chosen.includes(o.code)} disabled={!canWrite || save.isPending} onChange={() => toggle(o.code)} />
-        <span className="font-mono">{o.code}</span>{o.name && <span className="text-muted">{o.name}</span>}
+        <span><span className="font-mono text-[12px]">{o.code}</span>{o.name && <small>{o.name}</small>}</span>
       </label>)}
     </div>
-    {canWrite && <div className="flex gap-2">
-      <button className="btn" type="button" disabled={!changed || save.isPending} onClick={() => save.mutate()}>{save.isPending ? "Сохранение…" : "Сохранить"}</button>
-      {changed && <button className="btn-muted" type="button" onClick={() => setDraft(null)}>Отменить</button>}
-    </div>}
   </div>;
 }

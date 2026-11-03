@@ -12,6 +12,10 @@ export type TableColumn<T> = {
   numeric?: boolean;
   sortable?: boolean;
   className?: string;
+  /** Header tooltip. */
+  title?: string;
+  /** Starts hidden; the column menu can show it. */
+  defaultHidden?: boolean;
 };
 export type TableSummary = { label: string; value: ReactNode; tone?: "success" | "danger" | "warn" };
 
@@ -43,9 +47,11 @@ export function DataTable<T>({ rows, columns, rowKey, title, loading = false, se
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState(20);
   const [comfortable, setComfortable] = useState(false);
-  const [hidden, setHidden] = useState<string[]>([]);
+  // The user's choices in the column menu, over each column's default.
+  const [shown, setShown] = useState<Record<string, boolean>>({});
   useEffect(() => setPage(0), [resetKey]);
-  const visible = columns.filter(c => !hidden.includes(c.id));
+  const isShown = (c: TableColumn<T>) => shown[c.id] ?? !c.defaultHidden;
+  const visible = columns.filter(isShown);
   const filtered = useMemo(() => filterRows(rows, query, getSearchText ?? (row => columns.map(c => c.value(row) ?? "").join(" "))), [rows, query, getSearchText, columns]);
   const sorted = useMemo(() => {
     const column = columns.find(c => c.id === sort?.id);
@@ -78,12 +84,12 @@ export function DataTable<T>({ rows, columns, rowKey, title, loading = false, se
       <div className="table-tools">
         {onRefresh && <button type="button" className="icon-btn" title="Обновить данные" aria-label="Обновить данные" disabled={refreshing} onClick={onRefresh}><Icons.refresh size={16} className={refreshing ? "animate-spin" : ""} /></button>}
         <button type="button" className="icon-btn" title="Высота строк" aria-label="Увеличить высоту строк" aria-pressed={comfortable} onClick={() => setComfortable(v => !v)}><Icons.density size={16} /></button>
-        {!renderRow && <details className="table-columns"><summary className="icon-btn" title="Настроить столбцы" aria-label="Настроить столбцы"><Icons.columns size={16} /></summary><div className="table-columns-menu"><strong>Столбцы таблицы</strong>{columns.map(c => <label key={c.id}><input type="checkbox" checked={!hidden.includes(c.id)} disabled={visible.length === 1 && visible[0].id === c.id} onChange={() => setHidden(old => old.includes(c.id) ? old.filter(k => k !== c.id) : [...old, c.id])} />{c.header || "Действия"}</label>)}</div></details>}
+        {!renderRow && <details className="table-columns"><summary className="icon-btn" title="Настроить столбцы" aria-label="Настроить столбцы"><Icons.columns size={16} /></summary><div className="table-columns-menu"><strong>Столбцы таблицы</strong>{columns.map(c => <label key={c.id} title={c.title}><input type="checkbox" checked={isShown(c)} disabled={visible.length === 1 && visible[0].id === c.id} onChange={() => setShown(old => ({ ...old, [c.id]: !isShown(c) }))} />{c.header || "Действия"}</label>)}</div></details>}
         {exportName && <button type="button" className="btn-muted gap-1.5" disabled={!sorted.length || loading} onClick={exportCsv}><Icons.download size={15} />CSV</button>}
       </div>
     </div>
     {loading ? <TableSkeleton cols={Math.min(visible.length, 8)} /> : <div className="table-scroll" tabIndex={0} role="region" aria-label={`Данные: ${title}`}>
-      <table className="table"><caption className="sr-only">{title}. Поиск и итоги относятся к загруженным данным.</caption><thead><tr>{visible.map(column => <th key={column.id} className={`${column.numeric ? "numeric" : ""} ${column.className ?? ""}`} aria-sort={sort?.id === column.id ? sort.direction === "asc" ? "ascending" : "descending" : undefined}>
+      <table className="table"><caption className="sr-only">{title}. Поиск и итоги относятся к загруженным данным.</caption><thead><tr>{visible.map(column => <th key={column.id} className={`${column.numeric ? "numeric" : ""} ${column.className ?? ""}`} title={column.title} aria-sort={sort?.id === column.id ? sort.direction === "asc" ? "ascending" : "descending" : undefined}>
         {column.sortable === false ? column.header : <button type="button" className="table-sort" onClick={() => changeSort(column)}>{column.header}<Icons.sort size={13} className={sort?.id === column.id ? `sort-active ${sort.direction === "desc" ? "rotate-180" : ""}` : ""} /></button>}
       </th>)}</tr></thead><tbody>{slice.rows.map((row, index) => renderRow ? <Fragment key={rowKey(row)}>{renderRow(row, index)}</Fragment> : <tr key={rowKey(row)} className={rowClassName?.(row)}>{visible.map(column => <td key={column.id} className={`${column.numeric ? "numeric" : ""} ${column.className ?? ""}`}>{column.cell ? column.cell(row) : column.value(row) ?? "—"}</td>)}</tr>)}{!slice.rows.length && <tr><td colSpan={visible.length}><EmptyState title={query.trim() ? "Ничего не найдено" : emptyTitle} hint={query.trim() ? "Измените поиск или фильтры" : emptyHint} />{query.trim() && <button type="button" className="btn-muted mx-auto mb-4 flex" onClick={() => { setQuery(""); setPage(0); }}>Сбросить поиск</button>}</td></tr>}</tbody></table>
     </div>}

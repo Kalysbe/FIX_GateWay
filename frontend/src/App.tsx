@@ -25,6 +25,7 @@ import ReferencePage from "./pages/ReferencePage";
 import LogsPage from "./pages/LogsPage";
 import NotificationsPage from "./pages/NotificationsPage";
 import RateLimitsPage from "./pages/RateLimitsPage";
+import ClassesPage from "./pages/ClassesPage";
 import ExecutionInboxPage from "./pages/ExecutionInboxPage";
 
 const TokensPage = lazy(() => import("./pages/TokensPage"));
@@ -68,6 +69,7 @@ export default function App() {
         <Route path="/monitoring" element={<MonitoringPage />} />
         <Route path="/grpc" element={<GrpcPage />} />
         <Route path="/rate-limits" element={<RateLimitsPage />} />
+        <Route path="/classes" element={<ClassesPage />} />
         <Route path="/brokers" element={<BrokersPage />} />
         <Route path="/brokers/:id" element={<BrokerDetailPage />} />
         <Route path="/brokers/:id/tokens" element={<BrokerTokensRedirect />} />

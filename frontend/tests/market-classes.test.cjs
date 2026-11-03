@@ -34,10 +34,10 @@ test('chosen classes are checked among QUIK Classes; a vanished class is still s
   const classes = raw.parseDBJSON('[{"ClassCode":"LIST_GBA","ClassName":"Листинговые:облигации"},{"ClassCode":"AUCT_GBA","ClassName":null}]');
   const m = component('ADMIN', { classes: ['LIST_GBA', 'OLD'], default_classes: ['LIST_GBA'] }, classes);
   const html = renderToStaticMarkup(React.createElement(m.MarketClassesSettings));
-  assert.match(html, /Классы QUIK: LIST_GBA, OLD/);
-  assert.match(html, /checked=""[^>]*\/><span class="font-mono">LIST_GBA<\/span><span class="text-muted">Листинговые:облигации/);
-  assert.doesNotMatch(html, /checked=""[^>]*\/><span class="font-mono">AUCT_GBA/);
-  assert.match(html, /OLD<\/span><span class="text-muted">нет в QUIK Classes/);
+  assert.match(html, /Сейчас: <strong>LIST_GBA, OLD<\/strong>/);
+  assert.match(html, /checked=""[^>]*\/><span><span class="font-mono text-\[12px\]">LIST_GBA<\/span><small>Листинговые:облигации/);
+  assert.doesNotMatch(html, /checked=""[^>]*\/><span><span class="font-mono text-\[12px\]">AUCT_GBA/);
+  assert.match(html, /OLD<\/span><small>нет в QUIK Classes/);
   assert.match(html, /Сохранить/);
 });
 

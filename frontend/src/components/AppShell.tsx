@@ -43,6 +43,7 @@ const MAIN_NAV: NavItem[] = [
   { group: "Торговые операции", to: "/reference", label: "Инструменты", icon: Icons.instruments, match: (p) => p.startsWith("/reference") },
   { group: "Управление", to: "/brokers", label: "Брокеры", icon: Icons.brokers, match: (p) => p.startsWith("/brokers") },
   { group: "Управление", to: "/tokens", label: "Токены", icon: Icons.tokens, match: (p) => p.startsWith("/tokens") },
+  { group: "Управление", to: "/classes", label: "Классы QUIK", icon: Icons.settings, match: (p) => p === "/classes" },
   { group: "Управление", to: "/rate-limits", label: "Rate Limits", icon: Icons.roles, match: (p) => p === "/rate-limits" },
   { group: "Инфраструктура", to: "/adapters", label: "Подключения FIX", icon: Icons.adapters, match: (p) => p.startsWith("/adapters") },
   { group: "Инфраструктура", to: "/execution-inbox", label: "Входящие FIX", icon: Icons.adapters, match: (p) => p === "/execution-inbox" },
@@ -334,6 +335,7 @@ function breadcrumbs(pathname: string): Array<{ label: string; to?: string }> {
   if (pathname === "/grpc") return [{ label: "gRPC · Подписки" }];
   if (pathname === "/monitoring") return [{ label: "Мониторинг" }];
   if (pathname === "/rate-limits") return [{ label: "Rate Limits" }];
+  if (pathname === "/classes") return [{ label: "Классы QUIK" }];
   if (pathname === "/execution-inbox") return [{ label: "Входящие FIX" }];
   if (pathname === "/") return [{ label: "Дашборд" }];
   if (pathname.startsWith("/brokers/")) {

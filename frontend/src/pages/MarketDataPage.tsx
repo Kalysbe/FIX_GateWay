@@ -3,18 +3,43 @@ import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { apiWithHeaders } from "../api";
 import { liveRefetchInterval } from "../lib/poll";
-import { dbSortValue, dbValue, nextOrderOffset, parseDBJSON, type DBOrder } from "../lib/rawOrders";
+import { dbValue, nextOrderOffset, parseDBJSON, type DBOrder } from "../lib/rawOrders";
 import { useAdminStream } from "../hooks/useAdminStream";
 import { PageHeader } from "../components/PageHeader";
 import { ErrorBanner } from "../components/feedback";
-import { DataTable, type TableColumn } from "../components/DataTable";
-import { MarketClassesSettings } from "../components/MarketClassesSettings";
+import { DataTable } from "../components/DataTable";
+import { rawSearchText } from "../components/rawColumns";
+import { formatQuik, quikColumns, type QuikColumn } from "../components/quikColumns";
 import { instrumentPath } from "../lib/quotes";
 
 // Today's rows of QUIK quik_export2.public."Params" of the chosen classes with
-// instrument and class names; the server selects the columns. Column names
-// and values come from the database, numbers keep their source text.
+// instrument and class names; the server selects the columns. Numbers keep
+// their source text in sorting and CSV.
 type ParamRow = DBOrder;
+
+// A bond market at a glance; depth, lot, step and the rest are in the column
+// menu. Each instrument links to its own page with all of its market data.
+const PARAM_COLUMNS: QuikColumn[] = [
+  { id: "instrument", header: "Инструмент", field: "SecCode", sub: "SecShortName", link: r => instrumentPath(r.ClassCode, r.SecCode) },
+  { id: "class", header: "Класс / валюта", field: "ClassCode", sub: "FaceUnit" },
+  { id: "status", header: "Торги", field: "tradingstatus", kind: "state", sub: "status" },
+  { id: "bid", header: "Спрос", field: "bid", kind: "number", frac: 2 },
+  { id: "offer", header: "Предложение", field: "offer", kind: "number", frac: 2 },
+  { id: "last", header: "Последняя", field: "last", kind: "number", frac: 2, sub: "time", subKind: "time" },
+  { id: "waprice", header: "Средневзв.", field: "waprice", kind: "number", frac: 2 },
+  { id: "yield", header: "Дох-ть, %", field: "yield", kind: "number", frac: 2 },
+  { id: "accrued", header: "НКД", field: "accruedint", kind: "number", frac: 2 },
+  { id: "coupon", header: "Купон / дата", field: "CouponValue", kind: "number", frac: 2, sub: "nextcoupon", subKind: "date" },
+  { id: "couponperiod", header: "Период купона, дн.", field: "couponperiod", kind: "number", hidden: true },
+  { id: "limits", header: "Цена мин – макс", field: "pricemin", kind: "number", frac: 2, render: (r, min) => <span className="whitespace-nowrap">{min} – {formatQuik(r.pricemax, "number", 2)}</span> },
+  { id: "numtrades", header: "Сделок", field: "numtrades", kind: "number" },
+  { id: "voltoday", header: "Кол-во", field: "voltoday", kind: "number" },
+  { id: "valtoday", header: "Оборот", field: "valtoday", kind: "number", frac: 2 },
+  { id: "open", header: "Открытие", field: "open", kind: "number", frac: 2, hidden: true },
+  { id: "high", header: "Макс.", field: "high", kind: "number", frac: 2, hidden: true },
+  { id: "low", header: "Мин.", field: "low", kind: "number", frac: 2, hidden: true },
+  { id: "prevprice", header: "Пред. цена", field: "prevprice", kind: "number", frac: 2, hidden: true },
+];
 
 const PAGE = 1000;
 // The page polls a whole table; this bounds a runaway source, not a real market.
@@ -45,21 +70,14 @@ export default function MarketDataPage() {
   });
   const rows = q.data ?? [];
   const boards = useMemo(() => Array.from(new Set(rows.map(r => dbValue(r.ClassCode)).filter(v => v !== "null"))).sort(), [rows]);
-  const fields = useMemo(() => Array.from(new Set(rows.flatMap(r => Object.keys(r)))), [rows]);
+  const columns = useMemo(() => quikColumns(rows, PARAM_COLUMNS), [rows]);
   const filtered = board ? rows.filter(r => dbValue(r.ClassCode) === board) : rows;
-  const columns: TableColumn<ParamRow>[] = fields.map(field => ({
-    id: field, header: field, value: r => dbSortValue(r[field]), exportValue: r => dbValue(r[field]),
-    // Each instrument has its own page with all of its market data.
-    cell: r => field === "SecCode" && r.ClassCode != null && r.SecCode != null
-      ? <Link className="whitespace-pre-wrap text-accent" to={instrumentPath(r.ClassCode, r.SecCode)}>{dbValue(r[field])}</Link>
-      : <span className="whitespace-pre-wrap">{dbValue(r[field])}</span>,
-  }));
   return <div className="raw-orders space-y-4">
     <PageHeader title="Текущие торги" subtitle="Инструменты выбранных классов QUIK за сегодняшний торговый день: Params, Securities и Classes" />
-    <MarketClassesSettings />
+    <p className="text-xs text-muted">Какие классы показывать, задаётся на странице <Link className="text-accent" to="/classes">«Классы QUIK»</Link>.</p>
     {q.error && <ErrorBanner error={q.error} onRetry={() => q.refetch()} />}
     <DataTable title="Текущие торги" rows={q.error ? [] : filtered} columns={columns} rowKey={paramKey} loading={q.isLoading} resetKey={board} exportName="market-data" showTotals={false}
-      getSearchText={r => fields.map(f => dbValue(r[f])).join(" ")} onRefresh={() => void q.refetch()} refreshing={q.isFetching}
+      getSearchText={rawSearchText(rows)} onRefresh={() => void q.refetch()} refreshing={q.isFetching}
       searchPlaceholder="Поиск по инструментам…" emptyTitle={q.error ? "Таблица Params недоступна" : "Нет строк выбранных классов за сегодня"}
       filters={<>
         <select className="input w-auto" aria-label="ClassCode" value={board} onChange={e => setBoard(e.target.value)}><option value="">ClassCode: все</option>{boards.map(b => <option key={b} value={b}>{b}</option>)}</select>
