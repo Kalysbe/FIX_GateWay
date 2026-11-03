@@ -67,15 +67,7 @@ func loadOpenAPIBase(path string) (*openapi3.T, error) {
 		}
 		return nil, err
 	}
-	loader := openapi3.NewLoader()
-	doc, err := loader.LoadFromData(raw)
-	if err != nil {
-		return nil, err
-	}
-	if doc.Info != nil && doc.Info.Description != "" && !strings.Contains(doc.Info.Description, "ServeMux") {
-		doc.Info.Description += "\n\nНедостающие пути дополняются автоматически из зарегистрированных HTTP-маршрутов."
-	}
-	return doc, nil
+	return openapi3.NewLoader().LoadFromData(raw)
 }
 
 func emptyOpenAPI() *openapi3.T {
@@ -120,7 +112,6 @@ func ensureOperation(doc *openapi3.T, rt docRoute) {
 	}
 	op := &openapi3.Operation{
 		Summary:     autoSummary(rt.Method, rt.Path),
-		Description: "Операция зарегистрирована в HTTP mux и добавлена в Swagger автоматически.",
 		OperationID: autoOperationID(rt.Method, rt.Path),
 		Tags:        []string{autoTag(rt.Path)},
 		Responses:   openapi3.NewResponses(openapi3.WithStatus(http.StatusOK, &openapi3.ResponseRef{Value: openapi3.NewResponse().WithDescription("OK")})),

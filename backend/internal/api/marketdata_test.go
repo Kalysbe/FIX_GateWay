@@ -91,9 +91,6 @@ func TestBrokerGRPCChannelsHaveRESTAndSwagger(t *testing.T) {
 			t.Fatalf("%s missing from broker-swagger", path)
 		}
 		operation := item.Get
-		if operation.Extensions["x-grpc-event"] != topic {
-			t.Fatalf("%s missing gRPC correspondence", path)
-		}
 		response := operation.Responses.Status(200)
 		if response == nil || response.Value.Content.Get("application/json") == nil || response.Value.Content.Get("application/json").Schema == nil {
 			t.Fatalf("%s missing response schema", path)
