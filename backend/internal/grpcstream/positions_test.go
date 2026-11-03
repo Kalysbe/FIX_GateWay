@@ -4,6 +4,7 @@ import (
 	"context"
 	"net"
 	"reflect"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -23,10 +24,10 @@ func TestBrokerPositionSnapshotsOverGRPC(t *testing.T) {
 	hub := realtime.NewHub()
 	var version atomic.Int64
 	svc := &Service{Hub: hub, Brokers: &testBrokers{tokenID: uuid.New()}, PositionsSnapshot: func(ctx context.Context, firms []string) (any, error) {
-		if !reflect.DeepEqual(firms, []string{"TEST", ""}) {
+		if !reflect.DeepEqual(firms, []string{"TEST"}) {
 			t.Errorf("untrusted firm scope: %v", firms)
 		}
-		return map[string]any{"firm_id": "TEST", "cash": []any{map[string]any{"pos_amt": version.Load()}}, "instruments": []any{}}, nil
+		return map[string]any{"cash": []any{map[string]any{"CurrentBal": version.Load()}}, "instruments": []any{}}, nil
 	}}
 	server := grpc.NewServer()
 	defer server.Stop()
@@ -54,7 +55,7 @@ func TestBrokerPositionSnapshotsOverGRPC(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if initial.GetEvent().GetType() != "positions.updated" || initial.GetEvent().GetData().Fields["firm_id"].GetStringValue() != "TEST" {
+	if initial.GetEvent().GetType() != "positions.updated" || !strings.Contains(initial.GetEvent().GetDataJson(), `"CurrentBal":0`) {
 		t.Fatal(initial)
 	}
 	version.Store(12)
@@ -63,8 +64,8 @@ func TestBrokerPositionSnapshotsOverGRPC(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	fields := updated.GetEvent().GetData().Fields
-	if fields["secret"] != nil || fields["cash"].GetListValue().Values[0].GetStructValue().Fields["pos_amt"].GetNumberValue() != 12 {
+	body := updated.GetEvent().GetDataJson()
+	if strings.Contains(body, "secret") || !strings.Contains(body, `"CurrentBal":12`) {
 		t.Fatal("incorrect scoped update", updated)
 	}
 	if updated.GetEvent().Sequence <= initial.GetEvent().Sequence {

@@ -23,6 +23,7 @@ type quikRefReader interface {
 	Firm(context.Context, string) (quikexport.Row, error)
 	ListSecurities(context.Context, quikexport.SecurityFilter) (quikexport.SecurityPage, error)
 	CountOrdersByDay(context.Context, []string, time.Time) ([]quikexport.OrderDayCount, error)
+	ListPositions(context.Context, []string) (quikexport.Positions, error)
 }
 
 var errQuikRefsUnavailable = errors.New("QUIK accounts and firms source unavailable")

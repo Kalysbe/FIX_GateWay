@@ -40,16 +40,6 @@ type sessionApp struct {
 	secDefMu   sync.Mutex
 	secDefWait *secDefWaiter
 
-	posMu       sync.Mutex
-	posWait     *posWaiter
-	posStream   *positionStream
-	posRetryAt  time.Time
-	posError    string
-	posAttempts int
-	posReceived time.Time
-	posNow      func() time.Time
-	onPositions func(string, string, []domain.FIXPosition) error
-
 	mdMu            sync.Mutex
 	mdWait          *mdWaiter
 	mdBook          map[string]domain.MarketQuote
@@ -96,10 +86,6 @@ func (a *sessionApp) OnLogon(sessionID quickfix.SessionID) {
 
 func (a *sessionApp) OnLogout(sessionID quickfix.SessionID) {
 	a.loggedOn.Store(false)
-	a.posMu.Lock()
-	a.posStream = nil
-	a.posRetryAt, a.posError, a.posAttempts = time.Time{}, "", 0
-	a.posMu.Unlock()
 	// Quotes from the old session must not suppress background resubscription.
 	a.mdMu.Lock()
 	a.mdBook = map[string]domain.MarketQuote{}
@@ -230,10 +216,6 @@ func (a *sessionApp) FromApp(msg *quickfix.Message, sessionID quickfix.SessionID
 		a.emitAppFIX("FIX_REJECT", msg, sessionID)
 	case string(enum.MsgType_SECURITY_DEFINITION):
 		a.handleSecurityDefinition(msg)
-	case string(enum.MsgType_POSITION_REPORT):
-		a.handlePositionReport(msg)
-	case string(enum.MsgType_REQUEST_FOR_POSITIONS_ACK):
-		a.handleRequestForPositionsAck(msg)
 	case string(enum.MsgType_MARKET_DATA_SNAPSHOT_FULL_REFRESH):
 		a.handleMarketDataSnapshot(msg)
 	case string(enum.MsgType_MARKET_DATA_INCREMENTAL_REFRESH):

@@ -21,11 +21,6 @@ type Manager struct {
 	onExec           ExecutionHandler
 	onStatus         StatusListener
 	onMD             domain.MarketDataHandler
-	onPositions      func(string, string, []domain.FIXPosition) error
-	positionAdapter  string
-	positionMu       sync.Mutex
-	positionOwnerMu  sync.RWMutex
-	positionSnapshot *domain.PositionSubscription
 	mdOwnerMu        sync.RWMutex
 	mdOwner          string
 	mdMaintainMu     sync.Mutex
@@ -55,10 +50,6 @@ func (m *Manager) SetHostOverride(host string) { m.hostOverride = host }
 func (m *Manager) SetStatusListener(fn StatusListener) { m.onStatus = fn }
 
 func (m *Manager) SetMarketDataListener(fn domain.MarketDataHandler) { m.onMD = fn }
-
-func (m *Manager) SetPositionListener(fn func(string, string, []domain.FIXPosition) error) {
-	m.onPositions = fn
-}
 
 func (m *Manager) SetFIXHandler(fn func(kind, adapterID, sessionID, msgType, direction, clOrdID, reason string, seq int)) {
 	m.onFIX = fn
@@ -118,9 +109,6 @@ func (m *Manager) startOne(ctx context.Context, meta domain.Adapter) error {
 		impl.SetFIXHandler(func(kind, sessionID, msgType, direction, clOrdID, reason string, seq int) {
 			m.onFIX(kind, id, sessionID, msgType, direction, clOrdID, reason, seq)
 		})
-	}
-	if impl, ok := ad.(*arqa.Adapter); ok {
-		impl.SetPositionListener(m.publishPositions)
 	}
 	if err := ad.Start(ctx); err != nil {
 		return err

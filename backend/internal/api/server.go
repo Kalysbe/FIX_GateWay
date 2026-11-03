@@ -27,7 +27,6 @@ import (
 	"github.com/fix-gateway/backend/internal/observability"
 	"github.com/fix-gateway/backend/internal/orders"
 	"github.com/fix-gateway/backend/internal/outbox"
-	"github.com/fix-gateway/backend/internal/positions"
 	"github.com/fix-gateway/backend/internal/quikexport"
 	"github.com/fix-gateway/backend/internal/ratelimit"
 	"github.com/fix-gateway/backend/internal/realtime"
@@ -53,7 +52,6 @@ type Server struct {
 	audit              *audit.Store
 	users              *admin.UserStore
 	hub                *realtime.Hub
-	positions          *positions.Store
 	quikExport         *quikexport.Store
 	quikOrders         quikOrderReader
 	quikParams         quikParamReader
@@ -83,7 +81,6 @@ func NewServer(
 	s := &Server{
 		cfg: cfg, log: log, pool: pool, brokers: brokerStore, orders: orderSvc, orderStore: orderStore,
 		adapters: adapterStore, manager: manager, outbox: outboxStore, audit: auditStore, users: users, hub: hub,
-		positions:       positions.NewStore(pool),
 		obs:             obs,
 		trusted:         observability.ParseTrustedProxies(cfg.TrustedProxies),
 		hmacNonces:      auth.NewNonceCache(10 * time.Minute),
@@ -228,7 +225,6 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/v1/admin/emitents/{symbol}/orders", s.adminRO(s.listEmitentOrders))
 	mux.Handle("GET /api/v1/admin/trades", s.adminRO(s.listAdminTrades))
 	mux.Handle("GET /api/v1/admin/positions", s.adminRO(s.listAdminPositions))
-	mux.Handle("POST /api/v1/admin/positions/sync", s.adminOps(s.syncPositionsFIX))
 	mux.Handle("GET /api/v1/admin/market-data", s.adminRO(s.listMarketData))
 	mux.Handle("GET /api/v1/admin/market-data/{board}/{symbol}", s.adminRO(s.getMarketData))
 	mux.Handle("GET /api/v1/admin/market-data/{board}/{symbol}/details", s.adminRO(s.getMarketInstrument))
@@ -718,62 +714,6 @@ func (s *Server) writeTradeReadError(w http.ResponseWriter, err error) {
 		s.log.Error("QUIK Trades read failed", "error", err)
 	}
 	writeErr(w, http.StatusServiceUnavailable, "QUIK Trades source unavailable")
-}
-
-func (s *Server) listBrokerPositions(w http.ResponseWriter, r *http.Request) {
-	b, _ := BrokerFromContext(r.Context())
-	tok, _ := TokenFromContext(r.Context())
-	// QUIK «Фирма» in the snapshot is broker.code (e.g. 2040). Token quik_firm
-	// (FIX 5018) may be the same or a longer firm id — match either.
-	firms := positions.NormalizeFirmIDs(b.Code, tok.QuikFirm)
-	if len(firms) == 0 {
-		writeJSON(w, http.StatusOK, map[string]any{
-			"source": "fix", "firm_id": "", "instruments": []any{}, "cash": []any{},
-			"note": "у брокера не задан код фирмы",
-		})
-		return
-	}
-	sn, items, err := s.positions.ListMergedByFirms(r.Context(), firms, "")
-	if err != nil {
-		s.writeInternal(w, err)
-		return
-	}
-	resp := mapPositionsResponse(sn, items)
-	resp["firm_id"] = firms[0]
-	if len(items) == 0 && sn.ID == 0 {
-		resp["note"] = "Шлюз автоматически получает позиции из QUIK и восстанавливает поток после разрыва связи. Ожидается полный снимок."
-	} else if len(items) == 0 && sn.ReportCount > 0 {
-		resp["note"] = "снимок позиций получен, но нет строк по фирме " + strings.Join(firms, "/")
-	}
-	writeJSON(w, http.StatusOK, resp)
-}
-
-func mapPositionsResponse(sn positions.Snapshot, items []domain.FIXPosition) map[string]any {
-	var instruments []domain.FIXPosition
-	var cash []domain.FIXPosition
-	for _, p := range items {
-		switch p.Kind {
-		case "CASH": // PosType ML
-			cash = append(cash, p)
-		default: // INSTRUMENT (DL) / FUTURES (FL, FP)
-			instruments = append(instruments, p)
-		}
-	}
-	if instruments == nil {
-		instruments = []domain.FIXPosition{}
-	}
-	if cash == nil {
-		cash = []domain.FIXPosition{}
-	}
-	resp := map[string]any{
-		"source":      "fix",
-		"instruments": instruments,
-		"cash":        cash,
-	}
-	if sn.ID != 0 {
-		resp["snapshot"] = sn
-	}
-	return resp
 }
 
 func (s *Server) adminLogin(w http.ResponseWriter, r *http.Request) {
@@ -1325,87 +1265,6 @@ func (s *Server) listEmitentOrders(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, res)
-}
-
-func (s *Server) listAdminPositions(w http.ResponseWriter, r *http.Request) {
-	firm := r.URL.Query().Get("firm_id")
-	if firm == "" {
-		if raw := r.URL.Query().Get("broker_id"); raw != "" {
-			id, err := strconv.ParseInt(raw, 10, 64)
-			if err == nil {
-				if b, err := s.brokers.GetBroker(r.Context(), id); err == nil {
-					firm = b.Code
-				}
-			}
-		}
-	}
-	firms := positions.NormalizeFirmIDs(firm)
-	sn, items, err := s.positions.ListMergedByFirms(r.Context(), firms, "")
-	if err != nil {
-		s.writeInternal(w, err)
-		return
-	}
-	resp := mapAdminPositionsResponse(sn, items, s.manager.PositionSubscription())
-	writeJSON(w, http.StatusOK, resp)
-}
-
-func mapAdminPositionsResponse(sn positions.Snapshot, items []domain.FIXPosition, subscription domain.PositionSubscription) map[string]any {
-	resp := mapPositionsResponse(sn, items)
-	resp["subscription"] = subscription
-	resp["live"] = subscription.Status == "ACTIVE" && sn.ID != 0 && sn.AdapterID == subscription.AdapterID && sn.PosReqID == subscription.RequestID
-	if len(items) == 0 && sn.ID == 0 {
-		resp["note"] = "Шлюз автоматически получает позиции из QUIK и восстанавливает поток после разрыва связи. Ожидается полный снимок."
-	}
-	return resp
-}
-
-func (s *Server) syncPositionsFIX(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		Firm     string `json:"firm_id"`
-		Client   string `json:"client_code"`
-		Account  string `json:"account"`
-		BrokerID *int64 `json:"broker_id"`
-		Date     string `json:"clearing_business_date"`
-	}
-	_ = json.NewDecoder(r.Body).Decode(&req)
-	if req.Firm == "" && req.BrokerID != nil {
-		if b, err := s.brokers.GetBroker(r.Context(), *req.BrokerID); err == nil {
-			req.Firm = b.Code
-		}
-	}
-	q := domain.PositionQuery{
-		Firm:                 req.Firm,
-		ClientCode:           req.Client,
-		Account:              req.Account,
-		ClearingBusinessDate: req.Date,
-	}
-
-	adapterID, reqID, count, sn, err := s.positions.SyncFromFIX(r.Context(), s.manager, q)
-	if err != nil {
-		s.writeUpstream(w, err)
-		return
-	}
-	_, listed, _ := s.positions.ListMergedByFirms(r.Context(), positions.NormalizeFirmIDs(req.Firm), "")
-	cash, instr, fut := 0, 0, 0
-	for _, p := range listed {
-		switch p.Kind {
-		case "CASH":
-			cash++
-		case "FUTURES":
-			fut++
-		default:
-			instr++
-		}
-	}
-	s.hub.Broadcast("positions.updated", map[string]any{
-		"adapter_id": adapterID, "pos_req_id": reqID, "received": count,
-	})
-	writeJSON(w, http.StatusOK, map[string]any{
-		"ok": true, "adapter_id": adapterID, "pos_req_id": reqID,
-		"received": count, "cash": cash, "instruments": instr, "futures": fut,
-		"summary": positions.FormatReceived(count, cash, instr, fut),
-		"result":  mapPositionsResponse(sn, listed),
-	})
 }
 
 func filterQuotes(items []domain.MarketQuote, board, symbol string) []domain.MarketQuote {

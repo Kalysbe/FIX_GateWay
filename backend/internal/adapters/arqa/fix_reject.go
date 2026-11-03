@@ -27,13 +27,4 @@ func (a *sessionApp) handleFIXReject(msg *quickfix.Message) {
 		a.log.Warn("fix reject of a non-trading message; trading not paused",
 			"adapter_id", a.adapterID, "ref_msg_type", refType, "ref_seq_num", seq, "text", text)
 	}
-	a.posMu.Lock()
-	pw := a.posWait
-	a.posMu.Unlock()
-	if pw != nil {
-		pw.mu.Lock()
-		pw.result, pw.status = "1", "2"
-		pw.mu.Unlock()
-		pw.finish()
-	}
 }

@@ -20,9 +20,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
-	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/types/known/durationpb"
-	"google.golang.org/protobuf/types/known/structpb"
 )
 
 type Authorizer interface {
@@ -177,7 +175,7 @@ func (s *Service) Stream(stream grpc.BidiStreamingServer[pb.ClientMessage, pb.Se
 			}
 			return status.Error(codes.Unauthenticated, "session revoked")
 		}
-		data, err := s.PositionsSnapshot(check, principal.firms)
+		data, err := s.PositionsSnapshot(check, []string{principal.info.OrderFirmID})
 		if err != nil {
 			return status.Error(codes.Unavailable, "positions unavailable")
 		}
@@ -185,11 +183,8 @@ func (s *Service) Stream(stream grpc.BidiStreamingServer[pb.ClientMessage, pb.Se
 		if err != nil {
 			return status.Error(codes.Internal, "positions encoding failed")
 		}
-		payload := new(structpb.Struct)
-		if err := protojson.Unmarshal(encoded, payload); err != nil {
-			return status.Error(codes.Internal, "positions encoding failed")
-		}
-		copy := &pb.Event{Sequence: event.Sequence, Type: "positions.updated", Data: payload, OccurredAt: event.OccurredAt}
+		// data_json, like Orders: a Struct would turn numeric columns into doubles.
+		copy := &pb.Event{Sequence: event.Sequence, Type: "positions.updated", DataJson: string(encoded), OccurredAt: event.OccurredAt}
 		return send(&pb.ServerMessage{Response: &pb.ServerMessage_Event{Event: copy}})
 	}
 	if err := ready(sub.Topics()); err != nil {

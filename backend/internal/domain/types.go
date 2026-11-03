@@ -223,46 +223,6 @@ type HealthDetails struct {
 	Message         string
 }
 
-// PositionQuery filters a FIX Request For Positions (35=AN).
-// ARQA §2.31 / HowTo: parties only when used — then exactly 2 (Client+Firm or Account+Firm).
-// Empty parties = snapshot of all clients.
-type PositionQuery struct {
-	Firm                 string // PartyRole=13
-	ClientCode           string // PartyRole=3 (spot cash/instrument)
-	Account              string // PartyRole=38 on request (futures trading account)
-	SubscriptionType     string // 263: 0=SNAPSHOT (default), 1=SNAPSHOT+UPDATES, 2=DISABLE
-	ClearingBusinessDate string // metadata only — not sent on ARQA AN
-}
-
-// FIXPosition is one position block from Position Report (35=AP), ARQA §2.33.
-// Spot money = PosType ML; spot instrument = DL; futures limit/pos = FL/FP.
-type FIXPosition struct {
-	AdapterID     string            `json:"adapter_id"`
-	PosMaintRptID string            `json:"pos_maint_rpt_id"`
-	PosReqID      string            `json:"pos_req_id"`
-	ClearingDate  string            `json:"clearing_date"`
-	Kind          string            `json:"kind"` // INSTRUMENT | CASH | FUTURES
-	FirmID        string            `json:"firm_id"`
-	ClientCode    string            `json:"client_code"`
-	AccountCode   string            `json:"account_code"`
-	Symbol        string            `json:"symbol"`
-	SecurityID    string            `json:"security_id"`
-	Board         string            `json:"board"`
-	Currency      string            `json:"currency"`
-	PosType       string            `json:"pos_type"`        // ML | DL | FL | FP
-	UpdateAction  string            `json:"update_action"`   // 5024: 0 New / 1 Change / 2 Delete
-	Keys          map[string]string `json:"keys,omitempty"`  // 5026/5027 PosKey*
-	Items         map[string]string `json:"items,omitempty"` // 5029/5030 PosItem*
-	LongQty       decimal.Decimal   `json:"long_qty"`
-	ShortQty      decimal.Decimal   `json:"short_qty"`
-	NetQty        decimal.Decimal   `json:"net_qty"`
-	PosAmtType    string            `json:"pos_amt_type"`
-	PosAmt        decimal.Decimal   `json:"pos_amt"`
-	SettlPrice    decimal.Decimal   `json:"settl_price"`
-	RawFIX        string            `json:"raw_fix,omitempty"`
-	Source        string            `json:"source,omitempty"` // fix | manual
-}
-
 type ExecutionReport struct {
 	ProtocolReject bool
 	RefMessageType string

@@ -212,6 +212,50 @@ INSERT INTO public."Orders" VALUES ('2026-11-02','LIST_GBA','2040','Активн
 	}
 }
 
+func TestPositionsCurrentRowsAndFirmScope(t *testing.T) {
+	dsn := os.Getenv("QUIK_ORDERS_STORE_TEST_DATABASE_URL")
+	if dsn == "" {
+		dsn = os.Getenv("QUIK_ORDERS_TEST_DATABASE_URL")
+	}
+	if dsn == "" {
+		t.Skip("disposable QUIK_ORDERS_TEST_DATABASE_URL required")
+	}
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	_, err = pool.Exec(ctx, `CREATE TABLE public."MoneyLimits" ("LoadDate" timestamp,"FirmId" char(12),"ClientCode" text,"Tag" text,"CurrCode" text,"LimitKind" text,"CurrentBal" numeric(24,8),"Locked" numeric);
+INSERT INTO public."MoneyLimits" VALUES ('2026-11-02','2040','C1','EQTV','KGS','T0',42628923.91000000,NULL),('2026-11-01','2040','OLD','EQTV','KGS','T0',1,NULL),('2026-11-02','9999','C2','EQTV','KGS','T0',5,NULL);
+CREATE TABLE public."DepoLimits" ("LoadDate" timestamp,"FirmId" char(12),"ClientCode" text,"SecCode" text,"Trdacc" text,"LimitKind" text,"CurrentBal" numeric(24,8));
+INSERT INTO public."DepoLimits" VALUES ('2026-11-02','2040','C1','GBA02280810','1-3101-72','T0',17),('2026-11-02','9999','C2','GBA02280810','1-3001-72','T0',3);`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = pool.Exec(ctx, `DROP TABLE public."MoneyLimits"; DROP TABLE public."DepoLimits"`) })
+	s := NewStore(pool)
+	// The served classes do not limit positions: these tables have no ClassCode.
+	s.SetServedClasses(func(context.Context) ([]string, error) { return []string{"LIST_GD"}, nil })
+	own, err := s.ListPositions(ctx, []string{" 2040 "})
+	if err != nil || len(own.Cash) != 1 || len(own.Instruments) != 1 {
+		t.Fatalf("firm scope and the latest date: %+v %v", own, err)
+	}
+	if !bytes.Contains(own.Cash[0].Raw, []byte(`"CurrentBal":42628923.91000000`)) || !bytes.Contains(own.Cash[0].Raw, []byte(`"Locked":null`)) {
+		t.Fatalf("row changed: %s", own.Cash[0].Raw)
+	}
+	all, err := s.ListPositions(ctx, nil)
+	if err != nil || len(all.Cash) != 2 || len(all.Instruments) != 2 {
+		t.Fatalf("all firms: %+v %v", all, err)
+	}
+	for _, firms := range [][]string{{}, {""}, {"  "}} {
+		none, err := s.ListPositions(ctx, firms)
+		if err != nil || len(none.Cash) != 0 || len(none.Instruments) != 0 {
+			t.Fatalf("an empty firm must match nothing, %q: %+v %v", firms, none, err)
+		}
+	}
+}
+
 func TestQUIKParamsVerbatimFiltersAndPaging(t *testing.T) {
 	dsn := os.Getenv("QUIK_ORDERS_STORE_TEST_DATABASE_URL")
 	if dsn == "" {

@@ -4,7 +4,6 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
-	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -133,16 +132,6 @@ func TestBrokerGRPCChannelsHaveRESTAndSwagger(t *testing.T) {
 			if param.Value.Example != nil || param.Value.Schema.Value.Example != nil {
 				t.Errorf("%s: optional filter %s prefilled in Swagger", path, param.Value.Name)
 			}
-		}
-	}
-	typeOf := reflect.TypeOf(domain.FIXPosition{})
-	for i := 0; i < typeOf.NumField(); i++ {
-		field := strings.Split(typeOf.Field(i).Tag.Get("json"), ",")[0]
-		if field == "" || field == "-" {
-			continue
-		}
-		if doc.Components.Schemas["Position"].Value.Properties[field] == nil {
-			t.Errorf("Position.%s missing from broker-swagger", field)
 		}
 	}
 	// Params rows are passed through: the contract is an open object, not a

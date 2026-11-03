@@ -101,6 +101,25 @@ INSERT INTO public."Trades" VALUES
   (1, 'TQBR', current_date, 'SBER', 1, 'SIM', 'SMOKE', 'SMOKE', 'Купля', 1, 100),
   (1, 'TQBR', current_date, 'SBER', 2, 'LOCAL_FIRM', 'LOCAL_ACCOUNT', 'DEMO', 'Продажа', 1, 100)
 ON CONFLICT DO NOTHING;
+-- Static positions; the simulator does not change them on fills.
+CREATE TABLE IF NOT EXISTS public."MoneyLimits" (
+  "LoadDate" timestamp NOT NULL, "FirmId" text NOT NULL, "ClientCode" text NOT NULL, "Tag" text NOT NULL, "CurrCode" text NOT NULL, "LimitKind" text NOT NULL,
+  "CurrentBal" numeric, "CurrentLimit" numeric, "Locked" numeric, "OpenBal" numeric, "OpenLimit" numeric,
+  PRIMARY KEY ("LoadDate", "FirmId", "ClientCode", "Tag", "CurrCode", "LimitKind")
+);
+INSERT INTO public."MoneyLimits" VALUES
+  (current_date, 'SIM', 'SMOKE', 'EQTV', 'RUB', 'T0', 1000000, 0, 0, 1000000, 0),
+  (current_date, 'LOCAL_FIRM', 'DEMO', 'EQTV', 'KGS', 'T0', 500000.5, 0, 0, 500000.5, 0)
+ON CONFLICT DO NOTHING;
+CREATE TABLE IF NOT EXISTS public."DepoLimits" (
+  "LoadDate" timestamp NOT NULL, "FirmId" text NOT NULL, "ClientCode" text NOT NULL, "SecCode" text NOT NULL, "Trdacc" text NOT NULL, "LimitKind" text NOT NULL,
+  "CurrentBal" numeric, "CurrentLimit" numeric, "OpenBal" numeric, "OpenLimit" numeric, "AwgPositionPrice" numeric,
+  PRIMARY KEY ("LoadDate", "FirmId", "ClientCode", "SecCode", "Trdacc", "LimitKind")
+);
+INSERT INTO public."DepoLimits" VALUES
+  (current_date, 'SIM', 'SMOKE', 'SBER', 'SMOKE', 'T0', 10, 0, 10, 0, 100),
+  (current_date, 'LOCAL_FIRM', 'DEMO', 'GAZP', 'LOCAL_ACCOUNT', 'T0', 25, 0, 25, 0, 150)
+ON CONFLICT DO NOTHING;
 -- Trading accounts and firms the local scripts trade with (QUIK column names).
 CREATE TABLE IF NOT EXISTS public."Firms" (
   "Exchange" text, "FirmId" text NOT NULL, "FirmName" text, "Status" text, "StatusFlag" integer,
@@ -123,8 +142,8 @@ FROM (VALUES ('SMOKE', 'SIM'), ('RELIABILITY', 'SIM'), ('RECOVERY', 'SIM'), ('CA
 ON CONFLICT DO NOTHING;
 REVOKE ALL ON public."Orders" FROM PUBLIC;
 REVOKE ALL ON public."Firms", public."Trdaccs" FROM PUBLIC;
-REVOKE ALL ON public."Params", public."Securities", public."Classes", public."Trades" FROM PUBLIC;
+REVOKE ALL ON public."Params", public."Securities", public."Classes", public."Trades", public."MoneyLimits", public."DepoLimits" FROM PUBLIC;
 GRANT CONNECT ON DATABASE quik_export_local TO quik_sim_writer, quik_reader;
 GRANT USAGE ON SCHEMA public TO quik_sim_writer, quik_reader;
 GRANT SELECT, INSERT, UPDATE ON public."Orders" TO quik_sim_writer;
-GRANT SELECT ON public."Orders", public."Params", public."Securities", public."Classes", public."Trades", public."Firms", public."Trdaccs" TO quik_reader;
+GRANT SELECT ON public."Orders", public."Params", public."Securities", public."Classes", public."Trades", public."MoneyLimits", public."DepoLimits", public."Firms", public."Trdaccs" TO quik_reader;

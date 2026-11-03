@@ -58,8 +58,6 @@ type Config struct {
 	DefaultOrderRateLimit    int
 	AuthFailMaxPerMinute     int
 	AppEnv                   string
-	PositionSyncInterval     time.Duration // automatic snapshot fallback; defaults to 30s when unset/longer
-	PositionStreamEnabled    bool
 	MarketDataSyncInterval   time.Duration // automatic subscription supervision; defaults to 5s when unset/longer
 	MarketDataBoards         []string      // QUIK class codes for 35=V (tag 100)
 	TrustedProxies           string
@@ -144,8 +142,6 @@ func Load() Config {
 		DefaultOrderRateLimit:    getInt("DEFAULT_ORDER_RATE_LIMIT", 20),
 		AuthFailMaxPerMinute:     getInt("AUTH_FAIL_MAX_PER_MINUTE", 30),
 		AppEnv:                   appEnv,
-		PositionSyncInterval:     getDuration("POSITION_SYNC_INTERVAL", 30*time.Second),
-		PositionStreamEnabled:    getBool("POSITION_STREAM_ENABLED", true),
 		MarketDataSyncInterval:   getDuration("MARKET_DATA_SYNC_INTERVAL", 15*time.Second),
 		MarketDataBoards:         getCSV("MARKET_DATA_BOARDS", "LISTEDSTOCKK,LIST_GBA"),
 		TrustedProxies:           getEnv("TRUSTED_PROXIES", ""),

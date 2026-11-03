@@ -75,7 +75,7 @@ password: admin123
 | `ADMIN_EMAIL` / `ADMIN_PASSWORD` | Bootstrap admin |
 | `LB_STRATEGY` | `least_connections` (default), `round_robin`, `weighted_round_robin` |
 | `CORS_ORIGINS` | Comma-separated origins |
-| `QUIK_EXPORT_DATABASE_URL` | Read-only QUIK database: `Orders`, `Params`, `Securities`, `Classes`, `Trdaccs`, `Firms` and `Trades`. Without it no order can be accepted. The QUIK Module API is not used |
+| `QUIK_EXPORT_DATABASE_URL` | Read-only QUIK database: `Orders`, `Params`, `Securities`, `Classes`, `Trdaccs`, `Firms`, `Trades`, `MoneyLimits` and `DepoLimits`. Without it no order can be accepted. The QUIK Module API is not used |
 | `FINISHED_ORDER_GRACE` | How long an order QUIK closed stays in `orders`; default and minimum `2m` |
 
 Adapter secrets (username/password) are referenced by env var **names** stored in DB (`username_env`, `password_env`), never returned to the frontend.

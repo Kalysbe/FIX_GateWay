@@ -39,7 +39,6 @@ type Adapter struct {
 	mdRequestMu sync.Mutex
 	lastMDQuery domain.MarketDataQuery
 	mdSend      func(*quickfix.Message) error
-	posSend     func(*quickfix.Message) error
 }
 
 func New(meta domain.Adapter, log *slog.Logger, onExec domain.ExecutionHandler, onMD domain.MarketDataHandler, storeDir string) *Adapter {
@@ -152,7 +151,6 @@ func (a *Adapter) Start(ctx context.Context) error {
 
 func (a *Adapter) Stop(ctx context.Context) error {
 	a.status.Store(domain.AdapterStopping)
-	_ = a.UnsubscribePositions(ctx)
 	_ = a.UnsubscribeMarketData(ctx)
 	if a.initiator != nil {
 		a.initiator.Stop()

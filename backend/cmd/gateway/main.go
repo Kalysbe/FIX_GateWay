@@ -28,7 +28,6 @@ import (
 	"github.com/fix-gateway/backend/internal/platform/db"
 	"github.com/fix-gateway/backend/internal/platform/logx"
 	"github.com/fix-gateway/backend/internal/platform/migrate"
-	"github.com/fix-gateway/backend/internal/positions"
 	"github.com/fix-gateway/backend/internal/quikexport"
 	"github.com/fix-gateway/backend/internal/ratelimit"
 	"github.com/fix-gateway/backend/internal/realtime"
@@ -154,13 +153,6 @@ func main() {
 		cfg.HealthInterval,
 	)
 	manager.SetHostOverride(cfg.AdapterHostOverride)
-	positionStore := positions.NewStore(pool)
-	positionWriter := &automaticPositionSnapshots{store: positionStore, hub: hub}
-	manager.SetPositionListener(func(adapterID, reqID string, items []domain.FIXPosition) error {
-		persist, cancel := context.WithTimeout(ctx, 10*time.Second)
-		defer cancel()
-		return positionWriter.saveStream(persist, adapterID, reqID, items)
-	})
 	manager.SetStatusListener(func(adapterID string, status domain.AdapterStatus) {
 		hub.Broadcast("adapter.status_changed", map[string]any{
 			"adapter_id": adapterID, "status": status,
@@ -249,6 +241,12 @@ func main() {
 		}, func(err error) {
 			log.Warn("QUIK Trades change read failed; retaining previous selection", "error", err)
 		})
+		go quikExportStore.RunPositions(ctx, func() {
+			// Only a trigger: each broker stream reads its own firm's rows.
+			hub.Broadcast("positions.updated", map[string]any{"source": "quik"})
+		}, func(err error) {
+			log.Warn("QUIK positions change read failed; retaining previous selection", "error", err)
+		})
 		go quikExportStore.RunParams(ctx, func(change quikexport.ParamChange) {
 			hub.BroadcastMarketData(change.Param.Raw, change.Removed)
 		}, func(err error) {
@@ -281,7 +279,7 @@ func main() {
 		os.Exit(1)
 	}
 	grpcServer := grpc.NewServer(grpc.Creds(grpcCreds), grpc.MaxRecvMsgSize(16<<10), grpc.MaxSendMsgSize(8<<20), grpc.MaxConcurrentStreams(128), grpc.KeepaliveParams(keepalive.ServerParameters{MaxConnectionIdle: 2 * time.Minute, Time: time.Minute, Timeout: 10 * time.Second}))
-	pb.RegisterRealtimeServiceServer(grpcServer, &grpcstream.Service{Hub: hub, Users: users, Brokers: brokerStore, HMACRequired: cfg.HMACRequired, Nonces: nonces, JWTSecret: cfg.JWTSecret, Admission: admission, Log: log, PositionsSnapshot: positions.NewStore(pool).RealtimeSnapshot})
+	pb.RegisterRealtimeServiceServer(grpcServer, &grpcstream.Service{Hub: hub, Users: users, Brokers: brokerStore, HMACRequired: cfg.HMACRequired, Nonces: nonces, JWTSecret: cfg.JWTSecret, Admission: admission, Log: log, PositionsSnapshot: func(work context.Context, firms []string) (any, error) { return quikExportStore.ListPositions(work, firms) }})
 	go func() {
 		log.Info("gRPC realtime listening", "addr", cfg.GRPCAddr, "mtls", cfg.GRPCRequireClientCert)
 		if err := grpcServer.Serve(grpcListener); err != nil {
@@ -302,10 +300,6 @@ func main() {
 		log.Error("adapter manager start failed", "error", err)
 	}
 
-	if cfg.PositionStreamEnabled {
-		go positionSubscriptionLoop(ctx, log, manager, hub, 5*time.Second)
-	}
-	go positionSnapshotLoop(ctx, log, manager, positionWriter, cfg.PositionSyncInterval)
 	go syncMarketDataLoop(ctx, log, manager, quikInstruments{quikExportStore}, cfg.MarketDataSyncInterval, cfg.MarketDataBoards)
 
 	worker := outbox.NewWorker(outboxStore, orderStore, manager, log, cfg.WorkerID, cfg.OutboxPollInterval, cfg.OutboxBatchSize)

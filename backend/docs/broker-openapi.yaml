@@ -658,56 +658,28 @@ paths:
   /api/v1/positions:
     get:
       tags: [Позиции]
-      summary: Снимок позиций брокера
+      summary: Позиции фирмы — строки QUIK MoneyLimits и DepoLimits
       x-grpc-event: positions.updated
       security:
         - bearerAuth: []
       description: |
-        Требует `positions:read`.
-
-        Токен определяет брокера. Выборка ограничена кодом брокера и `quik_firm`
-        его токена, как в событии gRPC `positions.updated`.
-        Массивы `cash` и `instruments` содержат те же поля позиций.
-
-        REST читает текущие позиции из базы шлюза. Шлюз автоматически поддерживает
-        FIX-поток позиций (`35=AN`, `263=1`) и получает снимки для восстановления.
-        PUT отправляет в QUIK `35=AL` и после `35=AM` обновляет снимок.
-        Если снимка ещё нет, списки пустые, в `note` — пояснение.
+        Требует `positions:read`. Позиции вашей фирмы (`quik_firm` токена, при пустом значении — код брокера)
+        из таблиц QUIK за последнюю `LoadDate` каждой: `cash` — строки `MoneyLimits`, `instruments` —
+        строки `DepoLimits`. Имена колонок, числа, строки и `null` без изменений.
+        Событие gRPC `positions.updated`: тот же объект в `event.data_json`, полностью заменяет прежние массивы.
       responses:
         "200":
-          description: OK
+          description: Исходные строки QUIK
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/PositionsResponse"
-              example:
-                source: fix
-                firm_id: "2040"
-                snapshot:
-                  adapter_id: quik-fix-1
-                  pos_req_id: POS963157-296
-                  clearing_date: "20260817"
-                  status: OK
-                  report_count: 6
-                instruments:
-                  - kind: INSTRUMENT
-                    firm_id: "2040"
-                    client_code: kalys
-                    account_code: "1-3101-2040"
-                    symbol: KG0105166315
-                    pos_type: DL
-                    net_qty: "1000000"
-                cash:
-                  - kind: CASH
-                    firm_id: "2040"
-                    client_code: kalys
-                    symbol: EQTV
-                    pos_type: ML
-                    net_qty: "10000000"
         "401":
           description: Unauthorized
         "403":
           description: Нет права `positions:read`
+        "503":
+          description: Источник QUIK недоступен; данные не подменяются
 components:
   securitySchemes:
     bearerAuth:
@@ -943,102 +915,44 @@ components:
         ClientCode: {type: string}
         CPFirmId: {type: string, description: "Фирма контрагента"}
       example: {"TradeNum": 11094, "TradeDate": "2026-10-06T00:00:00", "ClassCode": "LIST_GBA", "SecCode": "GBA02280810", "OrderNum": 22450, "Operation": "Купля", "Price": 99.00000000, "Qty": 201, "FirmId": "2040", "Account": "1-3101-2040", "ClientCode": "Kalys", "CPFirmId": "BAKAI2008"}
-    Position:
+    MoneyLimitRow:
       type: object
+      additionalProperties: true
+      description: Строка `public."MoneyLimits"` как есть (`row_to_json`). Набор колонок задаёт QUIK. Ниже — основные колонки.
       properties:
-        adapter_id: {type: string}
-        pos_maint_rpt_id: {type: string}
-        pos_req_id: {type: string}
-        clearing_date: {type: string}
-        update_action: {type: string, description: "FIX 5024: 0 New / 1 Change / 2 Delete"}
-        pos_amt_type: {type: string}
-        pos_amt: {type: string}
-        raw_fix: {type: string, description: Не включается в gRPC-снимок}
-        kind:
-          type: string
-          enum: [INSTRUMENT, CASH, FUTURES]
-        firm_id:
-          type: string
-          example: "2040"
-        client_code:
-          type: string
-        account_code:
-          type: string
-        symbol:
-          type: string
-        security_id:
-          type: string
-        board:
-          type: string
-        currency:
-          type: string
-        pos_type:
-          type: string
-          description: ML деньги, DL инструмент, FL/FP фьючерсы
-        long_qty:
-          type: string
-        short_qty:
-          type: string
-        net_qty:
-          type: string
-        settl_price:
-          type: string
-        source:
-          type: string
-          enum: [fix]
-        keys:
-          type: object
-          additionalProperties:
-            type: string
-        items:
-          type: object
-          additionalProperties:
-            type: string
-    PositionSnapshot:
+        LoadDate: {type: string}
+        FirmId: {type: string}
+        ClientCode: {type: string}
+        Tag: {type: string}
+        CurrCode: {type: string, description: Валюта}
+        LimitKind: {type: string}
+        CurrentBal: {type: number, description: Текущий остаток}
+        OpenBal: {type: number, description: Входящий остаток}
+        Locked: {type: number, description: Заблокировано}
+      example: {"LoadDate": "2026-11-02T00:00:00", "FirmId": "2040", "ClientCode": "Kalys", "Tag": "EQTV", "CurrCode": "KGS", "LimitKind": "T0", "CurrentBal": 1518400.00000000, "OpenBal": 1518400.00000000, "Locked": 0.00000000}
+    DepoLimitRow:
       type: object
+      additionalProperties: true
+      description: Строка `public."DepoLimits"` как есть (`row_to_json`). Набор колонок задаёт QUIK. Ниже — основные колонки.
       properties:
-        id:
-          type: integer
-        adapter_id:
-          type: string
-        pos_req_id:
-          type: string
-        clearing_date:
-          type: string
-        requested_at:
-          type: string
-          format: date-time
-        completed_at:
-          type: string
-          format: date-time
-        status:
-          type: string
-          example: OK
-        error:
-          type: string
-        report_count:
-          type: integer
+        LoadDate: {type: string}
+        FirmId: {type: string}
+        ClientCode: {type: string}
+        SecCode: {type: string}
+        Trdacc: {type: string, description: Торговый счёт}
+        LimitKind: {type: string}
+        CurrentBal: {type: number, description: Текущий остаток}
+        OpenBal: {type: number, description: Входящий остаток}
+        AwgPositionPrice: {type: number, description: Средняя цена}
+      example: {"LoadDate": "2026-11-02T00:00:00", "FirmId": "2040", "ClientCode": "Kalys", "SecCode": "GBA02280810", "Trdacc": "1-3101-2040", "LimitKind": "T0", "CurrentBal": 17.00000000, "OpenBal": 17.00000000, "AwgPositionPrice": 0.00000000}
     PositionsResponse:
       type: object
       properties:
-        source:
-          type: string
-          enum: [fix]
-          example: fix
-        firm_id:
-          type: string
-          description: Код брокера, по которому отфильтрован снимок
-          example: "2040"
-        snapshot:
-          $ref: "#/components/schemas/PositionSnapshot"
-        instruments:
-          type: array
-          items:
-            $ref: "#/components/schemas/Position"
         cash:
           type: array
           items:
-            $ref: "#/components/schemas/Position"
-        note:
-          type: string
-          description: Пояснение, если снимка ещё нет
+            $ref: "#/components/schemas/MoneyLimitRow"
+        instruments:
+          type: array
+          items:
+            $ref: "#/components/schemas/DepoLimitRow"
