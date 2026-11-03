@@ -1243,8 +1243,11 @@ func (s *Server) removeIPWhitelist(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"status": "removed"})
 }
 
+// listAdminOrders serves the admin "Заявки" page: only today's QUIK Orders
+// rows still in the book (State = "Активна", TradeDate = today in Bishkek),
+// as stored; broker_id narrows them to one firm.
 func (s *Server) listAdminOrders(w http.ResponseWriter, r *http.Request) {
-	s.listQuikOrders(w, r, true)
+	s.listQuikOrdersMatching(w, r, true, quotesFilter("", ""))
 }
 
 func (s *Server) listEmitentOrders(w http.ResponseWriter, r *http.Request) {

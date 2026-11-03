@@ -113,6 +113,15 @@ func TestBrokerOrdersUseAuthenticatedFirmBeforePagination(t *testing.T) {
 	if !source.filter.Today {
 		t.Fatal("broker active orders must be limited to today")
 	}
+	// Admin orders page: today's active orders only, rows as stored.
+	w = httptest.NewRecorder()
+	s.listAdminOrders(w, httptest.NewRequest("GET", "/api/v1/admin/orders?limit=7", nil))
+	if f := source.filter; w.Code != 200 || f.State != "Активна" || !f.Today || f.Firm != nil || f.Limit != 7 {
+		t.Fatal(w.Code, w.Body.String(), source.filter)
+	}
+	if strings.TrimSpace(w.Body.String()) != "["+raw+"]" {
+		t.Fatal("admin list added or changed fields", w.Body.String())
+	}
 	// Admin quotes: today's active orders of every firm.
 	w = httptest.NewRecorder()
 	s.listAdminQuotes(w, httptest.NewRequest("GET", "/api/v1/admin/quotes?board=LIST_GBA&symbol=GBA1", nil))
