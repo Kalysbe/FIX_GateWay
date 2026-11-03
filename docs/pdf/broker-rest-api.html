@@ -163,38 +163,38 @@ pre.long { break-inside: auto; }
 
   <h3><span class="n">1.1</span>Служебные методы</h3>
   <table>
-    <thead><tr><th>Метод</th><th>Путь</th><th>Требуемое право</th></tr></thead>
+    <thead><tr><th style="width: 18%">Метод</th><th>Путь</th></tr></thead>
     <tbody>
-      <tr><td>GET</td><td>/health</td><td>Не требуется</td></tr>
-      <tr><td>GET</td><td>/api/v1/token</td><td>Любой действующий токен</td></tr>
-      <tr><td>GET</td><td>/api/v1/accounts</td><td>orders:read</td></tr>
-      <tr><td>GET</td><td>/api/v1/errors</td><td>Любой действующий токен</td></tr>
+      <tr><td>GET</td><td>/health</td></tr>
+      <tr><td>GET</td><td>/api/v1/token</td></tr>
+      <tr><td>GET</td><td>/api/v1/accounts</td></tr>
+      <tr><td>GET</td><td>/api/v1/errors</td></tr>
     </tbody>
   </table>
 
   <h3><span class="n">1.2</span>Инструменты и рыночные данные</h3>
   <table>
-    <thead><tr><th>Метод</th><th>Путь</th><th>Требуемое право</th></tr></thead>
+    <thead><tr><th style="width: 18%">Метод</th><th>Путь</th></tr></thead>
     <tbody>
-      <tr><td>GET</td><td>/api/v1/instruments</td><td>orders:read</td></tr>
-      <tr><td>GET</td><td>/api/v1/market-data</td><td>orders:read</td></tr>
-      <tr><td>GET</td><td>/api/v1/market-data/{board}/{symbol}</td><td>orders:read</td></tr>
-      <tr><td>GET</td><td>/api/v1/quotes</td><td>orders:read</td></tr>
-      <tr><td>GET</td><td>/api/v1/orderbook</td><td>orders:read</td></tr>
+      <tr><td>GET</td><td>/api/v1/instruments</td></tr>
+      <tr><td>GET</td><td>/api/v1/market-data</td></tr>
+      <tr><td>GET</td><td>/api/v1/market-data/{board}/{symbol}</td></tr>
+      <tr><td>GET</td><td>/api/v1/quotes</td></tr>
+      <tr><td>GET</td><td>/api/v1/orderbook</td></tr>
     </tbody>
   </table>
 
   <h3><span class="n">1.3</span>Заявки, сделки и позиции</h3>
   <table>
-    <thead><tr><th>Метод</th><th>Путь</th><th>Требуемое право</th></tr></thead>
+    <thead><tr><th style="width: 18%">Метод</th><th>Путь</th></tr></thead>
     <tbody>
-      <tr><td>POST</td><td>/api/v1/orders</td><td>orders:create</td></tr>
-      <tr><td>GET</td><td>/api/v1/orders</td><td>orders:read</td></tr>
-      <tr><td>GET</td><td>/api/v1/orders/active</td><td>orders:read</td></tr>
-      <tr><td>GET</td><td>/api/v1/orders/{id}</td><td>orders:read</td></tr>
-      <tr><td>POST</td><td>/api/v1/orders/{id}/cancel</td><td>orders:cancel</td></tr>
-      <tr><td>GET</td><td>/api/v1/trades</td><td>trades:read</td></tr>
-      <tr><td>GET</td><td>/api/v1/positions</td><td>positions:read</td></tr>
+      <tr><td>POST</td><td>/api/v1/orders</td></tr>
+      <tr><td>GET</td><td>/api/v1/orders</td></tr>
+      <tr><td>GET</td><td>/api/v1/orders/active</td></tr>
+      <tr><td>GET</td><td>/api/v1/orders/{id}</td></tr>
+      <tr><td>POST</td><td>/api/v1/orders/{id}/cancel</td></tr>
+      <tr><td>GET</td><td>/api/v1/trades</td></tr>
+      <tr><td>GET</td><td>/api/v1/positions</td></tr>
     </tbody>
   </table>
 </section>
@@ -218,18 +218,7 @@ pre.long { break-inside: auto; }
   </table>
 
   <h3 id="s2-2"><span class="n">2.2</span>Авторизация</h3>
-  <p>Bearer-токен в заголовке Authorization. Токен определяет брокера, FirmId QUIK и набор прав. Фильтр по фирме применяется на стороне шлюза и параметрами запроса не расширяется.</p>
-  <table>
-    <thead><tr><th>Наименование</th><th>Комментарий</th></tr></thead>
-    <tbody>
-      <tr><td>orders:read</td><td>Счета, инструменты, рыночные данные, котировки, стакан, просмотр заявок</td></tr>
-      <tr><td>orders:create</td><td>Создание заявок</td></tr>
-      <tr><td>orders:cancel</td><td>Снятие заявок</td></tr>
-      <tr><td>trades:read</td><td>Сделки</td></tr>
-      <tr><td>positions:read</td><td>Позиции</td></tr>
-    </tbody>
-  </table>
-  <p>GET /api/v1/token и GET /api/v1/errors доступны с любым действующим токеном.</p>
+  <p>Bearer-токен в заголовке Authorization. Токен определяет брокера и FirmId QUIK. Фильтр по фирме применяется на стороне шлюза и параметрами запроса не расширяется.</p>
 
   <h3 id="s2-3"><span class="n">2.3</span>Формат ответа</h3>
   <p>application/json; charset=utf-8. Тело запроса разбирается строго: неизвестное поле — 400. Все методы, включая /health, отвечают в едином конверте:</p>
@@ -291,7 +280,7 @@ pre.long { break-inside: auto; }
 }</pre>
 
   <h3><span class="n">3.2</span>GET /api/v1/token</h3>
-  <p>Сведения о токене запроса: параметры токена, брокер и фирма (строка Firms). Требуемое право: не требуется, достаточно действующего токена.</p>
+  <p>Сведения о токене запроса: параметры токена, брокер и фирма (строка Firms).</p>
   <p class="caption">Список полей ответа:</p>
   <table>
     <thead><tr><th>Наименование</th><th>Тип</th><th>Комментарий</th></tr></thead>
@@ -302,7 +291,7 @@ pre.long { break-inside: auto; }
       <tr><td><span class="arrow">→</span>description</td><td>строка</td><td>Описание. Может быть пустым</td></tr>
       <tr><td><span class="arrow">→</span>token_prefix</td><td>строка</td><td>Первые 8 символов токена</td></tr>
       <tr><td><span class="arrow">→</span>status</td><td>строка</td><td>Статус токена: «ACTIVE»</td></tr>
-      <tr><td><span class="arrow">→</span>permissions</td><td>массив</td><td>Права токена, см. п. <a href="#s2-2">2.2</a></td></tr>
+      <tr><td><span class="arrow">→</span>permissions</td><td>массив</td><td>Права токена</td></tr>
       <tr><td><span class="arrow">→</span>firm_id</td><td>строка</td><td>Код фирмы QUIK, от имени которой подаются заявки и по которой фильтруются данные</td></tr>
       <tr><td><span class="arrow">→</span>expires_at</td><td>строка</td><td>Срок действия (ISO 8601, UTC). null — бессрочный</td></tr>
       <tr><td><span class="arrow">→</span>created_at</td><td>строка</td><td>Время выпуска (ISO 8601, UTC)</td></tr>
@@ -350,7 +339,7 @@ pre.long { break-inside: auto; }
   <p>503 — БД QUIK недоступна.</p>
 
   <h3><span class="n">3.3</span>GET /api/v1/accounts</h3>
-  <p>Торговые счета фирмы токена: строки Trdaccs по FirmId. Требуемое право: orders:read.</p>
+  <p>Торговые счета фирмы токена: строки Trdaccs по FirmId.</p>
   <p class="caption">Список основных полей ответа:</p>
   <table>
     <thead><tr><th>Наименование</th><th>Тип</th><th>Комментарий</th></tr></thead>
@@ -378,7 +367,7 @@ pre.long { break-inside: auto; }
 <!-- ================= 4. ИНСТРУМЕНТЫ ================= -->
 <section class="chapter" id="s4">
   <h2><span class="n">4.</span>Инструменты и рыночные данные</h2>
-  <p>Требуемое право для всех методов раздела: orders:read. Фильтр по фирме не применяется.</p>
+  <p>Фильтр по фирме не применяется.</p>
 
   <h3><span class="n">4.1</span>GET /api/v1/instruments</h3>
   <p>Справочник инструментов: строки Securities за последнюю TradeDate, упорядочены по ClassCode, SecCode. По этому же справочнику проверяются ClassCode и SecCode новой заявки (п. <a href="#s5">5.1</a>).</p>
@@ -645,7 +634,7 @@ pre.long { break-inside: auto; }
   <p>Создание и снятие синхронны: шлюз отвечает после ответа QUIK. Состояние заявок читается из Orders по FirmId токена.</p>
 
   <h3><span class="n">5.1</span>POST /api/v1/orders</h3>
-  <p>Выставление заявки. Требуемое право: orders:create. Имена полей — колонки Orders. Таймаут ожидания ответа QUIK — 10 с.</p>
+  <p>Выставление заявки. Имена полей — колонки Orders. Таймаут ожидания ответа QUIK — 10 с.</p>
   <p class="caption">Список поддерживаемых полей запроса:</p>
   <table>
     <thead><tr><th>Наименование</th><th>Тип</th><th>Комментарий</th></tr></thead>
@@ -759,7 +748,7 @@ pre.long { break-inside: auto; }
   <p>Замена заявки (cancel/replace) не поддерживается.</p>
 
   <h3><span class="n">5.2</span>GET /api/v1/orders</h3>
-  <p>Строки Orders по FirmId токена, включая заявки, поданные вне шлюза. Требуемое право: orders:read.</p>
+  <p>Строки Orders по FirmId токена, включая заявки, поданные вне шлюза.</p>
   <p class="caption">Список поддерживаемых параметров:</p>
   <table>
     <thead><tr><th>Наименование</th><th>Тип</th><th>Комментарий</th></tr></thead>
@@ -809,10 +798,10 @@ pre.long { break-inside: auto; }
   <p>Исчезновение строки из Orders не является признаком снятия или исполнения; исполнение подтверждается по Trades (раздел <a href="#s6">6</a>).</p>
 
   <h3><span class="n">5.3</span>GET /api/v1/orders/active</h3>
-  <p>То же, что п. 5.2, но только сегодняшние заявки (TradeDate = сегодня по Бишкеку, UTC+6) с State = «Активна»; фильтр применяется до пагинации. Требуемое право: orders:read.</p>
+  <p>То же, что п. 5.2, но только сегодняшние заявки (TradeDate = сегодня по Бишкеку, UTC+6) с State = «Активна»; фильтр применяется до пагинации.</p>
 
   <h3><span class="n">5.4</span>GET /api/v1/orders/{id}</h3>
-  <p>Строка Orders одной заявки. Требуемое право: orders:read.</p>
+  <p>Строка Orders одной заявки.</p>
   <p class="caption">Список поддерживаемых параметров:</p>
   <table>
     <thead><tr><th>Наименование</th><th>Тип</th><th>Комментарий</th></tr></thead>
@@ -824,7 +813,7 @@ pre.long { break-inside: auto; }
   <p>400 — неверный формат ключа. 404 — строки нет в Orders или она другой фирмы. Строка в Orders появляется асинхронно, поэтому 404 сразу после 201 возможен.</p>
 
   <h3><span class="n">5.5</span>POST /api/v1/orders/{id}/cancel</h3>
-  <p>Снятие заявки. Требуемое право: orders:cancel. Без тела. Таймаут ожидания ответа QUIK — 10 с; data — в формате п. 5.1. Снимаются только активные заявки, выставленные через шлюз.</p>
+  <p>Снятие заявки. Без тела. Таймаут ожидания ответа QUIK — 10 с; data — в формате п. 5.1. Снимаются только активные заявки, выставленные через шлюз.</p>
   <p class="caption">Список поддерживаемых параметров:</p>
   <table>
     <thead><tr><th>Наименование</th><th>Тип</th><th>Комментарий</th></tr></thead>
@@ -853,7 +842,7 @@ pre.long { break-inside: auto; }
   <h2><span class="n">6.</span>Сделки</h2>
 
   <h3><span class="n">6.1</span>GET /api/v1/trades</h3>
-  <p>Строки Trades по FirmId токена, по убыванию новизны; одна строка — одна сторона сделки. Включает сделки по заявкам, поданным вне шлюза. Требуемое право: trades:read.</p>
+  <p>Строки Trades по FirmId токена, по убыванию новизны; одна строка — одна сторона сделки. Включает сделки по заявкам, поданным вне шлюза.</p>
   <p class="caption">Список поддерживаемых параметров:</p>
   <table>
     <thead><tr><th>Наименование</th><th>Тип</th><th>Комментарий</th></tr></thead>
@@ -911,7 +900,7 @@ pre.long { break-inside: auto; }
   <h2><span class="n">7.</span>Позиции</h2>
 
   <h3><span class="n">7.1</span>GET /api/v1/positions</h3>
-  <p>Лимиты фирмы токена: строки MoneyLimits и DepoLimits за последнюю LoadDate каждой таблицы. Требуемое право: positions:read.</p>
+  <p>Лимиты фирмы токена: строки MoneyLimits и DepoLimits за последнюю LoadDate каждой таблицы.</p>
   <p>Лимиты очищаются в QUIK в конце дня и загружаются заново утром. До загрузки cash и instruments — пустые массивы; это штатный ответ.</p>
   <p class="caption">Список полей ответа:</p>
   <table>
@@ -1006,7 +995,7 @@ pre.long { break-inside: auto; }
   <p>error_code — числовой код причины отказа QUIK в заявке или снятии; null, если отказа нет или QUIK код не передал. Пространства кодов у операций разные («1» для заявки — неподходящий период сессии, для снятия — неизвестная заявка), поэтому код интерпретируется вместе с code: «ORDER_REJECTED» или «CANCEL_REJECTED».</p>
 
   <h3 id="s8-3"><span class="n">8.3</span>GET /api/v1/errors</h3>
-  <p>Справочник значений code и известных error_code. Любой действующий токен.</p>
+  <p>Справочник значений code и известных error_code.</p>
   <p class="caption">Список полей ответа:</p>
   <table>
     <thead><tr><th>Наименование</th><th>Тип</th><th>Комментарий</th></tr></thead>
