@@ -165,10 +165,10 @@ pre.long { break-inside: auto; }
   <table>
     <thead><tr><th style="width: 18%">Метод</th><th>Путь</th></tr></thead>
     <tbody>
-      <tr><td>GET</td><td>/health</td></tr>
-      <tr><td>GET</td><td>/api/v1/token</td></tr>
-      <tr><td>GET</td><td>/api/v1/accounts</td></tr>
-      <tr><td>GET</td><td>/api/v1/errors</td></tr>
+      <tr><td>GET</td><td><a href="#s3-1">/health</a></td></tr>
+      <tr><td>GET</td><td><a href="#s3-2">/api/v1/token</a></td></tr>
+      <tr><td>GET</td><td><a href="#s3-3">/api/v1/accounts</a></td></tr>
+      <tr><td>GET</td><td><a href="#s8-3">/api/v1/errors</a></td></tr>
     </tbody>
   </table>
 
@@ -176,11 +176,11 @@ pre.long { break-inside: auto; }
   <table>
     <thead><tr><th style="width: 18%">Метод</th><th>Путь</th></tr></thead>
     <tbody>
-      <tr><td>GET</td><td>/api/v1/instruments</td></tr>
-      <tr><td>GET</td><td>/api/v1/market-data</td></tr>
-      <tr><td>GET</td><td>/api/v1/market-data/{board}/{symbol}</td></tr>
-      <tr><td>GET</td><td>/api/v1/quotes</td></tr>
-      <tr><td>GET</td><td>/api/v1/orderbook</td></tr>
+      <tr><td>GET</td><td><a href="#s4-1">/api/v1/instruments</a></td></tr>
+      <tr><td>GET</td><td><a href="#s4-2">/api/v1/market-data</a></td></tr>
+      <tr><td>GET</td><td><a href="#s4-3">/api/v1/market-data/{board}/{symbol}</a></td></tr>
+      <tr><td>GET</td><td><a href="#s4-4">/api/v1/quotes</a></td></tr>
+      <tr><td>GET</td><td><a href="#s4-5">/api/v1/orderbook</a></td></tr>
     </tbody>
   </table>
 
@@ -188,13 +188,13 @@ pre.long { break-inside: auto; }
   <table>
     <thead><tr><th style="width: 18%">Метод</th><th>Путь</th></tr></thead>
     <tbody>
-      <tr><td>POST</td><td>/api/v1/orders</td></tr>
-      <tr><td>GET</td><td>/api/v1/orders</td></tr>
-      <tr><td>GET</td><td>/api/v1/orders/active</td></tr>
-      <tr><td>GET</td><td>/api/v1/orders/{id}</td></tr>
-      <tr><td>POST</td><td>/api/v1/orders/{id}/cancel</td></tr>
-      <tr><td>GET</td><td>/api/v1/trades</td></tr>
-      <tr><td>GET</td><td>/api/v1/positions</td></tr>
+      <tr><td>POST</td><td><a href="#s5-1">/api/v1/orders</a></td></tr>
+      <tr><td>GET</td><td><a href="#s5-2">/api/v1/orders</a></td></tr>
+      <tr><td>GET</td><td><a href="#s5-3">/api/v1/orders/active</a></td></tr>
+      <tr><td>GET</td><td><a href="#s5-4">/api/v1/orders/{id}</a></td></tr>
+      <tr><td>POST</td><td><a href="#s5-5">/api/v1/orders/{id}/cancel</a></td></tr>
+      <tr><td>GET</td><td><a href="#s6-1">/api/v1/trades</a></td></tr>
+      <tr><td>GET</td><td><a href="#s7-1">/api/v1/positions</a></td></tr>
     </tbody>
   </table>
 </section>
@@ -264,7 +264,7 @@ pre.long { break-inside: auto; }
 <section class="chapter" id="s3">
   <h2><span class="n">3.</span>Служебные методы</h2>
 
-  <h3><span class="n">3.1</span>GET /health</h3>
+  <h3 id="s3-1"><span class="n">3.1</span>GET /health</h3>
   <p>Проверка работы шлюза. Токен не требуется. Связь шлюза с QUIK метод не проверяет.</p>
   <p class="caption">Пример запроса:</p>
 <pre>curl https://&lt;адрес-шлюза&gt;/health</pre>
@@ -279,7 +279,7 @@ pre.long { break-inside: auto; }
   }
 }</pre>
 
-  <h3><span class="n">3.2</span>GET /api/v1/token</h3>
+  <h3 id="s3-2"><span class="n">3.2</span>GET /api/v1/token</h3>
   <p>Сведения о токене запроса: параметры токена, брокер и фирма (строка Firms).</p>
   <p class="caption">Список полей ответа:</p>
   <table>
@@ -338,7 +338,7 @@ pre.long { break-inside: auto; }
 }</pre>
   <p>503 — БД QUIK недоступна.</p>
 
-  <h3><span class="n">3.3</span>GET /api/v1/accounts</h3>
+  <h3 id="s3-3"><span class="n">3.3</span>GET /api/v1/accounts</h3>
   <p>Торговые счета фирмы токена: строки Trdaccs по FirmId.</p>
   <p class="caption">Список основных полей ответа:</p>
   <table>
@@ -369,7 +369,7 @@ pre.long { break-inside: auto; }
   <h2><span class="n">4.</span>Инструменты и рыночные данные</h2>
   <p>Фильтр по фирме не применяется.</p>
 
-  <h3><span class="n">4.1</span>GET /api/v1/instruments</h3>
+  <h3 id="s4-1"><span class="n">4.1</span>GET /api/v1/instruments</h3>
   <p>Справочник инструментов: строки Securities за последнюю TradeDate, упорядочены по ClassCode, SecCode. По этому же справочнику проверяются ClassCode и SecCode новой заявки (п. <a href="#s5">5.1</a>).</p>
   <p class="caption">Список поддерживаемых параметров:</p>
   <table>
@@ -411,7 +411,7 @@ pre.long { break-inside: auto; }
   "next_offset": 1
 }</pre>
 
-  <h3><span class="n">4.2</span>GET /api/v1/market-data</h3>
+  <h3 id="s4-2"><span class="n">4.2</span>GET /api/v1/market-data</h3>
   <p>Текущие торги: инструменты текущего торгового дня из классов, выбранных биржей; если классы не выбраны — всех классов. Строки упорядочены по ClassCode, затем по SecCode.</p>
   <p class="caption">Список поддерживаемых параметров:</p>
   <table>
@@ -503,7 +503,7 @@ pre.long { break-inside: auto; }
   "next_offset": 1
 }</pre>
 
-  <h3><span class="n">4.3</span>GET /api/v1/market-data/{board}/{symbol}</h3>
+  <h3 id="s4-3"><span class="n">4.3</span>GET /api/v1/market-data/{board}/{symbol}</h3>
   <p>Один инструмент текущих торгов по коду класса и коду инструмента.</p>
   <p class="caption">Список поддерживаемых параметров:</p>
   <table>
@@ -515,7 +515,7 @@ pre.long { break-inside: auto; }
   </table>
   <p>Строка формата п. 4.2. 404 — инструмента нет в текущем торговом дне или его класс не выбран биржей.</p>
 
-  <h3><span class="n">4.4</span>GET /api/v1/quotes</h3>
+  <h3 id="s4-4"><span class="n">4.4</span>GET /api/v1/quotes</h3>
   <p>Котировки инструмента: активные заявки всех участников рынка за текущий торговый день. Участник, подавший заявку, не раскрывается. Порядок — от новых заявок к старым.</p>
   <p class="caption">Список поддерживаемых параметров:</p>
   <table>
@@ -566,7 +566,7 @@ pre.long { break-inside: auto; }
   "next_offset": 2
 }</pre>
 
-  <h3><span class="n">4.5</span>GET /api/v1/orderbook</h3>
+  <h3 id="s4-5"><span class="n">4.5</span>GET /api/v1/orderbook</h3>
   <p>Стакан: уровни спроса (bids, лучшая цена первой) и предложения (offers). Цены и объёмы передаются строками.</p>
   <p class="caption">Список поддерживаемых параметров:</p>
   <table>
@@ -633,7 +633,7 @@ pre.long { break-inside: auto; }
   <h2><span class="n">5.</span>Заявки</h2>
   <p>Создание и снятие синхронны: шлюз отвечает после ответа QUIK. Состояние заявок читается из Orders по FirmId токена.</p>
 
-  <h3><span class="n">5.1</span>POST /api/v1/orders</h3>
+  <h3 id="s5-1"><span class="n">5.1</span>POST /api/v1/orders</h3>
   <p>Выставление заявки. Имена полей — колонки Orders. Таймаут ожидания ответа QUIK — 10 с.</p>
   <p class="caption">Список поддерживаемых полей запроса:</p>
   <table>
@@ -747,7 +747,7 @@ pre.long { break-inside: auto; }
   </table>
   <p>Замена заявки (cancel/replace) не поддерживается.</p>
 
-  <h3><span class="n">5.2</span>GET /api/v1/orders</h3>
+  <h3 id="s5-2"><span class="n">5.2</span>GET /api/v1/orders</h3>
   <p>Строки Orders по FirmId токена, включая заявки, поданные вне шлюза.</p>
   <p class="caption">Список поддерживаемых параметров:</p>
   <table>
@@ -797,10 +797,10 @@ pre.long { break-inside: auto; }
 }</pre>
   <p>Исчезновение строки из Orders не является признаком снятия или исполнения; исполнение подтверждается по Trades (раздел <a href="#s6">6</a>).</p>
 
-  <h3><span class="n">5.3</span>GET /api/v1/orders/active</h3>
+  <h3 id="s5-3"><span class="n">5.3</span>GET /api/v1/orders/active</h3>
   <p>То же, что п. 5.2, но только сегодняшние заявки (TradeDate = сегодня по Бишкеку, UTC+6) с State = «Активна»; фильтр применяется до пагинации.</p>
 
-  <h3><span class="n">5.4</span>GET /api/v1/orders/{id}</h3>
+  <h3 id="s5-4"><span class="n">5.4</span>GET /api/v1/orders/{id}</h3>
   <p>Строка Orders одной заявки.</p>
   <p class="caption">Список поддерживаемых параметров:</p>
   <table>
@@ -812,7 +812,7 @@ pre.long { break-inside: auto; }
   </table>
   <p>400 — неверный формат ключа. 404 — строки нет в Orders или она другой фирмы. Строка в Orders появляется асинхронно, поэтому 404 сразу после 201 возможен.</p>
 
-  <h3><span class="n">5.5</span>POST /api/v1/orders/{id}/cancel</h3>
+  <h3 id="s5-5"><span class="n">5.5</span>POST /api/v1/orders/{id}/cancel</h3>
   <p>Снятие заявки. Без тела. Таймаут ожидания ответа QUIK — 10 с; data — в формате п. 5.1. Снимаются только активные заявки, выставленные через шлюз.</p>
   <p class="caption">Список поддерживаемых параметров:</p>
   <table>
@@ -841,7 +841,7 @@ pre.long { break-inside: auto; }
 <section class="chapter" id="s6">
   <h2><span class="n">6.</span>Сделки</h2>
 
-  <h3><span class="n">6.1</span>GET /api/v1/trades</h3>
+  <h3 id="s6-1"><span class="n">6.1</span>GET /api/v1/trades</h3>
   <p>Строки Trades по FirmId токена, по убыванию новизны; одна строка — одна сторона сделки. Включает сделки по заявкам, поданным вне шлюза.</p>
   <p class="caption">Список поддерживаемых параметров:</p>
   <table>
@@ -899,7 +899,7 @@ pre.long { break-inside: auto; }
 <section class="chapter" id="s7">
   <h2><span class="n">7.</span>Позиции</h2>
 
-  <h3><span class="n">7.1</span>GET /api/v1/positions</h3>
+  <h3 id="s7-1"><span class="n">7.1</span>GET /api/v1/positions</h3>
   <p>Лимиты фирмы токена: строки MoneyLimits и DepoLimits за последнюю LoadDate каждой таблицы.</p>
   <p>Лимиты очищаются в QUIK в конце дня и загружаются заново утром. До загрузки cash и instruments — пустые массивы; это штатный ответ.</p>
   <p class="caption">Список полей ответа:</p>
