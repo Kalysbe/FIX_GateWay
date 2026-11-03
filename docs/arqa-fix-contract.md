@@ -83,11 +83,21 @@ Not sent: `55` Symbol, `207` SecurityExchange (class code is tag **100** only).
 | 11 | ClOrdID | Y (new cancel id) |
 | 41 | OrigClOrdID | Y |
 | 37 | OrderID | C if known |
-| 55 | Symbol | Y |
+| 1 | Account | C if set on the order |
+| 109 | ClientID | C if set on the order |
 | 54 | Side | Y |
 | 60 | TransactTime | Y |
+| 22 | SecurityIDSource | Y (always `8`, as in NewOrderSingle) |
+| 48 | SecurityID | Y |
+| 100 | ExDestination | C if the order has a class code |
+| 38 | OrderQty | Y (remaining quantity; full quantity if nothing remains) |
+| 5018 | Firm (custom) | C if set on the order |
+
+Not sent: `55` Symbol, `207` SecurityExchange (same instrument identification as NewOrderSingle).
 
 #### OrderCancelReplaceRequest (MsgType=G)
+
+**Not implemented:** `ReplaceOrder` returns an error and this message is never sent. The table is a planned shape only.
 
 | Tag | Field | Required |
 |-----|-------|----------|
@@ -112,10 +122,12 @@ Correlated primarily by `ClOrdID` (11), secondarily by `OrderID` (37).
 | 1 Partial / 1 Partial | PARTIALLY_FILLED |
 | 2 Fill / 2 Filled | FILLED |
 | 4 Canceled / 4 Canceled | CANCELLED |
-| 5 Replace / 5 Replaced | ACKNOWLEDGED (updated qty/price) |
+| 5 Replace / 5 Replaced | Not applied: report retained for venue reconciliation |
 | 8 Rejected / 8 Rejected | REJECTED |
 | C Expired / C Expired | EXPIRED |
 | D Restated | keep current; update fields; emit event |
+
+ExecType `G` (trade correct), `H` (trade cancel) and ExecTransType (20) other than `0` are not applied either: the report is retained for venue reconciliation.
 
 Trades: when `LastQty` (32) > 0, create `executions` row (ExecID 17 unique).
 
