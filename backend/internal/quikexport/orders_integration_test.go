@@ -137,8 +137,8 @@ func TestQUIKTradesLimitedToServedClasses(t *testing.T) {
 	if err := pool.QueryRow(ctx, `SELECT current_database()`).Scan(&name); err != nil || !strings.HasSuffix(name, "_test") {
 		t.Fatal("disposable database name must end in _test", name, err)
 	}
-	_, err = pool.Exec(ctx, `CREATE TABLE public."Trades" ("TradeNum" numeric,"ClassCode" char(12),"TradeDate" timestamp,"FirmId" text,"Operation" text);
-INSERT INTO public."Trades" VALUES (1,'LIST_GD','2026-10-22','2040','Купля'),(2,'LIST_GBA','2026-10-22','2040','Купля'),(3,'REPO','2026-10-22','2040','Купля')`)
+	_, err = pool.Exec(ctx, `CREATE TABLE public."Trades" ("TradeNum" numeric,"ClassCode" char(12),"SecCode" char(12),"TradeDate" timestamp,"FirmId" text,"Operation" text);
+INSERT INTO public."Trades" VALUES (1,'LIST_GD','GD1','2026-10-22','2040','Купля'),(2,'LIST_GBA','GBA1','2026-10-22','2040','Купля'),(3,'REPO','R1','2026-10-22','2040','Купля'),(4,'LIST_GBA','GBA1','2026-10-21','2040','Купля')`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -146,11 +146,14 @@ INSERT INTO public."Trades" VALUES (1,'LIST_GD','2026-10-22','2040','Купля'
 	s := NewStore(pool)
 	s.SetServedClasses(func(context.Context) ([]string, error) { return []string{"LIST_GD", "LIST_GBA"}, nil })
 	page, err := s.ListTrades(ctx, TradeFilter{Limit: 10})
-	if err != nil || len(page.Trades) != 2 {
+	if err != nil || len(page.Trades) != 3 {
 		t.Fatal("class filter", page, err)
 	}
+	if page, err := s.ListTrades(ctx, TradeFilter{TradeDay: "2026-10-22", ClassCode: "LIST_GBA", SecCode: "GBA1", Limit: 10}); err != nil || len(page.Trades) != 1 || page.Trades[0].Text("TradeNum") != "2" {
+		t.Fatal("date and instrument filter", page, err)
+	}
 	s.SetServedClasses(func(context.Context) ([]string, error) { return []string{}, nil })
-	if page, err := s.ListTrades(ctx, TradeFilter{Limit: 10}); err != nil || len(page.Trades) != 3 {
+	if page, err := s.ListTrades(ctx, TradeFilter{Limit: 10}); err != nil || len(page.Trades) != 4 {
 		t.Fatal("empty choice serves every class", page, err)
 	}
 }

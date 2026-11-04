@@ -61,6 +61,45 @@ func TestBrokerTradesAreRawQUIKRowsOfTokenFirm(t *testing.T) {
 	}
 }
 
+// Broker order and trade lists take date, board and symbol filters; a bad
+// date is a 400 and never reaches QUIK. The admin trades page ignores them.
+func TestBrokerListsFilterByDateAndInstrument(t *testing.T) {
+	src := &testOrderSource{order: quikexport.Order{Raw: json.RawMessage(`{"OrderNum":1}`)}}
+	s := &Server{quikOrders: src}
+	w := httptest.NewRecorder()
+	s.listBrokerOrders(w, brokerOrderRequest("/api/v1/orders?date=2026-11-03&board=LIST_GBA&symbol=GBA1"))
+	if f := src.filter; w.Code != 200 || f.TradeDay != "2026-11-03" || f.ClassCode != "LIST_GBA" || f.SecCode != "GBA1" || f.Today || f.State != "" {
+		t.Fatal(w.Code, f)
+	}
+	w = httptest.NewRecorder()
+	s.listBrokerActiveOrders(w, brokerOrderRequest("/api/v1/orders/active?date=2020-01-01&board=LIST_GD"))
+	if f := src.filter; w.Code != 200 || f.TradeDay != "" || !f.Today || f.ClassCode != "LIST_GD" {
+		t.Fatal("active orders stay today's; date is ignored", w.Code, f)
+	}
+	w = httptest.NewRecorder()
+	s.listTrades(w, brokerOrderRequest("/api/v1/trades?date=2026-11-03&symbol=GBA1"))
+	if f := src.tradeFilter; w.Code != 200 || f.TradeDay != "2026-11-03" || f.SecCode != "GBA1" || f.Firm == nil || *f.Firm != "2040" {
+		t.Fatal(w.Code, f)
+	}
+	for _, path := range []string{"/api/v1/orders?date=03.11.2026", "/api/v1/trades?date=2026-13-01"} {
+		src.filter, src.tradeFilter = quikexport.OrderFilter{}, quikexport.TradeFilter{}
+		w = httptest.NewRecorder()
+		if strings.HasPrefix(path, "/api/v1/orders") {
+			s.listBrokerOrders(w, brokerOrderRequest(path))
+		} else {
+			s.listTrades(w, brokerOrderRequest(path))
+		}
+		if w.Code != http.StatusBadRequest || src.filter.Limit != 0 || src.tradeFilter.Limit != 0 {
+			t.Fatal(path, "must be rejected before reading", w.Code)
+		}
+	}
+	w = httptest.NewRecorder()
+	s.listAdminTrades(w, httptest.NewRequest("GET", "/api/v1/admin/trades?date=bad&symbol=GBA1", nil))
+	if f := src.tradeFilter; w.Code != 200 || f.TradeDay != "" || f.SecCode != "" {
+		t.Fatal("admin trades take no broker filters", w.Code, f)
+	}
+}
+
 func TestQUIKOrderStatsGroupRawStates(t *testing.T) {
 	got := quikOrderStats(map[string]int{"Активна": 2, " ИСПОЛНЕНА ": 3, "Отклонена": 1, "Снята": 4})
 	want := map[string]int{"total": 10, "active": 2, "filled": 3, "rejected": 1}

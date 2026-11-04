@@ -355,7 +355,7 @@ paths:
               ClassCode: "LIST_GBA"
               SecCode: "GBA02270915"
               Operation: "Купля"
-              Price: 400
+              Price: 99.5
               Qty: 1
               Account: "1-3101-006"
               ClientCode: "006"
@@ -372,7 +372,7 @@ paths:
                 ClassCode: "LIST_GBA"
                 SecCode: "GBA02270915"
                 Operation: "Купля"
-                Price: 400
+                Price: 99.5
                 Qty: 1
                 Balance: 1
                 Account: "1-3101-006"
@@ -406,7 +406,7 @@ paths:
                 ClassCode: "LIST_GBA"
                 SecCode: "GBA02270915"
                 Operation: "Купля"
-                Price: 400
+                Price: 99.5
                 Qty: 1
                 Balance: 1
                 Account: "1-3101-006"
@@ -431,8 +431,13 @@ paths:
       summary: Заявки фирмы
       security:
         - bearerAuth: []
-      description: Требует `orders:read`. Строки QUIK `Orders`. `OrderNum` может иметь 19 знаков.
+      description: |
+        Требует `orders:read`. Строки QUIK `Orders` за все даты, по убыванию `TradeDate`, затем `OrderNum`.
+        `OrderNum` может иметь 19 знаков. Фильтры применяются до пагинации.
       parameters:
+        - {in: query, name: date, schema: {type: string, format: date}, description: "TradeDate, ГГГГ-ММ-ДД"}
+        - {in: query, name: board, schema: {type: string}, description: ClassCode}
+        - {in: query, name: symbol, schema: {type: string}, description: SecCode}
         - {in: query, name: limit, schema: {type: integer, minimum: 1, maximum: 1000, default: 200}}
         - {in: query, name: offset, schema: {type: integer, minimum: 0, maximum: 10000000, default: 0}}
       responses:
@@ -448,7 +453,7 @@ paths:
                 items:
                   $ref: "#/components/schemas/QuikOrderRow"
         "400":
-          description: Неверный limit или offset
+          description: Неверный date, limit или offset
         "401":
           description: Unauthorized
         "503":
@@ -459,8 +464,10 @@ paths:
       summary: Активные заявки фирмы за сегодня
       security:
         - bearerAuth: []
-      description: Требует `orders:read`.
+      description: Требует `orders:read`. Фильтры применяются до пагинации.
       parameters:
+        - {in: query, name: board, schema: {type: string}, description: ClassCode}
+        - {in: query, name: symbol, schema: {type: string}, description: SecCode}
         - {in: query, name: limit, schema: {type: integer, minimum: 1, maximum: 1000, default: 200}}
         - {in: query, name: offset, schema: {type: integer, minimum: 0, maximum: 10000000, default: 0}}
       responses:
@@ -566,8 +573,13 @@ paths:
       summary: Сделки фирмы
       security:
         - bearerAuth: []
-      description: Требует `trades:read`. Строки QUIK `Trades`, новые первыми.
+      description: |
+        Требует `trades:read`. Строки QUIK `Trades` за все даты, по убыванию `TradeDate`, затем `TradeNum`.
+        Фильтры применяются до пагинации.
       parameters:
+        - {in: query, name: date, schema: {type: string, format: date}, description: "TradeDate, ГГГГ-ММ-ДД"}
+        - {in: query, name: board, schema: {type: string}, description: ClassCode}
+        - {in: query, name: symbol, schema: {type: string}, description: SecCode}
         - {in: query, name: limit, schema: {type: integer, minimum: 1, maximum: 1000, default: 200}}
         - {in: query, name: offset, schema: {type: integer, minimum: 0, maximum: 10000000, default: 0}}
       responses:
@@ -582,6 +594,8 @@ paths:
                 type: array
                 items:
                   $ref: "#/components/schemas/Trade"
+        "400":
+          description: Неверный date, limit или offset
         "401":
           description: Unauthorized
         "403":

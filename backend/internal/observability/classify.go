@@ -115,7 +115,8 @@ func ErrorSubtypeForStatus(status int, apiSubtype string) string {
 		return ErrRateLimit
 	case status == http.StatusRequestTimeout || status == http.StatusGatewayTimeout:
 		return ErrTimeout
-	case status == http.StatusBadRequest:
+	case status == http.StatusBadRequest || status == http.StatusUnprocessableEntity:
+		// 422 is an order refused by the risk checks or by QUIK, not a fault.
 		return ErrValidation
 	case status >= 500:
 		return ErrInternal

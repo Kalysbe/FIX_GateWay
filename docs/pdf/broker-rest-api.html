@@ -209,10 +209,11 @@ pre.long { break-inside: auto; }
   </ul>
 
   <h3 id="s2-1"><span class="n">2.1</span>Подключение</h3>
+  <p>URL шлюза, API-токен и параметры VPN-туннеля выдаёт представитель КФБ по запросу на <a href="mailto:it@kse.kg">it@kse.kg</a>. Шлюз доступен только через VPN-туннель.</p>
   <table>
     <thead><tr><th>Наименование</th><th>Комментарий</th></tr></thead>
     <tbody>
-      <tr><td>Транспорт</td><td>HTTPS через VPN. Возможен белый список IP-адресов</td></tr>
+      <tr><td>Транспорт</td><td>HTTPS через VPN-туннель</td></tr>
       <tr><td>Базовый URL</td><td>https://&lt;адрес-шлюза&gt;/api/v1</td></tr>
       <tr><td>Спецификация</td><td>OpenAPI 3.0, Swagger UI: /broker-swagger</td></tr>
     </tbody>
@@ -246,19 +247,28 @@ pre.long { break-inside: auto; }
     <li>Строки Securities, Params, Orders и Trades, а также котировки и стакан ограничены классами, выбранными биржей (п. <a href="#s9-1">9.1</a>); без выбора — все классы. Позиции классами не ограничены.</li>
     <li>Числа — JSON number без округления. OrderNum достигает 19 знаков и выходит за точный диапазон IEEE 754 double: нужен парсер с decimal или BigInt.</li>
     <li>Торговый день — дата по UTC+6 (Asia/Bishkek); смена в 18:00 UTC.</li>
+    <li>Дата и время в строках QUIK — строка ISO 8601 без часового пояса, время UTC+6. У дат (TradeDate, LoadDate, nextcoupon) время нулевое. У времени (time в п. <a href="#s4-2">4.2</a>) значима только часть времени; дата «1900-01-01» — заполнитель QUIK.</li>
+    <li>Время в полях шлюза (expires_at, created_at, last_used_at) — ISO 8601 в UTC.</li>
   </ul>
 
   <h3 id="s2-6"><span class="n">2.6</span>Повтор заявки</h3>
-  <p>POST /api/v1/orders не идемпотентен. При неопределённом исходе (таймаут, обрыв соединения, 502, 503) повторная отправка допустима только после сверки по GET /api/v1/orders.</p>
+  <p>POST /api/v1/orders не идемпотентен. Если ответ получен (201, 202, 422, 502), у заявки есть id и её состояние проверяется по нему. Если ответа нет (таймаут, обрыв соединения), id неизвестен, а в строках Orders нет идентификатора, заданного брокером: заявка ищется в GET /api/v1/orders?date=&lt;сегодня&gt; по совпадению Account, ClientCode, ClassCode, SecCode, Operation, Price и Qty. Повторная отправка — только если совпадения нет.</p>
 
-  <h3 id="s2-7"><span class="n">2.7</span>Трассировка</h3>
+  <h3 id="s2-7"><span class="n">2.7</span>Отслеживание изменений</h3>
+  <p>Push-уведомлений нет, изменения отслеживаются опросом. Строка Orders появляется в QUIK обычно не позже 0,5 с после отправки заявки.</p>
   <table>
-    <thead><tr><th>Наименование</th><th>Тип</th><th>Комментарий</th></tr></thead>
+    <thead><tr><th>Данные</th><th>Комментарий</th></tr></thead>
     <tbody>
-      <tr><td>X-Request-ID</td><td>заголовок</td><td>Принимается от клиента или генерируется шлюзом; возвращается в ответе. Указывается в обращениях в поддержку</td></tr>
-      <tr><td>X-Trace-ID</td><td>заголовок</td><td>Идентификатор трассировки; возвращается в ответе</td></tr>
+      <tr><td>Свои заявки</td><td>GET /api/v1/orders/{id} для заявок в ожидании ответа QUIK; GET /api/v1/orders/active — книга заявок фирмы</td></tr>
+      <tr><td>Сделки</td><td>Первая страница GET /api/v1/trades?date=&lt;сегодня&gt;; новые строки — с номером TradeNum больше последнего обработанного</td></tr>
+      <tr><td>Позиции</td><td>GET /api/v1/positions/moneylimits и /depolimits, полный снимок</td></tr>
+      <tr><td>Рынок</td><td>GET /api/v1/market-data, GET /api/v1/quotes</td></tr>
     </tbody>
   </table>
+  <p>Частота опроса ограничена лимитами п. <a href="#s8-5">8.5</a>.</p>
+
+  <h3 id="s2-8"><span class="n">2.8</span>Трассировка</h3>
+  <p>Заголовок X-Request-ID принимается от клиента или генерируется шлюзом и возвращается в ответе. Указывается в обращениях в поддержку.</p>
 </section>
 
 <!-- ================= 3. СЛУЖЕБНЫЕ МЕТОДЫ ================= -->
@@ -514,7 +524,51 @@ pre.long { break-inside: auto; }
       <tr><td>symbol<sup class="req">*</sup></td><td>строка</td><td>Код инструмента (SecCode), часть пути</td></tr>
     </tbody>
   </table>
-  <p>Строка формата п. 4.2. 404 — инструмента нет в текущем торговом дне или его класс не выбран биржей.</p>
+  <p>В data — одна строка формата п. <a href="#s4-2">4.2</a>. 404 — инструмента нет в текущем торговом дне или его класс не выбран биржей.</p>
+  <p class="caption">Пример запроса:</p>
+<pre>curl https://&lt;адрес-шлюза&gt;/api/v1/market-data/LIST_GBA/GBA02270915 \
+  -H "Authorization: Bearer &lt;API-токен&gt;"</pre>
+  <p class="caption">Пример ответа:</p>
+<pre>{
+  "success": true,
+  "code": "OK",
+  "message": null,
+  "error_code": null,
+  "data": {
+    "ClassCode": "LIST_GBA",
+    "SecCode": "GBA02270915",
+    "CouponValue": 2.5,
+    "status": "торгуется",
+    "FaceUnit": "KGS",
+    "SecShortName": "ГКО-2 летние (GBA02270915)",
+    "SecFullName": "ГКО-2 летние (GBA02270915)",
+    "ClassName": "Государственные казначейские облигации",
+    "lotsize": 1,
+    "tradingstatus": "открыта",
+    "pricemin": 86,
+    "pricemax": 100,
+    "realminstep": null,
+    "bid": 100,
+    "biddepth": 16,
+    "offer": null,
+    "offerdepth": null,
+    "last": 95,
+    "qty": 15,
+    "time": "1900-01-01T16:40:15",
+    "open": null,
+    "high": 100,
+    "low": 95,
+    "prevprice": 95,
+    "waprice": 95.4,
+    "numtrades": 3,
+    "voltoday": 125,
+    "valtoday": 11925,
+    "accruedint": null,
+    "yield": 16.92,
+    "nextcoupon": "2027-01-31T00:00:00",
+    "couponperiod": 184
+  }
+}</pre>
 
   <h3 id="s4-4"><span class="n">4.4</span>GET /api/v1/quotes</h3>
   <p>Котировки инструмента: активные заявки всех участников рынка за текущий торговый день. Участник, подавший заявку, не раскрывается. Порядок — от новых заявок к старым.</p>
@@ -568,7 +622,7 @@ pre.long { break-inside: auto; }
 }</pre>
 
   <h3 id="s4-5"><span class="n">4.5</span>GET /api/v1/orderbook</h3>
-  <p>Стакан: уровни спроса (bids, лучшая цена первой) и предложения (offers). Цены и объёмы передаются строками.</p>
+  <p>Стакан: уровни спроса (bids, лучшая цена первой) и предложения (offers). Источник — FIX Market Data, а не строки QUIK, поэтому, в отличие от остальных методов, цены и объёмы передаются строками (десятичная запись).</p>
   <p class="caption">Список поддерживаемых параметров:</p>
   <table>
     <thead><tr><th>Наименование</th><th>Тип</th><th>Комментарий</th></tr></thead>
@@ -659,7 +713,7 @@ pre.long { break-inside: auto; }
     "ClassCode": "LIST_GBA",
     "SecCode": "GBA02270915",
     "Operation": "Купля",
-    "Price": 400,
+    "Price": 99.5,
     "Qty": 1,
     "Account": "1-0001-001",
     "ClientCode": "Иван"
@@ -692,7 +746,7 @@ pre.long { break-inside: auto; }
     "FirmId": "BROKER",
     "Operation": "Купля",
     "OrderNum": 26102912345,
-    "Price": 400,
+    "Price": 99.5,
     "Qty": 1,
     "RejectReason": null,
     "SecCode": "GBA02270915",
@@ -714,7 +768,7 @@ pre.long { break-inside: auto; }
     "FirmId": "BROKER",
     "Operation": "Купля",
     "OrderNum": null,
-    "Price": 400,
+    "Price": 99.5,
     "Qty": 1,
     "RejectReason": "Превышена позиция по деньгам",
     "SecCode": "GBA02270915",
@@ -749,11 +803,14 @@ pre.long { break-inside: auto; }
   <p>Замена заявки (cancel/replace) не поддерживается.</p>
 
   <h3 id="s5-2"><span class="n">5.2</span>GET /api/v1/orders</h3>
-  <p>Строки Orders по FirmId токена, включая заявки, поданные вне шлюза.</p>
+  <p>Строки Orders по FirmId токена за все даты, включая заявки, поданные вне шлюза. Порядок — по убыванию TradeDate, затем OrderNum. Фильтры применяются до пагинации.</p>
   <p class="caption">Список поддерживаемых параметров:</p>
   <table>
     <thead><tr><th>Наименование</th><th>Тип</th><th>Комментарий</th></tr></thead>
     <tbody>
+      <tr><td>date</td><td>строка</td><td>Дата торгов (TradeDate), ГГГГ-ММ-ДД. Если не указана, возвращаются все даты</td></tr>
+      <tr><td>board</td><td>строка</td><td>Код класса (ClassCode)</td></tr>
+      <tr><td>symbol</td><td>строка</td><td>Код инструмента (SecCode)</td></tr>
       <tr><td>limit</td><td>число</td><td>От 1 до 1000. По умолчанию 200</td></tr>
       <tr><td>offset</td><td>число</td><td>Смещение. По умолчанию 0</td></tr>
     </tbody>
@@ -796,10 +853,10 @@ pre.long { break-inside: auto; }
   "has_more": false,
   "next_offset": 1
 }</pre>
-  <p>Исчезновение строки из Orders не является признаком снятия или исполнения; исполнение подтверждается по Trades (раздел <a href="#s6">6</a>).</p>
+  <p>Неверный формат date — 400. Исчезновение строки из Orders не является признаком снятия или исполнения; исполнение подтверждается по Trades (раздел <a href="#s6">6</a>).</p>
 
   <h3 id="s5-3"><span class="n">5.3</span>GET /api/v1/orders/active</h3>
-  <p>То же, что п. 5.2, но только сегодняшние заявки (TradeDate = сегодня по Бишкеку, UTC+6) с State = «Активна»; фильтр применяется до пагинации.</p>
+  <p>То же, что п. <a href="#s5-2">5.2</a>, но только сегодняшние заявки (TradeDate = сегодня по UTC+6) с State = «Активна». Поддерживаются параметры board, symbol, limit, offset; date не применяется.</p>
 
   <h3 id="s5-4"><span class="n">5.4</span>GET /api/v1/orders/{id}</h3>
   <p>Строка Orders одной заявки.</p>
@@ -811,6 +868,7 @@ pre.long { break-inside: auto; }
         <ul class="vals"><li>id из ответа на создание заявки, например «276d043c-6716-4ebd-a7b7-15904e760d40». Действует, пока заявка активна, и 2 минуты после её закрытия; затем — только ключ QUIK;</li><li>ключ QUIK «quik-&lt;ГГГГММДД&gt;-&lt;ClassCode&gt;-&lt;OrderNum&gt;», например «quik-20261027-LIST_GBA-22455»</li></ul></td></tr>
     </tbody>
   </table>
+  <p>Ключ QUIK составляется из строки Orders: TradeDate в виде ГГГГММДД, ClassCode и OrderNum. Строка TradeDate «2026-10-27T00:00:00», ClassCode «LIST_GBA», OrderNum 22455 даёт ключ «quik-20261027-LIST_GBA-22455».</p>
   <p>400 — неверный формат ключа. 404 — строки нет в Orders или она другой фирмы. Строка в Orders появляется асинхронно, поэтому 404 сразу после 201 возможен.</p>
 
   <h3 id="s5-5"><span class="n">5.5</span>POST /api/v1/orders/{id}/cancel</h3>
@@ -843,11 +901,14 @@ pre.long { break-inside: auto; }
   <h2><span class="n">6.</span>Сделки</h2>
 
   <h3 id="s6-1"><span class="n">6.1</span>GET /api/v1/trades</h3>
-  <p>Строки Trades по FirmId токена, по убыванию новизны; одна строка — одна сторона сделки. Включает сделки по заявкам, поданным вне шлюза.</p>
+  <p>Строки Trades по FirmId токена за все даты; одна строка — одна сторона сделки. Включает сделки по заявкам, поданным вне шлюза. Порядок — по убыванию TradeDate, затем TradeNum. Фильтры применяются до пагинации; неверный формат date — 400.</p>
   <p class="caption">Список поддерживаемых параметров:</p>
   <table>
     <thead><tr><th>Наименование</th><th>Тип</th><th>Комментарий</th></tr></thead>
     <tbody>
+      <tr><td>date</td><td>строка</td><td>Дата торгов (TradeDate), ГГГГ-ММ-ДД. Если не указана, возвращаются все даты</td></tr>
+      <tr><td>board</td><td>строка</td><td>Код класса (ClassCode)</td></tr>
+      <tr><td>symbol</td><td>строка</td><td>Код инструмента (SecCode)</td></tr>
       <tr><td>limit</td><td>число</td><td>От 1 до 1000. По умолчанию 200</td></tr>
       <tr><td>offset</td><td>число</td><td>Смещение. По умолчанию 0</td></tr>
     </tbody>
@@ -1063,17 +1124,18 @@ pre.long { break-inside: auto; }
       <tr><td>MAX_OPEN_ORDERS</td><td>Достигнут лимит одновременно активных заявок</td></tr>
     </tbody>
   </table>
+  <p>В message указывается, чьё ограничение сработало: «общее ограничение» — для всех брокеров, «ограничение брокера» — только для фирмы токена.</p>
   <p class="caption">Пример ответа:</p>
 <pre>{
   "success": false,
   "code": "TRADING_PAUSED",
-  "message": "global: new orders are paused",
+  "message": "Приём новых заявок приостановлен (общее ограничение)",
   "error_code": null,
   "data": null
 }</pre>
 
   <h3 id="s8-5"><span class="n">8.5</span>Лимиты запросов</h3>
-  <p>Лимиты действуют на брокера (RATE_LIMITED) и на отдельные операции (RESOURCE_EXHAUSTED). Ответ — 429 с Retry-After в секундах; для RESOURCE_EXHAUSTED в data:</p>
+  <p>Лимиты действуют на брокера (RATE_LIMITED) и на отдельные операции (RESOURCE_EXHAUSTED). По умолчанию — 100 запросов и 20 заявок в секунду на брокера; биржа может установить брокеру другие значения. Ответ — 429 с Retry-After в секундах; для RESOURCE_EXHAUSTED в data:</p>
   <table>
     <thead><tr><th>Наименование</th><th>Тип</th><th>Комментарий</th></tr></thead>
     <tbody>

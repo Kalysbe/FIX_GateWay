@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"github.com/fix-gateway/backend/internal/domain"
+	"github.com/fix-gateway/backend/internal/observability"
 	"github.com/fix-gateway/backend/internal/orders"
 	"github.com/shopspring/decimal"
 )
@@ -77,7 +79,7 @@ func TestWriteOrderAnswer(t *testing.T) {
 		{domain.OrderSent, nil, 202, "QUIK_ANSWER_PENDING"},
 	} {
 		w := httptest.NewRecorder()
-		writeOrderAnswer(w, domain.Order{Status: tc.status, RejectReason: tc.reason})
+		writeOrderAnswer(w, httptest.NewRequest("POST", "/api/v1/orders", nil), domain.Order{Status: tc.status, RejectReason: tc.reason})
 		if w.Code != tc.code || !strings.Contains(w.Body.String(), tc.want) {
 			t.Fatalf("%s: %d %s", tc.status, w.Code, w.Body.String())
 		}
@@ -97,7 +99,7 @@ func TestWriteCancelAnswer(t *testing.T) {
 		{domain.OrderFilled, 409, `"State":"Исполнена"`},
 	} {
 		w := httptest.NewRecorder()
-		writeCancelAnswer(w, domain.Order{Status: tc.status}, "")
+		writeCancelAnswer(w, httptest.NewRequest("POST", "/api/v1/orders/x/cancel", nil), domain.Order{Status: tc.status}, "")
 		if w.Code != tc.code || !strings.Contains(w.Body.String(), tc.want) {
 			t.Fatalf("%s: %d %s", tc.status, w.Code, w.Body.String())
 		}
@@ -108,22 +110,41 @@ func TestWriteCancelAnswer(t *testing.T) {
 func TestRejectCodes(t *testing.T) {
 	reason := "Вам запрещена работа по данному торговому счету; OrdRejReason=8637225"
 	w := httptest.NewRecorder()
-	writeOrderAnswer(w, domain.Order{Status: domain.OrderRejected, RejectReason: &reason})
+	r, bag := requestWithBag("/api/v1/orders")
+	writeOrderAnswer(w, r, domain.Order{Status: domain.OrderRejected, RejectReason: &reason})
 	body := w.Body.String()
 	if !strings.Contains(body, `"error_code":8637225`) || !strings.Contains(body, `"error":"Вам запрещена работа по данному торговому счету"`) {
 		t.Fatal(body)
 	}
+	if bag.ErrorCode != "ORDER_REJECTED" || bag.FailureStage != "quik" || bag.ErrorMessage != "Вам запрещена работа по данному торговому счету (код QUIK 8637225)" {
+		t.Fatalf("event: %+v", bag)
+	}
 	noCode := "[QME] Цена вне границ"
 	w = httptest.NewRecorder()
-	writeOrderAnswer(w, domain.Order{Status: domain.OrderRejected, RejectReason: &noCode})
+	r, bag = requestWithBag("/api/v1/orders")
+	writeOrderAnswer(w, r, domain.Order{Status: domain.OrderRejected, RejectReason: &noCode})
 	if !strings.Contains(w.Body.String(), `"error_code":null`) {
 		t.Fatal(w.Body.String())
 	}
+	if bag.ErrorMessage != noCode {
+		t.Fatalf("event: %+v", bag)
+	}
 	w = httptest.NewRecorder()
-	writeCancelAnswer(w, domain.Order{Status: domain.OrderFilled}, cancelRejectReason("Too late to cancel", "0"))
+	r, bag = requestWithBag("/api/v1/orders/x/cancel")
+	writeCancelAnswer(w, r, domain.Order{Status: domain.OrderFilled}, cancelRejectReason("Too late to cancel", "0"))
 	if body := w.Body.String(); !strings.Contains(body, `"error_code":0`) || !strings.Contains(body, `"error":"Too late to cancel"`) {
 		t.Fatal(body)
 	}
+	if bag.ErrorCode != "CANCEL_REJECTED" || bag.ErrorMessage != "Too late to cancel (код QUIK 0)" {
+		t.Fatalf("event: %+v", bag)
+	}
+}
+
+// requestWithBag is a request carrying the event bag the HTTP middleware reads.
+func requestWithBag(path string) (*http.Request, *observability.Bag) {
+	bag := &observability.Bag{}
+	r := httptest.NewRequest("POST", path, nil)
+	return r.WithContext(observability.WithBag(r.Context(), bag)), bag
 }
 
 // GET /api/v1/errors lists every reply code and the known QUIK error codes.

@@ -359,7 +359,7 @@ func (s *Server) createOrder(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusAccepted, body)
 		return
 	}
-	writeOrderAnswer(w, order)
+	writeOrderAnswer(w, r, order)
 }
 
 // awaitOrderAnswer holds the reply until QUIK answers the order or cancel,
@@ -379,7 +379,9 @@ func (s *Server) awaitOrderAnswer(ctx context.Context, order domain.Order, pendi
 
 // writeOrderAnswer: 201 accepted by QUIK, 422 rejected by QUIK, 502 not
 // delivered, 202 QUIK has not answered in time (the order stays live).
-func writeOrderAnswer(w http.ResponseWriter, order domain.Order) {
+// A reject or a failed delivery is recorded in the request's event with
+// QUIK's own text, so the event log shows why the order did not pass.
+func writeOrderAnswer(w http.ResponseWriter, r *http.Request, order domain.Order) {
 	body := orderReply(order)
 	switch {
 	case orders.AwaitingVenue(order.Status):
@@ -393,10 +395,12 @@ func writeOrderAnswer(w http.ResponseWriter, order domain.Order) {
 			body["error"] = text
 		}
 		body["error_code"] = quikRejectCode(order.RejectReason, "OrdRejReason=")
+		observability.AnnotateError(r, "ORDER_REJECTED", rejectEventMessage(body["error"], body["error_code"]), "quik")
 		writeJSON(w, http.StatusUnprocessableEntity, body)
 	case order.Status == domain.OrderFailed:
 		body["code"] = "ORDER_FAILED"
 		body["error"] = "order was not delivered to QUIK"
+		observability.AnnotateError(r, "ORDER_FAILED", "order was not delivered to QUIK", "fix")
 		writeJSON(w, http.StatusBadGateway, body)
 	default:
 		writeJSON(w, http.StatusCreated, body)
@@ -503,12 +507,40 @@ func quikOrderState(st domain.OrderStatus) any {
 	return nil
 }
 
+// listBrokerOrders serves the token firm's Orders rows; date (YYYY-MM-DD),
+// board and symbol narrow them before pagination.
 func (s *Server) listBrokerOrders(w http.ResponseWriter, r *http.Request) {
-	s.listQuikOrders(w, r, false)
+	day, board, symbol, ok := rowFilterParams(w, r, true)
+	if !ok {
+		return
+	}
+	s.listQuikOrdersMatching(w, r, false, quikexport.OrderFilter{TradeDay: day, ClassCode: board, SecCode: symbol})
 }
 
+// listBrokerActiveOrders serves today's active rows; board and symbol narrow them.
 func (s *Server) listBrokerActiveOrders(w http.ResponseWriter, r *http.Request) {
-	s.listQuikOrdersMatching(w, r, false, quikexport.OrderFilter{State: quikActiveState, Today: true})
+	_, board, symbol, ok := rowFilterParams(w, r, false)
+	if !ok {
+		return
+	}
+	s.listQuikOrdersMatching(w, r, false, quikexport.OrderFilter{State: quikActiveState, Today: true, ClassCode: board, SecCode: symbol})
+}
+
+// rowFilterParams reads the optional board and symbol filters of the broker
+// order and trade lists and, when withDate, the date filter (YYYY-MM-DD,
+// TradeDate). A malformed date is answered with 400 and ok=false.
+func rowFilterParams(w http.ResponseWriter, r *http.Request, withDate bool) (day, board, symbol string, ok bool) {
+	q := r.URL.Query()
+	if withDate {
+		day = strings.TrimSpace(q.Get("date"))
+		if day != "" {
+			if _, err := time.Parse("2006-01-02", day); err != nil {
+				writeErr(w, http.StatusBadRequest, "invalid date: expected YYYY-MM-DD")
+				return "", "", "", false
+			}
+		}
+	}
+	return day, strings.TrimSpace(q.Get("board")), strings.TrimSpace(q.Get("symbol")), true
 }
 
 func (s *Server) getBrokerOrder(w http.ResponseWriter, r *http.Request) {
@@ -567,13 +599,22 @@ func (s *Server) cancelBrokerOrder(w http.ResponseWriter, r *http.Request) {
 		// The clock margin keeps a reject written by the database within the window.
 		rejectReason, _ = s.orderStore.CancelRejectReason(r.Context(), order.ID, requested.Add(-2*time.Second))
 	}
-	writeCancelAnswer(w, order, rejectReason)
+	writeCancelAnswer(w, r, order, rejectReason)
+}
+
+// rejectEventMessage is the event-log text of a QUIK refusal: the reply's
+// error text and, when QUIK sent one, its reason code.
+func rejectEventMessage(text, code any) string {
+	if code == nil {
+		return fmt.Sprint(text)
+	}
+	return fmt.Sprintf("%v (код QUIK %v)", text, code)
 }
 
 // writeCancelAnswer: 200 cancelled by QUIK, 409 QUIK refused the cancel (the
 // order stays active or was filled), 202 QUIK has not answered in time.
 // rejectReason is QUIK's cancel-reject text with its CxlRejReason code.
-func writeCancelAnswer(w http.ResponseWriter, order domain.Order, rejectReason string) {
+func writeCancelAnswer(w http.ResponseWriter, r *http.Request, order domain.Order, rejectReason string) {
 	body := orderReply(order)
 	switch order.Status {
 	case domain.OrderCancelled, domain.OrderExpired:
@@ -589,6 +630,7 @@ func writeCancelAnswer(w http.ResponseWriter, order domain.Order, rejectReason s
 			body["error"] = text
 		}
 		body["error_code"] = quikRejectCode(&rejectReason, "CxlRejReason=")
+		observability.AnnotateError(r, "CANCEL_REJECTED", rejectEventMessage(body["error"], body["error_code"]), "quik")
 		writeJSON(w, http.StatusConflict, body)
 	}
 }
@@ -692,6 +734,14 @@ func (s *Server) listQuikTrades(w http.ResponseWriter, r *http.Request, admin bo
 		s.writeOrderReadError(w, err)
 		return
 	}
+	filter := quikexport.TradeFilter{Firm: firm}
+	if !admin {
+		// The admin page keeps its own firm_id/broker_id selection only.
+		var ok bool
+		if filter.TradeDay, filter.ClassCode, filter.SecCode, ok = rowFilterParams(w, r, true); !ok {
+			return
+		}
+	}
 	limit, offset, ok := pageParams(w, r)
 	if !ok {
 		return
@@ -700,7 +750,8 @@ func (s *Server) listQuikTrades(w http.ResponseWriter, r *http.Request, admin bo
 		s.writeTradeReadError(w, quikexport.ErrNotConfigured)
 		return
 	}
-	page, err := s.quikOrders.ListTrades(r.Context(), quikexport.TradeFilter{Firm: firm, Limit: limit, Offset: offset})
+	filter.Limit, filter.Offset = limit, offset
+	page, err := s.quikOrders.ListTrades(r.Context(), filter)
 	if err != nil {
 		s.writeTradeReadError(w, err)
 		return

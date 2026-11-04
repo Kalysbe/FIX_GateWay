@@ -96,10 +96,6 @@ func (s *Server) writeOrderReadError(w http.ResponseWriter, err error) {
 // quikActiveState is the raw QUIK "State" value of an order still in the book.
 const quikActiveState = "Активна"
 
-func (s *Server) listQuikOrders(w http.ResponseWriter, r *http.Request, admin bool) {
-	s.listQuikOrdersMatching(w, r, admin, quikexport.OrderFilter{})
-}
-
 // listAdminQuotes serves the quotes of the admin "Котировки" page: today's
 // QUIK Orders rows still in the book (State = "Активна") of every firm, as
 // stored. board and symbol narrow them to one instrument.

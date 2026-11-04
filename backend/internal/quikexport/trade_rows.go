@@ -13,9 +13,14 @@ type TradeFilter struct {
 	// nil is admin/all firms. A non-nil empty string matches no firm.
 	Firm *string
 	// Today keeps only rows whose TradeDate is today's KSE trading day (UTC+6).
-	Today  bool
-	Limit  int
-	Offset int
+	Today bool
+	// TradeDay keeps only rows of this YYYY-MM-DD trading date; empty means any.
+	TradeDay string
+	// ClassCode and SecCode match the trimmed columns; empty means any.
+	ClassCode string
+	SecCode   string
+	Limit     int
+	Offset    int
 }
 
 // TradePage is one page of raw "Trades" rows (row_to_json, unchanged); each
@@ -45,8 +50,10 @@ func (s *Store) ListTrades(ctx context.Context, f TradeFilter) (TradePage, error
 WHERE ($1::text IS NULL OR (btrim(t."FirmId")=$1 AND $1<>''))
 AND (NOT $4::boolean OR t."TradeDate"::date=(now() AT TIME ZONE 'Asia/Bishkek')::date)
 AND ($5::text[] IS NULL OR btrim(t."ClassCode"::text)=ANY($5::text[]))
+AND ($6::text='' OR t."TradeDate"::date=NULLIF($6::text,'')::date)
+AND ($7::text='' OR btrim(t."ClassCode"::text)=$7) AND ($8::text='' OR btrim(t."SecCode"::text)=$8)
 ORDER BY t."TradeDate" DESC, t."TradeNum" DESC, t."ClassCode", t."Operation"
-LIMIT NULLIF($2,0) OFFSET $3`, f.Firm, limit, f.Offset, f.Today, classes)
+LIMIT NULLIF($2,0) OFFSET $3`, f.Firm, limit, f.Offset, f.Today, classes, f.TradeDay, strings.TrimSpace(f.ClassCode), strings.TrimSpace(f.SecCode))
 	if err != nil {
 		return out, err
 	}
