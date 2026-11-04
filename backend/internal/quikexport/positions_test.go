@@ -4,28 +4,35 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"reflect"
 	"testing"
 	"time"
 )
 
-func TestPositionFeedReportsOnlyRealChanges(t *testing.T) {
-	row := func(balance string) Positions {
-		return Positions{Cash: []Row{{Raw: json.RawMessage(`{"FirmId":"2040","CurrentBal":` + balance + `}`)}}, Instruments: []Row{}}
+func TestPositionFeedReportsOnlyRealChangesPerTable(t *testing.T) {
+	row := func(cash, depo string) Positions {
+		return Positions{
+			Cash:        []Row{{Raw: json.RawMessage(`{"FirmId":"2040","CurrentBal":` + cash + `}`)}},
+			Instruments: []Row{{Raw: json.RawMessage(`{"FirmId":"2040","CurrentBal":` + depo + `}`)}},
+		}
 	}
 	type step struct {
 		positions Positions
 		err       error
 	}
 	steps := []step{
-		{positions: row("1")},            // baseline, not a change
-		{positions: row("1")},            // same
+		{positions: row("1", "5")},       // baseline, not a change
+		{positions: row("1", "5")},       // same
 		{err: errors.New("unavailable")}, // not an empty table
-		{positions: row("1")},            // same as before the failure
-		{positions: row("2")},            // change
+		{positions: row("1", "5")},       // same as before the failure
+		{positions: row("2", "5")},       // money only
+		{positions: row("2", "6")},       // securities only
+		{positions: row("3", "7")},       // both
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	n, changes, failures := 0, 0, 0
+	n, failures := 0, 0
+	var changes []string
 	read := func(_ context.Context, firms []string) (Positions, error) {
 		if firms != nil {
 			t.Errorf("the feed must read every firm: %v", firms)
@@ -37,8 +44,9 @@ func TestPositionFeedReportsOnlyRealChanges(t *testing.T) {
 		n++
 		return s.positions, s.err
 	}
-	runPositionFeed(ctx, read, time.Millisecond, func() { changes++ }, func(error) { failures++ })
-	if changes != 1 || failures != 1 {
-		t.Fatalf("changes=%d failures=%d", changes, failures)
+	runPositionFeed(ctx, read, time.Millisecond, func(table string) { changes = append(changes, table) }, func(error) { failures++ })
+	want := []string{MoneyLimits, DepoLimits, MoneyLimits, DepoLimits}
+	if !reflect.DeepEqual(changes, want) || failures != 1 {
+		t.Fatalf("changes=%v failures=%d", changes, failures)
 	}
 }

@@ -56,6 +56,8 @@ func classifyBrokerAPI(method, path string) RouteClass {
 			return RouteClass{TypeAPI, SubTradeRead, "/api/v1/trades/{id}"}
 		}
 		return RouteClass{TypeAPI, SubTradesList, "/api/v1/trades"}
+	case path == "/api/v1/positions/moneylimits" || path == "/api/v1/positions/depolimits":
+		return RouteClass{TypeAPI, SubPositionsList, path}
 	case path == "/api/v1/positions" || strings.HasPrefix(path, "/api/v1/positions/"):
 		if method == http.MethodGet && path != "/api/v1/positions" {
 			return RouteClass{TypeAPI, SubPositionRead, "/api/v1/positions/{id}"}

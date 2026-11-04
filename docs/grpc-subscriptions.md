@@ -41,11 +41,11 @@ Unix timestamp, nonce, `POST`, полный RPC-путь выше, пустое 
 Первым сообщением отправить:
 
 ```json
-{"subscribe":{"event_types":["order.updated","trade.created","marketdata.tick","positions.updated"]}}
+{"subscribe":{"event_types":["order.updated","trade.created","marketdata.tick","moneylimits.updated","depolimits.updated"]}}
 ```
 
 `order.updated` требует `orders:read`, `trade.created` — `trades:read`,
-`marketdata.tick` — `orders:read`, `positions.updated` — `positions:read`. Строки заявок (`Orders`) и сделок (`Trades`) доставляются только
+`marketdata.tick` — `orders:read`, `moneylimits.updated` и `depolimits.updated` — `positions:read`. Строки заявок (`Orders`) и сделок (`Trades`) доставляются только
 своей фирме; строки текущих торгов (`Params`) общие. Пустой список выбирает все разрешённые события.
 Повторный Subscribe полностью заменяет список. Административные события брокеру
 запрещены. Пути в окне — соответствующие источники данных (`/api/v1/orders`,
@@ -53,11 +53,12 @@ Unix timestamp, nonce, `POST`, полный RPC-путь выше, пустое 
 
 ### REST-источники брокерских событий
 
-Все четыре брокерских события имеют REST-методы и схемы в `/broker-swagger`:
+Все пять брокерских событий имеют REST-методы и схемы в `/broker-swagger`:
 
 - `order.updated` → `GET /api/v1/orders` и `GET /api/v1/orders/{id}` (`orders:read`).
 - `trade.created` → `GET /api/v1/trades` (`trades:read`), новая строка QUIK `Trades` своей фирмы за сегодня в `data_json`.
-- `positions.updated` → `GET /api/v1/positions` (`positions:read`).
+- `moneylimits.updated` → `GET /api/v1/positions/moneylimits` (`positions:read`), денежные позиции.
+- `depolimits.updated` → `GET /api/v1/positions/depolimits` (`positions:read`), позиции по бумагам.
 - `marketdata.tick` → `GET /api/v1/market-data` и `GET /api/v1/market-data/{board}/{symbol}` (`orders:read`), строка текущих торгов (8 полей из QUIK `Params`/`Securities`/`Classes`) в `data_json`.
 
 Успешный рыночный REST-снимок содержит только `quotes`.
@@ -85,15 +86,18 @@ REST возвращает текущие данные, gRPC — события �
 
 ### Позиции по деньгам и инструментам
 
-После `ready` подписка `positions.updated` сразу отправляет полный снимок позиций,
-а затем новый полный снимок при каждом изменении. По поручению пользователя
-02.11.2026 источник — таблицы QUIK `MoneyLimits` (`cash`) и `DepoLimits`
-(`instruments`), строки за последнюю `LoadDate` каждой; изменения проверяются раз в
-секунду. FIX-запросы позиций (`35=AN`) шлюз больше не отправляет.
+По поручению пользователя 04.11.2026 денежные позиции и позиции по бумагам
+передаются отдельно: `moneylimits.updated` — строки QUIK `MoneyLimits`,
+`depolimits.updated` — строки `DepoLimits` (источник с 02.11.2026), за последнюю
+`LoadDate` каждой таблицы. После `ready` каждая подписка сразу отправляет полный
+снимок своей таблицы, затем новый полный снимок при изменении именно этой таблицы;
+изменения проверяются раз в секунду. FIX-запросы позиций (`35=AN`) шлюз не отправляет.
+Общего события `positions.updated` и метода `GET /api/v1/positions` больше нет.
 
-`event.data_json` содержит `{"cash":[...],"instruments":[...]}`: исходные строки, как в
-`GET /api/v1/positions`; `event.data` пуст, чтобы не терять точность чисел. Клиент
-полностью заменяет прежние массивы, включая пустые, чтобы удалённые позиции исчезали.
+`event.data_json` — JSON-массив исходных строк, как в `GET /api/v1/positions/moneylimits`
+или `GET /api/v1/positions/depolimits`; `event.data` пуст, чтобы не терять точность
+чисел. Клиент полностью заменяет прежний массив, включая пустой, чтобы удалённые
+позиции исчезали.
 Фильтр фирмы определяется `quik_firm` токена, при пустом значении — кодом брокера,
 как в REST. Клиентские метаданные не меняют фильтр. Отзыв токена,
 смена фирмы или прав закрывают поток; после переподключения приходит новый снимок.

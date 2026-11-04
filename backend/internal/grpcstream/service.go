@@ -37,7 +37,7 @@ type Service struct {
 	Brokers           BrokerAuthorizer
 	HMACRequired      bool
 	Nonces            auth.NonceStore
-	PositionsSnapshot func(context.Context, []string) (any, error)
+	PositionsSnapshot func(ctx context.Context, table string, firms []string) (any, error) // "moneylimits" or "depolimits"
 }
 
 func (s *Service) admit(user, operation string) (func(), error) {
@@ -175,7 +175,9 @@ func (s *Service) Stream(stream grpc.BidiStreamingServer[pb.ClientMessage, pb.Se
 			}
 			return status.Error(codes.Unauthenticated, "session revoked")
 		}
-		data, err := s.PositionsSnapshot(check, []string{principal.info.OrderFirmID})
+		// "moneylimits.updated" → table "moneylimits", "depolimits.updated" → "depolimits".
+		table := strings.TrimSuffix(event.Type, ".updated")
+		data, err := s.PositionsSnapshot(check, table, []string{principal.info.OrderFirmID})
 		if err != nil {
 			return status.Error(codes.Unavailable, "positions unavailable")
 		}
@@ -184,7 +186,7 @@ func (s *Service) Stream(stream grpc.BidiStreamingServer[pb.ClientMessage, pb.Se
 			return status.Error(codes.Internal, "positions encoding failed")
 		}
 		// data_json, like Orders: a Struct would turn numeric columns into doubles.
-		copy := &pb.Event{Sequence: event.Sequence, Type: "positions.updated", DataJson: string(encoded), OccurredAt: event.OccurredAt}
+		copy := &pb.Event{Sequence: event.Sequence, Type: event.Type, DataJson: string(encoded), OccurredAt: event.OccurredAt}
 		return send(&pb.ServerMessage{Response: &pb.ServerMessage_Event{Event: copy}})
 	}
 	if err := ready(sub.Topics()); err != nil {
@@ -275,7 +277,7 @@ func (s *Service) Stream(stream grpc.BidiStreamingServer[pb.ClientMessage, pb.Se
 				}
 				validatedAt = time.Now()
 			}
-			if principal.info.BrokerID > 0 && event.Type == "positions.updated" {
+			if principal.info.BrokerID > 0 && realtime.PositionTopic(event.Type) {
 				if err := positionEvent(event); err != nil {
 					return err
 				}

@@ -65,7 +65,8 @@ func (h *Hub) notifySubscriptions() { h.Broadcast("subscriptions.updated", h.Con
 var topicPaths = map[string][]string{
 	"order.updated":          {"/api/v1/admin/orders"},
 	"trade.created":          {"/api/v1/admin/trades"},
-	"positions.updated":      {"/api/v1/admin/positions"},
+	MoneyLimitsUpdated:       {"/api/v1/admin/positions"},
+	DepoLimitsUpdated:        {"/api/v1/admin/positions"},
 	"marketdata.tick":        {"/api/v1/admin/market-data"},
 	"adapter.status_changed": {"/api/v1/admin/adapters"},
 	"notification.new":       {"/api/v1/admin/notifications"},

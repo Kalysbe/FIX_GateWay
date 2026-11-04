@@ -241,9 +241,9 @@ func main() {
 		}, func(err error) {
 			log.Warn("QUIK Trades change read failed; retaining previous selection", "error", err)
 		})
-		go quikExportStore.RunPositions(ctx, func() {
-			// Only a trigger: each broker stream reads its own firm's rows.
-			hub.Broadcast("positions.updated", map[string]any{"source": "quik"})
+		go quikExportStore.RunPositions(ctx, func(table string) {
+			// Only a trigger: each broker stream reads its own firm's rows of the table.
+			hub.Broadcast(table+".updated", map[string]any{"source": "quik"})
 		}, func(err error) {
 			log.Warn("QUIK positions change read failed; retaining previous selection", "error", err)
 		})
@@ -279,7 +279,9 @@ func main() {
 		os.Exit(1)
 	}
 	grpcServer := grpc.NewServer(grpc.Creds(grpcCreds), grpc.MaxRecvMsgSize(16<<10), grpc.MaxSendMsgSize(8<<20), grpc.MaxConcurrentStreams(128), grpc.KeepaliveParams(keepalive.ServerParameters{MaxConnectionIdle: 2 * time.Minute, Time: time.Minute, Timeout: 10 * time.Second}))
-	pb.RegisterRealtimeServiceServer(grpcServer, &grpcstream.Service{Hub: hub, Users: users, Brokers: brokerStore, HMACRequired: cfg.HMACRequired, Nonces: nonces, JWTSecret: cfg.JWTSecret, Admission: admission, Log: log, PositionsSnapshot: func(work context.Context, firms []string) (any, error) { return quikExportStore.ListPositions(work, firms) }})
+	pb.RegisterRealtimeServiceServer(grpcServer, &grpcstream.Service{Hub: hub, Users: users, Brokers: brokerStore, HMACRequired: cfg.HMACRequired, Nonces: nonces, JWTSecret: cfg.JWTSecret, Admission: admission, Log: log, PositionsSnapshot: func(work context.Context, table string, firms []string) (any, error) {
+		return quikExportStore.ListPositionTable(work, table, firms)
+	}})
 	go func() {
 		log.Info("gRPC realtime listening", "addr", cfg.GRPCAddr, "mtls", cfg.GRPCRequireClientCert)
 		if err := grpcServer.Serve(grpcListener); err != nil {

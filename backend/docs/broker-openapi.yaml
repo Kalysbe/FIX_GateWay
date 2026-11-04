@@ -588,20 +588,48 @@ paths:
           description: Forbidden
         "503":
           description: QUIK недоступен
-  /api/v1/positions:
+  /api/v1/positions/moneylimits:
     get:
       tags: [Позиции]
-      summary: Позиции фирмы
+      summary: Денежные позиции фирмы
       security:
         - bearerAuth: []
-      description: Требует `positions:read`. `cash` — строки QUIK `MoneyLimits`, `instruments` — `DepoLimits`.
+      description: |
+        Требует `positions:read`. Строки QUIK `MoneyLimits` вашей фирмы за последнюю `LoadDate`
+        в исходном виде. Событие gRPC `moneylimits.updated` — тот же массив в `event.data_json`.
       responses:
         "200":
-          description: Позиции
+          description: Строки MoneyLimits
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/PositionsResponse"
+                type: array
+                items:
+                  $ref: "#/components/schemas/MoneyLimitRow"
+        "401":
+          description: Unauthorized
+        "403":
+          description: Forbidden
+        "503":
+          description: QUIK недоступен
+  /api/v1/positions/depolimits:
+    get:
+      tags: [Позиции]
+      summary: Позиции фирмы по бумагам
+      security:
+        - bearerAuth: []
+      description: |
+        Требует `positions:read`. Строки QUIK `DepoLimits` вашей фирмы за последнюю `LoadDate`
+        в исходном виде. Событие gRPC `depolimits.updated` — тот же массив в `event.data_json`.
+      responses:
+        "200":
+          description: Строки DepoLimits
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/DepoLimitRow"
         "401":
           description: Unauthorized
         "403":
@@ -844,14 +872,3 @@ components:
         OpenBal: {type: number, description: Входящий остаток}
         AwgPositionPrice: {type: number, description: Средняя цена}
       example: {"LoadDate": "2026-11-02T00:00:00", "FirmId": "2040", "ClientCode": "Kalys", "SecCode": "GBA02280810", "Trdacc": "1-3101-2040", "LimitKind": "T0", "CurrentBal": 17.00000000, "OpenBal": 17.00000000, "AwgPositionPrice": 0.00000000}
-    PositionsResponse:
-      type: object
-      properties:
-        cash:
-          type: array
-          items:
-            $ref: "#/components/schemas/MoneyLimitRow"
-        instruments:
-          type: array
-          items:
-            $ref: "#/components/schemas/DepoLimitRow"

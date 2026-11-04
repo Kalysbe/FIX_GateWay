@@ -250,18 +250,20 @@ REST-фильтры: `?board=<ClassCode>&symbol=<SecCode>`, оба необяз�
 
 | REST / gRPC | Назначение | Возвращаемые данные | Право |
 |---|---|---|---|
-| `GET /api/v1/positions` | Позиции своей фирмы | `{cash: [...], instruments: [...]}`: исходные строки QUIK `MoneyLimits` и `DepoLimits` за последнюю дату | `positions:read` |
-| gRPC `positions.updated` | Полные снимки позиций своей фирмы | `event.data_json` — тот же объект | `positions:read` |
+| `GET /api/v1/positions/moneylimits` | Денежные позиции своей фирмы | Массив исходных строк QUIK `MoneyLimits` за последнюю дату | `positions:read` |
+| `GET /api/v1/positions/depolimits` | Позиции своей фирмы по бумагам | Массив исходных строк QUIK `DepoLimits` за последнюю дату | `positions:read` |
+| gRPC `moneylimits.updated` | Полные снимки денежных позиций | `event.data_json` — тот же массив, что в `/moneylimits` | `positions:read` |
+| gRPC `depolimits.updated` | Полные снимки позиций по бумагам | `event.data_json` — тот же массив, что в `/depolimits` | `positions:read` |
 
-`cash` — деньги, `instruments` — бумаги. Имена колонок, числа, строки и `null` не меняются; набор колонок задаёт QUIK. Фирма — `quik_firm` токена, при пустом значении — код брокера. gRPC отправляет полный снимок после `ready` и при изменении позиций (проверка раз в секунду). Каждый снимок полностью заменяет оба массива. При отсутствии позиций массивы пустые. Если источник QUIK недоступен, REST отвечает 503. REST-фильтров по клиенту или инструменту нет.
+Деньги и бумаги передаются отдельно. Имена колонок, числа, строки и `null` не меняются; набор колонок задаёт QUIK. Фирма — `quik_firm` токена, при пустом значении — код брокера. Каждое gRPC-событие отправляет полный снимок своей таблицы после `ready` и при её изменении (проверка раз в секунду). Каждый снимок полностью заменяет прежний массив. При отсутствии позиций массив пустой. Если источник QUIK недоступен, REST отвечает 503. REST-фильтров по клиенту или инструменту нет.
 ## gRPC: команды и сообщения
 
-Один двунаправленный RPC: `/fixgateway.realtime.v1.RealtimeService/Stream`. Для всех четырёх событий используется этот путь.
+Один двунаправленный RPC: `/fixgateway.realtime.v1.RealtimeService/Stream`. Для всех пяти событий используется этот путь.
 
 Первое сообщение — `subscribe`, в течение 5 секунд после открытия потока:
 
 ```json
-{"subscribe":{"event_types":["order.updated","trade.created","positions.updated","marketdata.tick"]}}
+{"subscribe":{"event_types":["order.updated","trade.created","moneylimits.updated","depolimits.updated","marketdata.tick"]}}
 ```
 
 Пустой `event_types` выбирает все события, разрешённые токену. Повторный `subscribe` полностью заменяет список.
@@ -272,7 +274,7 @@ REST-фильтры: `?board=<ClassCode>&symbol=<SecCode>`, оба необяз�
 | Клиент: `ping.id` | ID проверки связи, до 128 байт |
 | Сервер: `ready.event_types` | Подтверждённый список подписок |
 | Сервер: `event.sequence` | `uint64`, общий счётчик процесса; не курсор возобновления |
-| Сервер: `event.type` | Один из четырёх брокерских типов событий |
+| Сервер: `event.type` | Один из пяти брокерских типов событий |
 | Сервер: `event.data` | `google.protobuf.Struct`; поля описаны выше |
 | Сервер: `event.occurred_at` | `google.protobuf.Timestamp`, время формирования события |
 | Сервер: `pong.id` | ID из `ping`; сервер также отправляет пустой `pong` каждые 20 секунд |

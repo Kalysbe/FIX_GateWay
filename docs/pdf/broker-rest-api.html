@@ -194,7 +194,8 @@ pre.long { break-inside: auto; }
       <tr><td>GET</td><td><a href="#s5-4">/api/v1/orders/{id}</a></td></tr>
       <tr><td>POST</td><td><a href="#s5-5">/api/v1/orders/{id}/cancel</a></td></tr>
       <tr><td>GET</td><td><a href="#s6-1">/api/v1/trades</a></td></tr>
-      <tr><td>GET</td><td><a href="#s7-1">/api/v1/positions</a></td></tr>
+      <tr><td>GET</td><td><a href="#s7-1">/api/v1/positions/moneylimits</a></td></tr>
+      <tr><td>GET</td><td><a href="#s7-2">/api/v1/positions/depolimits</a></td></tr>
     </tbody>
   </table>
 </section>
@@ -899,66 +900,80 @@ pre.long { break-inside: auto; }
 <section class="chapter" id="s7">
   <h2><span class="n">7.</span>Позиции</h2>
 
-  <h3 id="s7-1"><span class="n">7.1</span>GET /api/v1/positions</h3>
-  <p>Лимиты фирмы токена: строки MoneyLimits и DepoLimits за последнюю LoadDate каждой таблицы.</p>
-  <p>Лимиты очищаются в QUIK в конце дня и загружаются заново утром. До загрузки cash и instruments — пустые массивы; это штатный ответ.</p>
-  <p class="caption">Список полей ответа:</p>
+  <p>Денежные позиции и позиции по бумагам передаются отдельными методами. Лимиты очищаются в QUIK в конце дня и загружаются заново утром. До загрузки data — пустой массив; это штатный ответ.</p>
+
+  <h3 id="s7-1"><span class="n">7.1</span>GET /api/v1/positions/moneylimits</h3>
+  <p>Денежные лимиты фирмы токена: строки MoneyLimits за последнюю LoadDate.</p>
+  <p class="caption">Список полей строки:</p>
   <table>
     <thead><tr><th>Наименование</th><th>Тип</th><th>Комментарий</th></tr></thead>
     <tbody>
-      <tr><td>cash<sup class="req">*</sup></td><td>массив</td><td>Денежные лимиты, строки MoneyLimits</td></tr>
-      <tr><td><span class="arrow">→</span>LoadDate</td><td>строка</td><td>Дата загрузки</td></tr>
-      <tr><td><span class="arrow">→</span>FirmId, ClientCode</td><td>строка</td><td>Код фирмы и код клиента</td></tr>
-      <tr><td><span class="arrow">→</span>Tag</td><td>строка</td><td>Код позиции</td></tr>
-      <tr><td><span class="arrow">→</span>CurrCode</td><td>строка</td><td>Валюта</td></tr>
-      <tr><td><span class="arrow">→</span>LimitKind</td><td>строка</td><td>Срок расчётов</td></tr>
-      <tr><td><span class="arrow">→</span>OpenBal, CurrentBal</td><td>число</td><td>Входящий и текущий остаток</td></tr>
-      <tr><td><span class="arrow">→</span>Locked</td><td>число</td><td>Заблокировано</td></tr>
-      <tr><td>instruments<sup class="req">*</sup></td><td>массив</td><td>Лимиты по бумагам, строки DepoLimits</td></tr>
-      <tr><td><span class="arrow">→</span>LoadDate</td><td>строка</td><td>Дата загрузки</td></tr>
-      <tr><td><span class="arrow">→</span>FirmId, ClientCode</td><td>строка</td><td>Код фирмы и код клиента</td></tr>
-      <tr><td><span class="arrow">→</span>SecCode</td><td>строка</td><td>Код инструмента</td></tr>
-      <tr><td><span class="arrow">→</span>Trdacc</td><td>строка</td><td>Торговый счёт</td></tr>
-      <tr><td><span class="arrow">→</span>LimitKind</td><td>строка</td><td>Срок расчётов</td></tr>
-      <tr><td><span class="arrow">→</span>OpenBal, CurrentBal</td><td>число</td><td>Входящий и текущий остаток</td></tr>
-      <tr><td><span class="arrow">→</span>AwgPositionPrice</td><td>число</td><td>Средняя цена приобретения</td></tr>
+      <tr><td>LoadDate</td><td>строка</td><td>Дата загрузки</td></tr>
+      <tr><td>FirmId, ClientCode</td><td>строка</td><td>Код фирмы и код клиента</td></tr>
+      <tr><td>Tag</td><td>строка</td><td>Код позиции</td></tr>
+      <tr><td>CurrCode</td><td>строка</td><td>Валюта</td></tr>
+      <tr><td>LimitKind</td><td>строка</td><td>Срок расчётов</td></tr>
+      <tr><td>OpenBal, CurrentBal</td><td>число</td><td>Входящий и текущий остаток</td></tr>
+      <tr><td>Locked</td><td>число</td><td>Заблокировано</td></tr>
     </tbody>
   </table>
   <p>Указаны основные колонки; полный состав определяет QUIK.</p>
   <p class="caption">Пример ответа:</p>
-<pre class="long">{
+<pre>{
   "success": true,
   "code": "OK",
   "message": null,
   "error_code": null,
-  "data": {
-    "cash": [
-      {
-        "LoadDate": "2026-11-02T00:00:00",
-        "FirmId": "BROKER",
-        "ClientCode": "Иван",
-        "Tag": "EQTV",
-        "CurrCode": "KGS",
-        "LimitKind": "T0",
-        "CurrentBal": 1518400.00000000,
-        "OpenBal": 1518400.00000000,
-        "Locked": 0.00000000
-      }
-    ],
-    "instruments": [
-      {
-        "LoadDate": "2026-11-02T00:00:00",
-        "FirmId": "BROKER",
-        "ClientCode": "Иван",
-        "SecCode": "GBA02280810",
-        "Trdacc": "1-0001-001",
-        "LimitKind": "T0",
-        "CurrentBal": 17.00000000,
-        "OpenBal": 17.00000000,
-        "AwgPositionPrice": 0.00000000
-      }
-    ]
-  }
+  "data": [
+    {
+      "LoadDate": "2026-11-02T00:00:00",
+      "FirmId": "BROKER",
+      "ClientCode": "Иван",
+      "Tag": "EQTV",
+      "CurrCode": "KGS",
+      "LimitKind": "T0",
+      "CurrentBal": 1518400.00000000,
+      "OpenBal": 1518400.00000000,
+      "Locked": 0.00000000
+    }
+  ]
+}</pre>
+
+  <h3 id="s7-2"><span class="n">7.2</span>GET /api/v1/positions/depolimits</h3>
+  <p>Лимиты фирмы токена по бумагам: строки DepoLimits за последнюю LoadDate.</p>
+  <p class="caption">Список полей строки:</p>
+  <table>
+    <thead><tr><th>Наименование</th><th>Тип</th><th>Комментарий</th></tr></thead>
+    <tbody>
+      <tr><td>LoadDate</td><td>строка</td><td>Дата загрузки</td></tr>
+      <tr><td>FirmId, ClientCode</td><td>строка</td><td>Код фирмы и код клиента</td></tr>
+      <tr><td>SecCode</td><td>строка</td><td>Код инструмента</td></tr>
+      <tr><td>Trdacc</td><td>строка</td><td>Торговый счёт</td></tr>
+      <tr><td>LimitKind</td><td>строка</td><td>Срок расчётов</td></tr>
+      <tr><td>OpenBal, CurrentBal</td><td>число</td><td>Входящий и текущий остаток</td></tr>
+      <tr><td>AwgPositionPrice</td><td>число</td><td>Средняя цена приобретения</td></tr>
+    </tbody>
+  </table>
+  <p>Указаны основные колонки; полный состав определяет QUIK.</p>
+  <p class="caption">Пример ответа:</p>
+<pre>{
+  "success": true,
+  "code": "OK",
+  "message": null,
+  "error_code": null,
+  "data": [
+    {
+      "LoadDate": "2026-11-02T00:00:00",
+      "FirmId": "BROKER",
+      "ClientCode": "Иван",
+      "SecCode": "GBA02280810",
+      "Trdacc": "1-0001-001",
+      "LimitKind": "T0",
+      "CurrentBal": 17.00000000,
+      "OpenBal": 17.00000000,
+      "AwgPositionPrice": 0.00000000
+    }
+  ]
 }</pre>
 </section>
 

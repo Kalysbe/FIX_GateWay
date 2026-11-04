@@ -9,15 +9,30 @@ import (
 
 var errQuikPositionsUnavailable = errors.New("QUIK positions source unavailable")
 
-// listBrokerPositions serves the token firm's current rows of QUIK "MoneyLimits"
-// (cash) and "DepoLimits" (instruments) as stored.
-func (s *Server) listBrokerPositions(w http.ResponseWriter, r *http.Request) {
-	firm, err := s.brokerFirm(r)
-	if err != nil {
-		s.writeOrderReadError(w, err)
-		return
-	}
-	s.writeQuikPositions(w, r, []string{firm})
+// listBrokerPositionTable serves the token firm's current rows of one QUIK table,
+// "MoneyLimits" or "DepoLimits", as stored: money and securities are separate
+// methods (поручение пользователя 04.11.2026).
+func (s *Server) listBrokerPositionTable(table string) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		firm, err := s.brokerFirm(r)
+		if err != nil {
+			s.writeOrderReadError(w, err)
+			return
+		}
+		if s.quikRefs == nil {
+			writeErr(w, http.StatusServiceUnavailable, errQuikPositionsUnavailable.Error())
+			return
+		}
+		rows, err := s.quikRefs.ListPositionTable(r.Context(), table, []string{firm})
+		if err != nil {
+			if s.log != nil && !errors.Is(err, quikexport.ErrNotConfigured) {
+				s.log.Error("QUIK positions read failed", "table", table, "error", err)
+			}
+			writeErr(w, http.StatusServiceUnavailable, errQuikPositionsUnavailable.Error())
+			return
+		}
+		writeQuikJSON(w, rows)
+	})
 }
 
 // listAdminPositions serves the rows of every firm; firm_id and broker_id narrow them.

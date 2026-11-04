@@ -23,7 +23,7 @@ func rateOperation(r *http.Request) (string, string) {
 	switch path {
 	case "/api/v1/token":
 		return "System", "GetToken"
-	case "/api/v1/positions":
+	case "/api/v1/positions/moneylimits", "/api/v1/positions/depolimits":
 		return "Queries", "GetPositions"
 	case "/api/v1/instruments":
 		return "Queries", "GetSecurities"

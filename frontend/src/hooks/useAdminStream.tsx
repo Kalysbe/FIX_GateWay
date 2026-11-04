@@ -58,7 +58,8 @@ export function AdminStreamProvider({ children }: { children: ReactNode }) {
           refresh.add([["admin-trade"]]);
           refresh.add([["dashboard"]]);
           break;
-        case "positions.updated":
+        case "moneylimits.updated":
+        case "depolimits.updated":
           refresh.add([["admin-positions"]]);
           break;
         case "marketdata.tick":

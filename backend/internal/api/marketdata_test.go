@@ -73,7 +73,8 @@ func TestBrokerGRPCChannelsHaveRESTAndSwagger(t *testing.T) {
 	}
 	sources := map[string]string{
 		"order.updated": "/api/v1/orders", "trade.created": "/api/v1/trades",
-		"positions.updated": "/api/v1/positions", "marketdata.tick": "/api/v1/market-data",
+		"moneylimits.updated": "/api/v1/positions/moneylimits", "depolimits.updated": "/api/v1/positions/depolimits",
+		"marketdata.tick": "/api/v1/market-data",
 	}
 	hub := realtime.NewHub()
 	sub, err := hub.SubscribeBroker(nil, realtime.ConnectionInfo{BrokerID: 1}, auth.ReadOnlyPermissions)

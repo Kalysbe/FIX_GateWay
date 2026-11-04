@@ -11,7 +11,7 @@ The gRPC runtime is pinned to stable v1.83.2, which includes the [GO-2026-6443 f
 3. Receive `ServerMessage.ready`, then `event` messages. There is no initial snapshot: load current state over REST, then apply events. Events include sequence, timestamp, type and a Protobuf Struct containing the existing event DTO. Decimal values represented as strings remain strings; Struct numeric values use double precision.
 4. Send another subscribe to replace the subscription or ping to receive a matching pong. Space commands by at least 100 ms. Client half-close preserves server event delivery until cancellation or session termination.
 
-Events: `obs.event`, `notification.new`, `order.updated`, `trade.created`, `positions.updated`, `marketdata.tick`, `adapter.status_changed`. `obs.event` requires an audit-authorized role; READ_ONLY cannot receive it. Unknown event types default to denied.
+Events: `obs.event`, `notification.new`, `order.updated`, `trade.created`, `moneylimits.updated`, `depolimits.updated`, `marketdata.tick`, `adapter.status_changed`. `obs.event` requires an audit-authorized role; READ_ONLY cannot receive it. Unknown event types default to denied.
 
 `marketdata.tick` carries one changed current-trades row (the selected columns of QUIK `Params`/`Securities`/`Classes`, listed in market data, values as stored; today's rows of the administrator-chosen classes) in `data_json` (`data` is empty; `removed=true` marks a row that disappeared), the same for brokers and admins. See [market data](market-data.md).
 

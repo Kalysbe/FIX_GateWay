@@ -184,7 +184,8 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/v1/market-data", s.brokerAuth(s.requirePermission(auth.PermOrdersRead)(http.HandlerFunc(s.listMarketData))))
 	mux.Handle("GET /api/v1/market-data/{board}/{symbol}", s.brokerAuth(s.requirePermission(auth.PermOrdersRead)(http.HandlerFunc(s.getMarketData))))
 	mux.Handle("GET /api/v1/trades", s.brokerAuth(s.requirePermission(auth.PermTradesRead)(http.HandlerFunc(s.listTrades))))
-	mux.Handle("GET /api/v1/positions", s.brokerAuth(s.requirePermission(auth.PermPositionsRead)(http.HandlerFunc(s.listBrokerPositions))))
+	mux.Handle("GET /api/v1/positions/moneylimits", s.brokerAuth(s.requirePermission(auth.PermPositionsRead)(s.listBrokerPositionTable(quikexport.MoneyLimits))))
+	mux.Handle("GET /api/v1/positions/depolimits", s.brokerAuth(s.requirePermission(auth.PermPositionsRead)(s.listBrokerPositionTable(quikexport.DepoLimits))))
 
 	mux.HandleFunc("POST /api/v1/admin/login", s.adminLogin)
 	mux.Handle("GET /api/v1/admin/dashboard", s.adminRO(s.dashboard))
