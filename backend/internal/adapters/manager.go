@@ -2,9 +2,11 @@ package adapters
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/fix-gateway/backend/internal/adapters/arqa"
@@ -25,6 +27,9 @@ type Manager struct {
 	hostOverride string
 	onFIX        func(kind, adapterID, sessionID, msgType, direction, clOrdID, reason string, seq int)
 	onObs        func(eventType, subtype, adapterID, message string)
+	hours        *SessionHours
+	paused       atomic.Bool // outside the session hours: no adapter runs
+	now          func() time.Time
 
 	mu          sync.RWMutex
 	lifecycleMu sync.Mutex
@@ -43,6 +48,23 @@ func NewManager(store *Store, log *slog.Logger, balancer routing.Balancer, onExe
 
 func (m *Manager) SetHostOverride(host string) { m.hostOverride = host }
 
+// SetSessionHours limits the FIX sessions to a daily window; nil is always.
+// It is called before StartAll.
+func (m *Manager) SetSessionHours(h *SessionHours) { m.hours = h }
+
+// Paused reports a scheduled pause: outside the session hours no adapter runs.
+func (m *Manager) Paused() bool { return m.paused.Load() }
+
+func (m *Manager) inSession() bool {
+	now := time.Now
+	if m.now != nil {
+		now = m.now
+	}
+	return m.hours.Open(now())
+}
+
+var errOutsideSessionHours = errors.New("FIX adapters are off outside the session hours")
+
 func (m *Manager) SetStatusListener(fn StatusListener) { m.onStatus = fn }
 
 func (m *Manager) SetFIXHandler(fn func(kind, adapterID, sessionID, msgType, direction, clOrdID, reason string, seq int)) {
@@ -54,6 +76,22 @@ func (m *Manager) SetObserver(fn func(eventType, subtype, adapterID, message str
 }
 
 func (m *Manager) StartAll(ctx context.Context) error {
+	if m.inSession() {
+		if err := m.startEnabled(ctx); err != nil {
+			return err
+		}
+	} else {
+		m.paused.Store(true)
+		m.log.Info("FIX adapters wait for the session hours", "hours", m.hours.String())
+	}
+	go m.healthLoop(ctx)
+	if m.hours != nil {
+		go m.scheduleLoop(ctx)
+	}
+	return nil
+}
+
+func (m *Manager) startEnabled(ctx context.Context) error {
 	list, err := m.store.List(ctx)
 	if err != nil {
 		return err
@@ -71,11 +109,47 @@ func (m *Manager) StartAll(ctx context.Context) error {
 			}
 		}
 	}
-	go m.healthLoop(ctx)
 	return nil
 }
 
+// scheduleLoop starts the enabled adapters when the session hours begin and
+// stops them, with Logout, when they end. The QUIK adapters are switched off
+// outside the hours, so connection attempts then would only fail.
+func (m *Manager) scheduleLoop(ctx context.Context) {
+	t := time.NewTicker(10 * time.Second)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+		open := m.inSession()
+		switch {
+		case open && m.paused.Load():
+			m.log.Info("FIX session hours begin: starting adapters", "hours", m.hours.String())
+			m.paused.Store(false)
+			if err := m.startEnabled(ctx); err != nil {
+				m.log.Error("adapter list unavailable; retrying", "error", err)
+				m.paused.Store(true)
+			}
+		case !open && !m.paused.Load():
+			m.log.Info("FIX session hours end: stopping adapters", "hours", m.hours.String())
+			m.paused.Store(true)
+			stopCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+			m.StopAll(stopCtx)
+			cancel()
+			if m.onObs != nil {
+				m.onObs("ADAPTER", "ADAPTER_STOPPED", "", "outside FIX session hours "+m.hours.String())
+			}
+		}
+	}
+}
+
 func (m *Manager) startOne(ctx context.Context, meta domain.Adapter) error {
+	if !m.inSession() {
+		return errOutsideSessionHours
+	}
 	m.lifecycleMu.Lock()
 	defer m.lifecycleMu.Unlock()
 	m.mu.Lock()
@@ -344,6 +418,10 @@ func (m *Manager) Enable(ctx context.Context, id string) error {
 	meta, err := m.store.Get(ctx, id)
 	if err != nil {
 		return err
+	}
+	if !m.inSession() {
+		// Enabled now, connected when the session hours begin.
+		return nil
 	}
 	return m.startOne(ctx, meta)
 }

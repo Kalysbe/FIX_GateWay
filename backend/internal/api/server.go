@@ -134,11 +134,15 @@ func (s *Server) OperationsHandler() http.Handler {
 			cancel()
 		}
 		metrics.DatabaseAvailable.Set(databaseAvailable)
-		availableSessions := 0
+		availableSessions, paused := 0, 0.0
 		if s.manager != nil {
 			availableSessions = s.manager.AvailableCount()
+			if s.manager.Paused() {
+				paused = 1
+			}
 		}
 		metrics.FIXAvailable.Set(float64(availableSessions))
+		metrics.FIXSessionPaused.Set(paused)
 		if s.cfg.BackupStatusFile != "" {
 			age := float64(1e12)
 			if b, err := os.ReadFile(s.cfg.BackupStatusFile); err == nil {

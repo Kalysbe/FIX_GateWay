@@ -153,6 +153,12 @@ func main() {
 		cfg.HealthInterval,
 	)
 	manager.SetHostOverride(cfg.AdapterHostOverride)
+	fixHours, err := adapters.ParseSessionHours(cfg.FIXSessionHours, quikexport.KSETime)
+	if err != nil {
+		log.Error("invalid FIX_SESSION_HOURS", "error", err)
+		os.Exit(1)
+	}
+	manager.SetSessionHours(fixHours)
 	manager.SetStatusListener(func(adapterID string, status domain.AdapterStatus) {
 		hub.Broadcast("adapter.status_changed", map[string]any{
 			"adapter_id": adapterID, "status": status,
@@ -180,6 +186,10 @@ func main() {
 		obs.Emit(observability.Event{Type: eventType, Subtype: subtype, AdapterID: adapterID, Message: message, Severity: sev})
 	})
 	sessionDown := newSessionDownAlarm(fixSessionDownGrace, func(adapterID, sessionID string) {
+		// A stopped adapter (scheduled pause, disable, shutdown) is not an outage.
+		if _, running := manager.Get(adapterID); !running {
+			return
+		}
 		obs.Emit(observability.Event{
 			Type: observability.TypeError, Subtype: observability.CritFIXSessionDown,
 			AdapterID: adapterID, SessionID: sessionID, Severity: observability.SeverityCritical,

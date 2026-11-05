@@ -65,7 +65,9 @@ func (s *Server) RunFIXSafetyMonitor(ctx context.Context) {
 			}
 			publish(fixProblem{code: "EXECUTION_INBOX_BLOCKED", message: "Задержана обработка входящих FIX-отчётов", detail: detail, active: !state.Healthy()})
 		}
-		if s.manager != nil {
+		// During the scheduled pause no adapter runs: that is not a cleared
+		// setting, so the adapter alarms keep their state until 09:05.
+		if s.manager != nil && !s.manager.Paused() {
 			resetting := map[string]bool{}
 			for _, id := range s.manager.ResettingVenueSessions() {
 				resetting[id] = true

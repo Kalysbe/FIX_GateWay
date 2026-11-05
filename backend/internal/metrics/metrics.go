@@ -19,6 +19,7 @@ var (
 	FIXAuditFailures                  = promauto.NewCounterVec(prometheus.CounterOpts{Name: "gateway_fix_audit_failures_total", Help: "Fatal FIX transport audit persistence failures"}, []string{"adapter_id"})
 	DatabaseAvailable                 = promauto.NewGauge(prometheus.GaugeOpts{Name: "gateway_database_available", Help: "Whether the private metrics probe can reach PostgreSQL"})
 	FIXAvailable                      = promauto.NewGauge(prometheus.GaugeOpts{Name: "gateway_fix_available_sessions", Help: "Runtime FIX sessions available for routing"})
+	FIXSessionPaused                  = promauto.NewGauge(prometheus.GaugeOpts{Name: "gateway_fix_session_paused", Help: "1 outside the FIX session hours, when no FIX session is held by schedule"})
 	BackupAge                         = promauto.NewGauge(prometheus.GaugeOpts{Name: "gateway_backup_age_seconds", Help: "Age of latest successful encrypted database backup; configured production backups only"})
 	ExecutionInboxPending             = promauto.NewGauge(prometheus.GaugeOpts{Name: "gateway_execution_inbox_pending", Help: "Durable incoming FIX reports waiting for DB commit"})
 	ExecutionInboxBytes               = promauto.NewGauge(prometheus.GaugeOpts{Name: "gateway_execution_inbox_bytes", Help: "Pending incoming FIX journal size"})

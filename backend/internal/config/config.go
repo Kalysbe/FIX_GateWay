@@ -58,6 +58,7 @@ type Config struct {
 	DefaultOrderRateLimit    int
 	AuthFailMaxPerMinute     int
 	AppEnv                   string
+	FIXSessionHours          string // daily FIX window, HH:MM-HH:MM Bishkek time; empty is always
 	TrustedProxies           string
 	ObsFastMS                int
 	ObsNormalMS              int
@@ -140,6 +141,10 @@ func Load() Config {
 		DefaultOrderRateLimit:    getInt("DEFAULT_ORDER_RATE_LIMIT", 20),
 		AuthFailMaxPerMinute:     getInt("AUTH_FAIL_MAX_PER_MINUTE", 30),
 		AppEnv:                   appEnv,
+		// The QUIK FIX adapters are switched off 04:00-09:05 (поручение
+		// пользователя 05.11.2026); the gateway logs out a minute before.
+		// Set but empty means no schedule (the local simulator).
+		FIXSessionHours: getEnvAllowEmpty("FIX_SESSION_HOURS", "09:05-03:59"),
 		TrustedProxies:           getEnv("TRUSTED_PROXIES", ""),
 		ObsFastMS:                getInt("OBS_FAST_MS", 100),
 		ObsNormalMS:              getInt("OBS_NORMAL_MS", 500),
@@ -277,6 +282,15 @@ func (c Config) Validate() error {
 
 func getEnv(key, def string) string {
 	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return def
+}
+
+// getEnvAllowEmpty is getEnv for settings where an explicit empty value differs
+// from an unset one.
+func getEnvAllowEmpty(key, def string) string {
+	if v, ok := os.LookupEnv(key); ok {
 		return v
 	}
 	return def
