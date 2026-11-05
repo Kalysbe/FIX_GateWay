@@ -303,13 +303,14 @@ func (a *Adapter) buildSettings() (*quickfix.Settings, error) {
 	// SessionQualifier is local-only (not on the wire). Required when two adapters
 	// share the same BeginString/SenderCompID/TargetCompID on different ports
 	// (e.g. QuikFIXAdapterService1 :15101 and Service2 :15102 both use TEST->QUIK).
+	// No StartTime/EndTime: the session never ends, so QuickFIX does not log out
+	// and reset sequence numbers every day at 00:00 UTC (06:00 in Bishkek). The
+	// QUIK adapter keeps its own numbers until it is started with -new.
 	cfg := fmt.Sprintf(`[DEFAULT]
 ConnectionType=initiator
 ReconnectInterval=5
 FileStorePath=%s
 FileLogPath=%s
-StartTime=00:00:00
-EndTime=00:00:00
 UseDataDictionary=N
 ValidateFieldsOutOfOrder=N
 ValidateUserDefinedFields=N

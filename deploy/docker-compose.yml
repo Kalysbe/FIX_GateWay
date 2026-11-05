@@ -41,6 +41,9 @@ services:
       dockerfile: Dockerfile
       target: gateway
     restart: unless-stopped
+    # Shutdown drains HTTP for up to 5s, then the FIX sessions send Logout;
+    # the default 10s would kill the gateway before Logout goes out.
+    stop_grace_period: 30s
     depends_on:
       devcerts:
         condition: service_completed_successfully

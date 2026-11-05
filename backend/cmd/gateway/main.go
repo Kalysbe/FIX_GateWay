@@ -337,8 +337,13 @@ func main() {
 	<-ctx.Done()
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer shutdownCancel()
-	_ = httpServer.Shutdown(shutdownCtx)
-	_ = opsServer.Shutdown(shutdownCtx)
+	// Long-lived streams would hold the HTTP drain for the whole budget, and
+	// the container is killed before the FIX sessions send Logout; QUIK then
+	// sees a dropped socket. The drain is capped so Logout always goes out.
+	drainCtx, drainCancel := context.WithTimeout(shutdownCtx, 5*time.Second)
+	_ = httpServer.Shutdown(drainCtx)
+	_ = opsServer.Shutdown(drainCtx)
+	drainCancel()
 	grpcServer.Stop()
 	manager.StopAll(shutdownCtx)
 	log.Info("gateway stopped")

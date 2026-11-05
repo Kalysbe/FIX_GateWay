@@ -124,10 +124,18 @@ func (m *Manager) StopAll(ctx context.Context) {
 	list := m.adapters
 	m.adapters = map[string]Adapter{}
 	m.mu.Unlock()
+	// Each session sends Logout and waits for the reply; in parallel, so one
+	// slow venue does not leave the next session to be killed without Logout.
+	var wg sync.WaitGroup
 	for id, ad := range list {
-		_ = ad.Stop(ctx)
-		_ = m.store.UpdateStatus(ctx, id, domain.AdapterOffline, false)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_ = ad.Stop(ctx)
+			_ = m.store.UpdateStatus(ctx, id, domain.AdapterOffline, false)
+		}()
 	}
+	wg.Wait()
 }
 
 func (m *Manager) healthLoop(ctx context.Context) {

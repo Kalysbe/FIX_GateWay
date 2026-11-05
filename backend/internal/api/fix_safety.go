@@ -16,6 +16,18 @@ type fixAlarm struct {
 type fixProblem struct {
 	code, message, detail string
 	active                bool
+	// notice is a configuration warning: reported once when it appears
+	// (and again after it was cleared), never repeated every five minutes.
+	notice bool
+}
+
+// fixAlarmDue: an active problem is reported when it appears; a failure is
+// repeated every five minutes while it lasts, a notice is not.
+func fixAlarmDue(previous fixAlarm, p fixProblem, now time.Time) bool {
+	if !p.active {
+		return false
+	}
+	return !previous.active || (!p.notice && now.Sub(previous.notified) >= 5*time.Minute)
 }
 
 // Notifications are delivered through Gateway's existing persistent inbox/UI.
@@ -25,9 +37,13 @@ func (s *Server) RunFIXSafetyMonitor(ctx context.Context) {
 	publish := func(p fixProblem) {
 		previous := alarms[p.code]
 		now := time.Now()
-		if p.active && (!previous.active || now.Sub(previous.notified) >= 5*time.Minute) {
+		if fixAlarmDue(previous, p, now) {
 			if s.obs != nil {
-				s.obs.Emit(observability.Event{Type: observability.TypeError, Severity: observability.SeverityCritical, Subtype: p.code, ErrorCode: p.code, Message: p.message, ErrorMessage: p.detail})
+				event := observability.Event{Type: observability.TypeError, Severity: observability.SeverityCritical, Subtype: p.code, ErrorCode: p.code, Message: p.message, ErrorMessage: p.detail}
+				if p.notice {
+					event.Type, event.Severity = observability.TypeSystem, observability.SeverityWarning
+				}
+				s.obs.Emit(event)
 			}
 			previous.notified = now
 		} else if !p.active && previous.active {
@@ -47,7 +63,7 @@ func (s *Server) RunFIXSafetyMonitor(ctx context.Context) {
 			if b, ok := s.executionInbox.Blocked(); ok {
 				detail += fmt.Sprintf(" Отчёт не применяется: %s. Если ошибка не временная, отложите отчёт в карантин на странице «Входящие FIX».", b.Error)
 			}
-			publish(fixProblem{"EXECUTION_INBOX_BLOCKED", "Задержана обработка входящих FIX-отчётов", detail, !state.Healthy()})
+			publish(fixProblem{code: "EXECUTION_INBOX_BLOCKED", message: "Задержана обработка входящих FIX-отчётов", detail: detail, active: !state.Healthy()})
 		}
 		if s.manager != nil {
 			resetting := map[string]bool{}
@@ -56,14 +72,16 @@ func (s *Server) RunFIXSafetyMonitor(ctx context.Context) {
 			}
 			for code := range alarms {
 				if id, ok := strings.CutPrefix(code, "FIX_SEQUENCE_RESET_"); ok && !resetting[id] {
-					publish(fixProblem{code: code, message: "Сброс последовательности FIX при входе"})
+					publish(fixProblem{code: code, message: "Сброс последовательности FIX при входе", notice: true})
 				}
 			}
 			for id := range resetting {
-				publish(fixProblem{"FIX_SEQUENCE_RESET_" + id, "Сброс последовательности FIX при входе", fmt.Sprintf("Адаптер %s: ResetOnLogon=true. Восстановление пропущенных FIX-сообщений после переподключения требует проверки; отключение сброса необходимо согласовать с ARQA.", id), true})
+				publish(fixProblem{code: "FIX_SEQUENCE_RESET_" + id, message: "Сброс последовательности FIX при входе", active: true, notice: true,
+					detail: fmt.Sprintf("Адаптер %s: ResetOnLogon=true. При каждом входе номера FIX начинаются с 1 и QUIK очищает архив отправленных сообщений, поэтому сообщения за время разрыва связи не досылаются.", id)})
 			}
 			for id, usage := range s.manager.AuditUsage() {
-				publish(fixProblem{"FIX_AUDIT_CAPACITY_" + id, "Заполняется журнал FIX", fmt.Sprintf("Адаптер %s: занято %d из %d байт. При исчерпании лимита приём будет остановлен; требуется освобождение места с сохранением нужной истории.", id, usage[0], usage[1]), usage[1] > 0 && usage[0] >= usage[1]*7/10})
+				publish(fixProblem{code: "FIX_AUDIT_CAPACITY_" + id, message: "Заполняется журнал FIX", active: usage[1] > 0 && usage[0] >= usage[1]*7/10,
+					detail: fmt.Sprintf("Адаптер %s: занято %d из %d байт. При исчерпании лимита приём будет остановлен; требуется освобождение места с сохранением нужной истории.", id, usage[0], usage[1])})
 			}
 		}
 		select {
