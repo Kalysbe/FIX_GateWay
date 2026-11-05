@@ -221,6 +221,51 @@ paths:
           description: Инструмент не найден
         "503":
           description: QUIK недоступен
+  /api/v1/market-data/trades:
+    get:
+      tags: [Рыночные данные]
+      summary: Сделки рынка для графика цен
+      security:
+        - bearerAuth: []
+      description: |
+        Требует `orders:read`. Исполненные сделки КФБ всех участников из QUIK `Trades`, по одной строке на сделку,
+        в хронологическом порядке (`TradeDateTime`, затем `TradeNum`). Участники не раскрываются.
+
+        - `TradeNum` + `ClassCode` — идентификатор сделки;
+        - `TradeDateTime` и `CanceledDateTime` — время КФБ с часовым поясом (+06:00);
+        - `Price` — цена за единицу без комиссий, `SettleCurrency` — валюта расчётов;
+        - `Kind` — вид сделки (`Обычная`, `Адресная сделка первой части РЕПО` и др.);
+        - `CanceledDateTime` — `null`, если сделка не отменена.
+
+        Обновление: повторяйте запрос с `from` = `TradeDateTime` последней полученной сделки и отбрасывайте
+        уже полученные `TradeNum` + `ClassCode`. История — с 01.07.2026.
+      parameters:
+        - {in: query, name: board, schema: {type: string}, description: ClassCode}
+        - {in: query, name: symbol, schema: {type: string}, description: SecCode}
+        - {in: query, name: from, schema: {type: string}, description: "Начало периода включительно: ГГГГ-ММ-ДД (день КФБ) или RFC 3339"}
+        - {in: query, name: to, schema: {type: string}, description: "Конец периода включительно: ГГГГ-ММ-ДД (весь день КФБ) или RFC 3339"}
+        - {in: query, name: limit, schema: {type: integer, minimum: 1, maximum: 1000, default: 200}}
+        - {in: query, name: offset, schema: {type: integer, minimum: 0, maximum: 10000000, default: 0}}
+      responses:
+        "200":
+          description: Сделки
+          headers:
+            X-Has-More: {schema: {type: boolean}}
+            X-Next-Offset: {schema: {type: integer}}
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/MarketTrade"
+        "400":
+          description: Неверный from, to, limit или offset; from позже to
+        "401":
+          description: Unauthorized
+        "403":
+          description: Forbidden
+        "503":
+          description: QUIK недоступен
   /api/v1/quotes:
     get:
       tags: [Рыночные данные]
@@ -789,6 +834,21 @@ components:
         yield: {type: number, nullable: true, description: Доходность последней сделки}
         nextcoupon: {type: string, nullable: true, description: Дата выплаты купона}
         couponperiod: {type: number, nullable: true, description: Длительность купона}
+    MarketTrade:
+      type: object
+      required: [TradeNum, ClassCode, SecCode, TradeDateTime, Price, Qty, SettleCurrency, Kind, CanceledDateTime]
+      additionalProperties: false
+      properties:
+        TradeNum: {type: number, description: Номер сделки}
+        ClassCode: {type: string}
+        SecCode: {type: string}
+        TradeDateTime: {type: string, format: date-time, description: "Время исполнения, +06:00"}
+        Price: {type: number, nullable: true, description: Цена за единицу без комиссий}
+        Qty: {type: number, nullable: true, description: Количество}
+        SettleCurrency: {type: string, nullable: true, description: Валюта расчётов}
+        Kind: {type: string, nullable: true, description: Вид сделки}
+        CanceledDateTime: {type: string, format: date-time, nullable: true, description: "Время отмены, +06:00; null — сделка действует"}
+      example: {TradeNum: 4914, ClassCode: LIST_GBA, SecCode: GBA02270915, TradeDateTime: "2026-11-05T14:32:57.000+06:00", Price: 95.00000000, Qty: 10.00000000, SettleCurrency: KGS, Kind: Обычная, CanceledDateTime: null}
     OrderBook:
       type: object
       properties:

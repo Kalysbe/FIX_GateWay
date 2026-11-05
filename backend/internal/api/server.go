@@ -56,7 +56,8 @@ type Server struct {
 	quikOrders         quikOrderReader
 	quikParams         quikParamReader
 	quikRefs           quikRefReader
-	marketClasses      *quikexport.ClassSettings
+	quikMarketTrades   quikMarketTradeReader
+	marketClasses     *quikexport.ClassSettings
 	servedClasses      func(context.Context) ([]string, error)
 	obs                *observability.Pipeline
 	realtimeClient     pb.RealtimeServiceClient
@@ -98,10 +99,10 @@ func (s *Server) SetQuikExport(store *quikexport.Store) {
 	s.quikExport = store
 	// A typed nil *Store in the interface would defeat the `quikOrders == nil` checks.
 	if store == nil {
-		s.quikOrders, s.quikParams, s.quikRefs = nil, nil, nil
+		s.quikOrders, s.quikParams, s.quikRefs, s.quikMarketTrades = nil, nil, nil, nil
 		return
 	}
-	s.quikOrders, s.quikParams, s.quikRefs = store, store, store
+	s.quikOrders, s.quikParams, s.quikRefs, s.quikMarketTrades = store, store, store, store
 }
 
 func (s *Server) SetMarketDataClasses(settings *quikexport.ClassSettings) {
@@ -183,6 +184,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/v1/orderbook",s.brokerAuth(s.requirePermission(auth.PermOrdersRead)(http.HandlerFunc(s.listBrokerOrderBook))))
 	mux.Handle("GET /api/v1/market-data", s.brokerAuth(s.requirePermission(auth.PermOrdersRead)(http.HandlerFunc(s.listMarketData))))
 	mux.Handle("GET /api/v1/market-data/{board}/{symbol}", s.brokerAuth(s.requirePermission(auth.PermOrdersRead)(http.HandlerFunc(s.getMarketData))))
+	mux.Handle("GET /api/v1/market-data/trades", s.brokerAuth(s.requirePermission(auth.PermOrdersRead)(http.HandlerFunc(s.listMarketTrades))))
 	mux.Handle("GET /api/v1/trades", s.brokerAuth(s.requirePermission(auth.PermTradesRead)(http.HandlerFunc(s.listTrades))))
 	mux.Handle("GET /api/v1/positions/moneylimits", s.brokerAuth(s.requirePermission(auth.PermPositionsRead)(s.listBrokerPositionTable(quikexport.MoneyLimits))))
 	mux.Handle("GET /api/v1/positions/depolimits", s.brokerAuth(s.requirePermission(auth.PermPositionsRead)(s.listBrokerPositionTable(quikexport.DepoLimits))))
