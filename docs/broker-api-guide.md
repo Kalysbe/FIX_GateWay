@@ -211,7 +211,7 @@ GET также принимает `id` из ответа на создание, 
 | `GET /api/v1/market-data` | Текущие торги | JSON-массив инструментов (32 поля, см. ниже); при недоступности источника — HTTP 503 |
 | `GET /api/v1/market-data/{board}/{symbol}` | Один инструмент | Строка по `ClassCode` и `SecCode`; 404, если её нет за сегодня или класс не выбран |
 | `GET /api/v1/quotes` | Котировки инструмента без участников | JSON-массив `{side, price, quantity, volume}` (см. ниже) |
-| `GET /api/v1/orderbook` | Стаканы: спрос и предложение рынка (FIX) | `{source: "live", live, books: [OrderBook]}`; без доступных данных — `live: false`, `books: []`, `note` |
+| `GET /api/v1/orderbook` | Стакан инструмента без участников | `{board, symbol, bids, offers}` (см. ниже) |
 | gRPC `marketdata.tick` | Изменения строк `Params` | `event.data_json` — исходная строка, `event.removed` — строка исчезла |
 
 Строка содержит только поля `ClassCode`, `SecCode`, `CouponValue`, `status`, `FaceUnit`, `SecShortName`, `SecFullName`, `ClassName`, `lotsize`, `tradingstatus`, `pricemin`, `pricemax`, `realminstep`, `bid`, `biddepth`, `offer`, `offerdepth`, `last`, `qty`, `time`, `open`, `high`, `low`, `prevprice`, `waprice`, `numtrades`, `voltoday`, `valtoday`, `accruedint`, `yield`, `nextcoupon`, `couponperiod` — из таблиц QUIK `Params`, `Securities` (по `ClassCode` + `SecCode`) и `Classes`. В `time` значимо только время: дата в нём фиктивная. Значения в исходном виде: числа JSON-числами с исходной точностью, строки и `null`. Разбирайте JSON с сохранением точности чисел. Отдаются только инструменты текущего торгового дня (по Бишкеку, UTC+6) из классов, выбранных администратором шлюза (если классы не выбраны — всех классов). Рыночные данные общие для всех брокеров.
@@ -236,11 +236,23 @@ REST-фильтры: `?board=<ClassCode>&symbol=<SecCode>`, оба необяз�
 
 `limit` 1–1000 (по умолчанию 200), `offset` 0–10 000 000; иначе HTTP 400. Порядок — от новых заявок к старым. Продолжение — заголовки `X-Has-More` и `X-Next-Offset`: следующую страницу запрашивайте с `offset` = `X-Next-Offset`, пока `X-Has-More` не станет `false`. Страницы не являются снимком: если заявки меняются между запросами, перечитайте список с первой страницы. Лимит частоты — операция `GetOrders`. Источник недоступен — HTTP 503.
 
-`OrderBook` содержит только `symbol`, `security_id`, `board`, `currency`, `name`, `last`, `last_size`, `last_time`, `bid`, `bid_size`, `offer`, `offer_size`, `bids`, `offers`, `updated_at`. Массивы уровней в REST-стакане присутствуют всегда, в том числе пустые.
+### Стакан
+
+`GET /api/v1/orderbook?board=<ClassCode>&symbol=<SecCode>` возвращает стакан одного инструмента: те же активные заявки сегодняшнего торгового дня всех участников, что и котировки, сложенные по цене. `board` и `symbol` обязательны, без них — HTTP 400.
+
+`bids` — покупка, от высокой цены к низкой; `offers` — продажа, от низкой к высокой. Уровень содержит `price`, `quantity` (сумма остатков заявок по цене), `volume` = `price` × `quantity` и `orders` (число заявок по цене). Участники не раскрываются. Числа — JSON-числа с исходной точностью. Массивы присутствуют всегда, в том числе пустые; класс, не выбранный администратором, даёт пустой стакан. Лимит частоты — операция `GetOrderBook`. Источник недоступен — HTTP 503.
+
+```json
+{"board":"LIST_GBA","symbol":"GBA02270915","bids":[{"price":90.00000000,"quantity":18.00000000,"volume":1620,"orders":1}],"offers":[{"price":95.00000000,"quantity":5878.00000000,"volume":558410,"orders":2},{"price":96.00000000,"quantity":1.00000000,"volume":96,"orders":1}]}
+```
+
+### Изменение контракта 05.11.2026
+
+Стакан `GET /api/v1/orderbook` строится из таблицы QUIK `Orders`, а не из FIX Market Data. `board` и `symbol` стали обязательными. Вместо `{source, live, books: [OrderBook], note}` возвращается один стакан `{board, symbol, bids, offers}`; уровень вместо `{price, size}` строками — `{price, quantity, volume, orders}` числами. Поля `security_id`, `currency`, `name`, `last`, `last_size`, `last_time`, `bid`, `bid_size`, `offer`, `offer_size`, `updated_at` убраны: лучшие цены и последняя сделка есть в `GET /api/v1/market-data/{board}/{symbol}`.
 
 ### Изменение контракта 26.10.2026
 
-`GET /api/v1/market-data` и gRPC `marketdata.tick` переведены с FIX Market Data на таблицу QUIK `Params`. Вместо `{quotes: [MarketQuote]}` REST возвращает массив исходных строк; в gRPC строка передаётся в `data_json`, без `quotes`, `live` и `replace`, и начальный снимок при подписке больше не приходит. Фильтры `board`/`symbol` относятся к `ClassCode`/`SecCode`. Стакан `/api/v1/orderbook` не изменился.
+`GET /api/v1/market-data` и gRPC `marketdata.tick` переведены с FIX Market Data на таблицу QUIK `Params`. Вместо `{quotes: [MarketQuote]}` REST возвращает массив исходных строк; в gRPC строка передаётся в `data_json`, без `quotes`, `live` и `replace`, и начальный снимок при подписке больше не приходит. Фильтры `board`/`symbol` относятся к `ClassCode`/`SecCode`. Стакан `/api/v1/orderbook` тогда не изменился (его изменение — 05.11.2026, выше).
 
 В тот же день строка сокращена до 8 полей (`ClassCode`, `SecCode`, `CouponValue`, `status`, `FaceUnit`, `SecShortName`, `SecFullName`, `ClassName`); остальные колонки `Params`, включая `TradeDate`, больше не передаются. Отдаются только строки сегодняшнего торгового дня из классов, выбранных администратором (если классы не выбраны — всех классов).
 

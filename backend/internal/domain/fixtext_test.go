@@ -26,14 +26,3 @@ func TestCheckFIXTextRejectsFramingCharacters(t *testing.T) {
 		t.Fatalf("maxLen 0 disables the limit: %v", err)
 	}
 }
-
-func TestCheckMarketDataQueryTextChecksInstruments(t *testing.T) {
-	q := MarketDataQuery{Board: "TQBR", Instruments: []SecurityRef{{Symbol: "SBER", Board: "TQBR"}}}
-	if err := CheckMarketDataQueryText(q); err != nil {
-		t.Fatal(err)
-	}
-	q.Instruments[0].Symbol = "SBER\x01100=X"
-	if err := CheckMarketDataQueryText(q); err == nil {
-		t.Fatal("SOH in instrument symbol must be rejected")
-	}
-}

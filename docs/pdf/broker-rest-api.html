@@ -255,7 +255,7 @@ pre.long { break-inside: auto; }
   <p>POST /api/v1/orders не идемпотентен. Если ответ получен (201, 202, 422, 502), у заявки есть id и её состояние проверяется по нему. Если ответа нет (таймаут, обрыв соединения), id неизвестен, а в строках Orders нет идентификатора, заданного брокером: заявка ищется в GET /api/v1/orders?date=&lt;сегодня&gt; по совпадению Account, ClientCode, ClassCode, SecCode, Operation, Price и Qty. Повторная отправка — только если совпадения нет.</p>
 
   <h3 id="s2-7"><span class="n">2.7</span>Отслеживание изменений</h3>
-  <p>Push-уведомлений нет, изменения отслеживаются опросом. Строка Orders появляется в QUIK обычно не позже 0,5 с после отправки заявки.</p>
+  <p>В REST API изменения отслеживаются опросом. Строка Orders появляется в QUIK обычно не позже 0,5 с после отправки заявки.</p>
   <table>
     <thead><tr><th>Данные</th><th>Комментарий</th></tr></thead>
     <tbody>
@@ -622,30 +622,33 @@ pre.long { break-inside: auto; }
 }</pre>
 
   <h3 id="s4-5"><span class="n">4.5</span>GET /api/v1/orderbook</h3>
-  <p>Стакан: уровни спроса (bids, лучшая цена первой) и предложения (offers). Источник — FIX Market Data, а не строки QUIK, поэтому, в отличие от остальных методов, цены и объёмы передаются строками (десятичная запись).</p>
+  <p>Стакан инструмента: те же активные заявки всех участников рынка за текущий торговый день, что и в котировках (п. <a href="#s4-4">4.4</a>), сложенные по цене. Участник, подавший заявку, не раскрывается.</p>
   <p class="caption">Список поддерживаемых параметров:</p>
   <table>
     <thead><tr><th>Наименование</th><th>Тип</th><th>Комментарий</th></tr></thead>
     <tbody>
-      <tr><td>symbol</td><td>строка</td><td>Код инструмента. Если не указан, возвращаются все инструменты</td></tr>
-      <tr><td>board</td><td>строка</td><td>Код класса</td></tr>
+      <tr><td>board<sup class="req">*</sup></td><td>строка</td><td>Код класса (ClassCode)</td></tr>
+      <tr><td>symbol<sup class="req">*</sup></td><td>строка</td><td>Код инструмента (SecCode)</td></tr>
     </tbody>
   </table>
   <p class="caption">Список полей ответа:</p>
   <table>
     <thead><tr><th>Наименование</th><th>Тип</th><th>Комментарий</th></tr></thead>
     <tbody>
-      <tr><td>source</td><td>строка</td><td>Источник данных. Пример: «live»</td></tr>
-      <tr><td>live</td><td>логический</td><td>«false», если стакана сейчас нет</td></tr>
-      <tr><td>books</td><td>массив</td><td>Стаканы инструментов</td></tr>
-      <tr><td><span class="arrow">→</span>symbol, board</td><td>строка</td><td>Код инструмента и код класса</td></tr>
-      <tr><td><span class="arrow">→</span>currency</td><td>строка</td><td>Валюта</td></tr>
-      <tr><td><span class="arrow">→</span>bid, bid_size</td><td>строка</td><td>Лучшая цена спроса и объём</td></tr>
-      <tr><td><span class="arrow">→</span>offer, offer_size</td><td>строка</td><td>Лучшая цена предложения и объём</td></tr>
-      <tr><td><span class="arrow">→</span>bids, offers</td><td>массив</td><td>Уровни стакана: price, size</td></tr>
-      <tr><td>note</td><td>строка</td><td>Пояснение, если стакана нет</td></tr>
+      <tr><td>board</td><td>строка</td><td>Код класса</td></tr>
+      <tr><td>symbol</td><td>строка</td><td>Код инструмента</td></tr>
+      <tr><td>bids</td><td>массив</td><td>Покупка: от высокой цены к низкой</td></tr>
+      <tr><td>offers</td><td>массив</td><td>Продажа: от низкой цены к высокой</td></tr>
+      <tr><td><span class="arrow">→</span>price</td><td>число</td><td>Цена</td></tr>
+      <tr><td><span class="arrow">→</span>quantity</td><td>число</td><td>Сумма неисполненных остатков заявок по цене</td></tr>
+      <tr><td><span class="arrow">→</span>volume</td><td>число</td><td>Объём: price × quantity</td></tr>
+      <tr><td><span class="arrow">→</span>orders</td><td>число</td><td>Число заявок по цене</td></tr>
     </tbody>
   </table>
+  <p>Массивы присутствуют всегда, в том числе пустые. Без board или symbol — 400. Класс вне п. <a href="#s9-1">9.1</a> — пустой стакан.</p>
+  <p class="caption">Пример запроса:</p>
+<pre>curl "https://&lt;адрес-шлюза&gt;/api/v1/orderbook?board=LIST_GBA&amp;symbol=GBA02270915" \
+  -H "Authorization: Bearer &lt;API-токен&gt;"</pre>
   <p class="caption">Пример ответа:</p>
 <pre>{
   "success": true,
@@ -653,34 +656,32 @@ pre.long { break-inside: auto; }
   "message": null,
   "error_code": null,
   "data": {
-    "source": "live",
-    "live": true,
-    "books": [
+    "board": "LIST_GBA",
+    "symbol": "GBA02270915",
+    "bids": [
       {
-        "symbol": "GBA02280810",
-        "board": "LIST_GBA",
-        "currency": "KGS",
-        "bid": "99.5",
-        "bid_size": "10",
-        "offer": "100.5",
-        "offer_size": "12",
-        "bids": [
-          {
-            "price": "99.5",
-            "size": "10"
-          }
-        ],
-        "offers": [
-          {
-            "price": "100.5",
-            "size": "12"
-          }
-        ]
+        "price": 90.00000000,
+        "quantity": 18.00000000,
+        "volume": 1620,
+        "orders": 1
+      }
+    ],
+    "offers": [
+      {
+        "price": 95.00000000,
+        "quantity": 5878.00000000,
+        "volume": 558410,
+        "orders": 2
+      },
+      {
+        "price": 96.00000000,
+        "quantity": 1.00000000,
+        "volume": 96,
+        "orders": 1
       }
     ]
   }
 }</pre>
-  <p>Нет стакана — 200 с live «false», пустым books и причиной в note.</p>
 </section>
 
 <!-- ================= 5. ЗАЯВКИ ================= -->

@@ -7,7 +7,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/fix-gateway/backend/internal/domain"
 	"github.com/fix-gateway/backend/internal/quikexport"
 )
 
@@ -46,19 +45,6 @@ func (s *Server) servedClassSet(ctx context.Context) (map[string]bool, error) {
 		set[class] = true
 	}
 	return set, nil
-}
-
-func servedQuotes(items []domain.MarketQuote, served map[string]bool) []domain.MarketQuote {
-	if served == nil {
-		return items
-	}
-	out := make([]domain.MarketQuote, 0, len(items))
-	for _, q := range items {
-		if served[q.Board] {
-			out = append(out, q)
-		}
-	}
-	return out
 }
 
 // board and symbol filter the raw ClassCode and SecCode columns.

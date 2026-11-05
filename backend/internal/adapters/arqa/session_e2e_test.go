@@ -156,7 +156,7 @@ func TestARQASessionOrderLifecycleRejectsAndReconnect(t *testing.T) {
 	v := startVenue(t, port, venueDir)
 	got := reports{ch: make(chan domain.ExecutionReport, 32)}
 	a := New(domain.Adapter{ID: "e2e", Name: "e2e", Host: "127.0.0.1", Port: port, BeginString: "FIX.4.2", SenderCompID: "GW", TargetCompID: "QUIK", HeartbeatInterval: 30},
-		slog.New(slog.NewTextHandler(io.Discard, nil)), func(r domain.ExecutionReport) { got.ch <- r }, nil, t.TempDir())
+		slog.New(slog.NewTextHandler(io.Discard, nil)), func(r domain.ExecutionReport) { got.ch <- r }, t.TempDir())
 	if err := a.Start(context.Background()); err != nil {
 		t.Fatal(err)
 	}

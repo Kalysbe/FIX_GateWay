@@ -34,31 +34,12 @@ type Adapter struct {
 	processed atomic.Int64
 	errors    atomic.Int64
 	storeDir  string
-
-	subMu       sync.Mutex
-	mdRequestMu sync.Mutex
-	lastMDQuery domain.MarketDataQuery
-	mdSend      func(*quickfix.Message) error
 }
 
-func New(meta domain.Adapter, log *slog.Logger, onExec domain.ExecutionHandler, onMD domain.MarketDataHandler, storeDir string) *Adapter {
+func New(meta domain.Adapter, log *slog.Logger, onExec domain.ExecutionHandler, storeDir string) *Adapter {
 	a := &Adapter{meta: meta, log: log, onExec: onExec, storeDir: storeDir}
 	a.status.Store(domain.AdapterUnknown)
 	a.app = newSessionApp(meta.ID, log, onExec)
-	a.app.onMD = onMD
-	a.app.onLogon = func() {
-		a.subMu.Lock()
-		q := a.lastMDQuery
-		a.subMu.Unlock()
-		if q.Symbol == "" && q.Board == "" && len(q.Boards) == 0 && len(q.Instruments) == 0 {
-			return
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-		defer cancel()
-		if _, _, err := a.SubscribeMarketData(ctx, q); err != nil {
-			a.log.Warn("market data resubscribe failed", "adapter_id", a.meta.ID, "error", err)
-		}
-	}
 	return a
 }
 
@@ -151,7 +132,6 @@ func (a *Adapter) Start(ctx context.Context) error {
 
 func (a *Adapter) Stop(ctx context.Context) error {
 	a.status.Store(domain.AdapterStopping)
-	_ = a.UnsubscribeMarketData(ctx)
 	if a.initiator != nil {
 		a.initiator.Stop()
 	}

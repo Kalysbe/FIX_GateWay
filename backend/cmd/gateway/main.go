@@ -302,8 +302,6 @@ func main() {
 		log.Error("adapter manager start failed", "error", err)
 	}
 
-	go syncMarketDataLoop(ctx, log, manager, quikInstruments{quikExportStore}, cfg.MarketDataSyncInterval, cfg.MarketDataBoards)
-
 	worker := outbox.NewWorker(outboxStore, orderStore, manager, log, cfg.WorkerID, cfg.OutboxPollInterval, cfg.OutboxBatchSize)
 	worker.SetObserver(obs)
 	worker.SetDispatchGuard(func() bool { return inbox.Status().Healthy() })

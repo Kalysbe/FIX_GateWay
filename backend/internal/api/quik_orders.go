@@ -20,6 +20,7 @@ type quikOrderReader interface {
 	GetOrder(context.Context, string, *string) (quikexport.Order, error)
 	CountOrdersByState(context.Context) (map[string]int, error)
 	ListTrades(context.Context, quikexport.TradeFilter) (quikexport.TradePage, error)
+	GetOrderBook(ctx context.Context, classCode, secCode, activeState string) (quikexport.OrderBook, error)
 }
 
 // quikOrderStats keeps the dashboard counters that existed before the QUIK

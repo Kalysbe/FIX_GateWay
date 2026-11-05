@@ -35,23 +35,3 @@ func CheckFIXTexts(pairs ...string) error {
 	}
 	return nil
 }
-
-// CheckMarketDataQueryText applies CheckFIXText to every string that 35=V carries.
-func CheckMarketDataQueryText(q MarketDataQuery) error {
-	if err := CheckFIXTexts("symbol", q.Symbol, "board", q.Board, "security_type", q.SecurityType,
-		"subscription_type", q.SubscriptionType); err != nil {
-		return err
-	}
-	for _, b := range q.Boards {
-		if err := CheckFIXText("board", b, MaxFIXTextLen); err != nil {
-			return err
-		}
-	}
-	for _, in := range q.Instruments {
-		if err := CheckFIXTexts("symbol", in.Symbol, "security_id", in.SecurityID, "board", in.Board,
-			"currency", in.Currency, "security_type", in.SecurityType); err != nil {
-			return err
-		}
-	}
-	return nil
-}

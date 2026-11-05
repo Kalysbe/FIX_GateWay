@@ -8,7 +8,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/fix-gateway/backend/internal/domain"
 	"github.com/fix-gateway/backend/internal/quikexport"
 )
 
@@ -46,16 +45,5 @@ func TestBrokerQuotesLimitedToServedClasses(t *testing.T) {
 	s.listBrokerQuotes(w, brokerOrderRequest("/api/v1/quotes?board=LIST_GBA&symbol=GBA1"))
 	if w.Code != 503 {
 		t.Fatal("unreadable settings must not widen access", w.Code)
-	}
-}
-
-func TestServedQuotes(t *testing.T) {
-	items := []domain.MarketQuote{{Board: "LIST_GBA"}, {Board: "QME_FX"}, {Board: "LIST_GD"}}
-	got := servedQuotes(items, map[string]bool{"LIST_GBA": true, "LIST_GD": true})
-	if len(got) != 2 || got[0].Board != "LIST_GBA" || got[1].Board != "LIST_GD" {
-		t.Fatal(got)
-	}
-	if got := servedQuotes(items, nil); len(got) != 3 {
-		t.Fatal("without settings nothing is filtered", got)
 	}
 }

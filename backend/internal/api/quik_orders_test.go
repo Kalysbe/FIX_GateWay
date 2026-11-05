@@ -17,8 +17,10 @@ type testOrderSource struct {
 	filter      quikexport.OrderFilter
 	tradeFilter quikexport.TradeFilter
 	firm        *string
-	err    error
-	order  quikexport.Order
+	err         error
+	order       quikexport.Order
+	book        quikexport.OrderBook
+	bookArgs    []string
 }
 
 func (s *testOrderSource) ListOrders(_ context.Context, f quikexport.OrderFilter) (quikexport.OrderPage, error) {
@@ -29,6 +31,14 @@ func (s *testOrderSource) GetOrder(_ context.Context, _ string, firm *string) (q
 	s.firm = firm
 	return s.order, s.err
 }
+func (s *testOrderSource) GetOrderBook(_ context.Context, classCode, secCode, activeState string) (quikexport.OrderBook, error) {
+	s.bookArgs = []string{classCode, secCode, activeState}
+	if s.err != nil {
+		return quikexport.OrderBook{}, s.err
+	}
+	return s.book, nil
+}
+
 func (s *testOrderSource) CountOrdersByState(context.Context) (map[string]int, error) {
 	return map[string]int{s.order.Text("State"): 1}, s.err
 }

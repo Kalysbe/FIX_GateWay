@@ -40,27 +40,16 @@ type sessionApp struct {
 	secDefMu   sync.Mutex
 	secDefWait *secDefWaiter
 
-	mdMu            sync.Mutex
-	mdWait          *mdWaiter
-	mdBook          map[string]domain.MarketQuote
-	mdSubIDs        map[string]struct{}
-	mdSubscriptions map[string]*mdSubscription
-	mdNow           func() time.Time
-	onMD            domain.MarketDataHandler
-	onLogon         func()
-	onFIX           func(kind, sessionID, msgType, direction, clOrdID, reason string, seq int)
+	onFIX func(kind, sessionID, msgType, direction, clOrdID, reason string, seq int)
 }
 
 func newSessionApp(adapterID string, log *slog.Logger, onExec domain.ExecutionHandler) *sessionApp {
 	a := &sessionApp{
-		adapterID:       adapterID,
-		log:             log,
-		onExec:          onExec,
-		pendingRaw:      map[string]string{},
-		sent:            map[int]sentMessage{},
-		mdBook:          map[string]domain.MarketQuote{},
-		mdSubIDs:        map[string]struct{}{},
-		mdSubscriptions: map[string]*mdSubscription{},
+		adapterID:  adapterID,
+		log:        log,
+		onExec:     onExec,
+		pendingRaw: map[string]string{},
+		sent:       map[int]sentMessage{},
 	}
 	a.lastError.Store("")
 	return a
@@ -79,19 +68,10 @@ func (a *sessionApp) OnLogon(sessionID quickfix.SessionID) {
 	a.loggedOn.Store(true)
 	a.log.Info("fix session logon", "adapter_id", a.adapterID, "session", sessionID.String())
 	a.emitFIX("FIX_SESSION_CONNECTED", sessionID.String(), "A", "IN", "", "", 0)
-	if a.onLogon != nil {
-		go a.onLogon()
-	}
 }
 
 func (a *sessionApp) OnLogout(sessionID quickfix.SessionID) {
 	a.loggedOn.Store(false)
-	// Quotes from the old session must not suppress background resubscription.
-	a.mdMu.Lock()
-	a.mdBook = map[string]domain.MarketQuote{}
-	a.mdSubIDs = map[string]struct{}{}
-	a.mdSubscriptions = map[string]*mdSubscription{}
-	a.mdMu.Unlock()
 	a.log.Info("fix session logout", "adapter_id", a.adapterID, "session", sessionID.String())
 	a.emitFIX("FIX_SESSION_DISCONNECTED", sessionID.String(), "5", "IN", "", "logout", 0)
 }
@@ -216,12 +196,6 @@ func (a *sessionApp) FromApp(msg *quickfix.Message, sessionID quickfix.SessionID
 		a.emitAppFIX("FIX_REJECT", msg, sessionID)
 	case string(enum.MsgType_SECURITY_DEFINITION):
 		a.handleSecurityDefinition(msg)
-	case string(enum.MsgType_MARKET_DATA_SNAPSHOT_FULL_REFRESH):
-		a.handleMarketDataSnapshot(msg)
-	case string(enum.MsgType_MARKET_DATA_INCREMENTAL_REFRESH):
-		a.handleMarketDataIncremental(msg)
-	case string(enum.MsgType_MARKET_DATA_REQUEST_REJECT):
-		a.handleMarketDataReject(msg)
 	default:
 		a.log.Debug("unhandled fix app message", "adapter_id", a.adapterID, "msg_type", msgType, "wire", sanitizeFIX(msg))
 	}

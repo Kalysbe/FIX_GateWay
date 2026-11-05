@@ -65,8 +65,11 @@ func (o Order) VenueID() string {
 	return parsed.Format("060102") + "-" + o.Text("ClassCode") + "-" + o.Text("OrderNum")
 }
 
-func (o Order) Side() string {
-	switch strings.ToUpper(o.Text("Operation")) {
+func (o Order) Side() string { return OperationSide(o.Text("Operation")) }
+
+// OperationSide maps a raw Orders "Operation" value to BUY or SELL; "" if unknown.
+func OperationSide(operation string) string {
+	switch strings.ToUpper(strings.TrimSpace(operation)) {
 	case "КУПЛЯ", "ПОКУПКА", "BUY":
 		return "BUY"
 	case "ПРОДАЖА", "SELL":

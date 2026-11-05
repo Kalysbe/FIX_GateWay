@@ -658,65 +658,38 @@ func (s *Server) listInstruments(w http.ResponseWriter, r *http.Request) {
 	writeQuikJSON(w, page.Securities)
 }
 
+// listBrokerOrderBook serves one instrument's book (поручение пользователя
+// 05.11.2026): today's active QUIK Orders of every firm grouped by price, as
+// the quotes are; participants stay hidden. A class outside the served ones
+// has an empty book.
 func (s *Server) listBrokerOrderBook(w http.ResponseWriter, r *http.Request) {
 	board := strings.TrimSpace(r.URL.Query().Get("board"))
 	symbol := strings.TrimSpace(r.URL.Query().Get("symbol"))
+	if board == "" || symbol == "" {
+		writeErr(w, http.StatusBadRequest, "board and symbol are required")
+		return
+	}
 	served, err := s.servedClassSet(r.Context())
 	if err != nil {
 		s.writeParamReadError(w, err)
 		return
 	}
-	if s.manager != nil {
-		if _, items, ok := s.manager.LiveQuotes(); ok {
-			items = servedQuotes(filterQuotes(items, board, symbol), served)
-			books := make([]map[string]any, 0, len(items))
-			for _, q := range items {
-				books = append(books, orderBookDTO(q))
-			}
-			writeJSON(w, http.StatusOK, map[string]any{
-				"source": "live",
-				"live":   true,
-				"books":  books,
-			})
+	book := quikexport.OrderBook{Bids: []quikexport.BookLevel{}, Offers: []quikexport.BookLevel{}}
+	if served == nil || served[board] {
+		if s.quikOrders == nil {
+			s.writeOrderReadError(w, quikexport.ErrNotConfigured)
+			return
+		}
+		if book, err = s.quikOrders.GetOrderBook(r.Context(), board, symbol, quikActiveState); err != nil {
+			s.writeOrderReadError(w, err)
 			return
 		}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"source": "live",
-		"live":   false,
-		"books":  []any{},
-		"note":   "нет живого стакана — шлюз автоматически восстанавливает подписку на рыночные данные",
-	})
-}
-
-func orderBookDTO(q domain.MarketQuote) map[string]any {
-	return map[string]any{
-		"symbol":      q.Symbol,
-		"security_id": q.SecurityID,
-		"board":       q.Board,
-		"currency":    q.Currency,
-		"name":        q.Name,
-		"last":        q.Last,
-		"last_size":   q.LastSize,
-		"last_time":   q.LastTime,
-		"bid":         q.Bid,
-		"bid_size":    q.BidSize,
-		"offer":       q.Offer,
-		"offer_size":  q.OfferSize,
-		"bids":        bookLevelsOrTop(q.Bids, q.Bid, q.BidSize),
-		"offers":      bookLevelsOrTop(q.Offers, q.Offer, q.OfferSize),
-		"updated_at":  q.UpdatedAt,
-	}
-}
-
-func bookLevelsOrTop(levels []domain.BookLevel, px, sz string) []domain.BookLevel {
-	if len(levels) > 0 {
-		return levels
-	}
-	if strings.TrimSpace(px) == "" {
-		return []domain.BookLevel{}
-	}
-	return []domain.BookLevel{{Price: px, Size: sz}}
+	writeQuikJSON(w, struct {
+		Board  string `json:"board"`
+		Symbol string `json:"symbol"`
+		quikexport.OrderBook
+	}{board, symbol, book})
 }
 
 // listTrades serves the token firm's rows of QUIK "Trades" as stored, newest
@@ -1322,23 +1295,6 @@ func (s *Server) listEmitentOrders(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, res)
-}
-
-func filterQuotes(items []domain.MarketQuote, board, symbol string) []domain.MarketQuote {
-	if board == "" && symbol == "" {
-		return items
-	}
-	out := make([]domain.MarketQuote, 0, len(items))
-	for _, q := range items {
-		if board != "" && q.Board != board {
-			continue
-		}
-		if symbol != "" && q.Symbol != symbol && q.SecurityID != symbol {
-			continue
-		}
-		out = append(out, q)
-	}
-	return out
 }
 
 func (s *Server) getAdminOrder(w http.ResponseWriter, r *http.Request) {

@@ -5,6 +5,7 @@ package quikexport
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"strings"
@@ -155,6 +156,61 @@ INSERT INTO public."Trades" VALUES (1,'LIST_GD','GD1','2026-10-22','2040','Ку�
 	s.SetServedClasses(func(context.Context) ([]string, error) { return []string{}, nil })
 	if page, err := s.ListTrades(ctx, TradeFilter{Limit: 10}); err != nil || len(page.Trades) != 4 {
 		t.Fatal("empty choice serves every class", page, err)
+	}
+}
+
+// The book groups today's active orders of one instrument, every firm, by side
+// and price: bids from the highest price, offers from the lowest. Filled,
+// earlier, other-instrument, unpriced and fully executed orders are not in it.
+func TestQUIKOrderBookFromActiveOrders(t *testing.T) {
+	dsn := os.Getenv("QUIK_ORDERS_STORE_TEST_DATABASE_URL")
+	if dsn == "" {
+		dsn = os.Getenv("QUIK_ORDERS_TEST_DATABASE_URL")
+	}
+	if dsn == "" {
+		t.Skip("disposable QUIK_ORDERS_TEST_DATABASE_URL required")
+	}
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	var name string
+	if err := pool.QueryRow(ctx, `SELECT current_database()`).Scan(&name); err != nil || !strings.HasSuffix(name, "_test") {
+		t.Fatal("disposable database name must end in _test", name, err)
+	}
+	_, err = pool.Exec(ctx, `CREATE TABLE public."Orders" ("TradeDate" timestamp,"ClassCode" varchar(12),"SecCode" varchar(12),"FirmId" varchar(12),"Operation" varchar(40),"State" varchar(12),"Price" numeric(19,8),"Balance" numeric(28,8));
+INSERT INTO public."Orders" SELECT d, c, s, f, o, st, p, b FROM (VALUES
+ (0,'LIST_GBA','GBA1','2040','Купля','Активна',90,18),
+ (0,'LIST_GBA','GBA1','9999','Купля','Активна',91,2),
+ (0,'LIST_GBA','GBA1','2040','Продажа','Активна',95,5000),
+ (0,'LIST_GBA','GBA1','9999','Продажа','Активна',95,878),
+ (0,'LIST_GBA','GBA1','2040','Продажа','Активна',96,1),
+ (0,'LIST_GBA','GBA1','2040','Продажа','Исполнена',94,0),
+ (0,'LIST_GBA','GBA1','2040','Продажа','Активна',NULL,3),
+ (0,'LIST_GBA','GBA1','2040','Продажа','Активна',93,0),
+ (1,'LIST_GBA','GBA1','2040','Купля','Активна',99,1),
+ (0,'LIST_GBA','GBA2','2040','Купля','Активна',80,1)
+) v(ago,c,s,f,o,st,p,b), LATERAL (SELECT ((now() AT TIME ZONE 'Asia/Bishkek')::date - ago)::timestamp) x(d)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = pool.Exec(ctx, `DROP TABLE public."Orders"`) })
+	s := NewStore(pool)
+	book, err := s.GetOrderBook(ctx, "LIST_GBA", "GBA1", "Активна")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, _ := json.Marshal(book)
+	want := `{"bids":[{"price":91.00000000,"quantity":2.00000000,"volume":182,"orders":1},{"price":90.00000000,"quantity":18.00000000,"volume":1620,"orders":1}],` +
+		`"offers":[{"price":95.00000000,"quantity":5878.00000000,"volume":558410,"orders":2},{"price":96.00000000,"quantity":1.00000000,"volume":96,"orders":1}]}`
+	if string(got) != want {
+		t.Fatalf("book\n got %s\nwant %s", got, want)
+	}
+	s.SetServedClasses(func(context.Context) ([]string, error) { return []string{"LIST_GD"}, nil })
+	if book, err := s.GetOrderBook(ctx, "LIST_GBA", "GBA1", "Активна"); err != nil || len(book.Bids)+len(book.Offers) != 0 {
+		t.Fatal("class outside the served ones", book, err)
 	}
 }
 
