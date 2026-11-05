@@ -28,7 +28,7 @@ OrderService → AdapterManager → Adapter interface → arqa.Adapter → Quick
 | ReconnectInterval | `5` |
 | StartTime/EndTime | not set: QuickFIX never ends the session itself, so it never resets the numbers (before 05.11.2026, `00:00:00`-`00:00:00` UTC reset them every day at 06:00 Bishkek). `start_time`/`end_time` in the transport config set a schedule, both or neither |
 | Working hours | the QUIK adapters are off 04:00-09:05 Bishkek. The adapter manager runs the sessions only inside `FIX_SESSION_HOURS` (default `09:05-03:59`): Logout at 03:59, no connection attempts until 09:05 |
-| ResetOnLogon | `adapters.reset_on_logon` per adapter. With `N` the numbers continue across logons and the gap is recovered with ResendRequest (35=2) / SequenceReset-GapFill (35=4); checked on `quik-fix-2` 05.11.2026. With `Y` (141=Y) the QUIK adapter also clears its store of sent messages |
+| ResetOnLogon | `adapters.reset_on_logon` per adapter. With `N` the numbers continue across logons and the gap is recovered with ResendRequest (35=2) / SequenceReset-GapFill (35=4); both QUIK adapters run so since 05.11.2026. With `Y` (141=Y) the QUIK adapter also clears its store of sent messages |
 | Auth | Logon `Username` (553) / `Password` (554) when configured |
 | TLS | optional via config |
 
