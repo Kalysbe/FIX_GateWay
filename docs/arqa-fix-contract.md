@@ -26,8 +26,8 @@ OrderService → AdapterManager → Adapter interface → arqa.Adapter → Quick
 | ConnectionType | initiator |
 | HeartBtInt | `30` |
 | ReconnectInterval | `5` |
-| Default StartTime/EndTime | `00:00:00`-`00:00:00` (24×7) |
-| ResetOnLogon | configurable (`ADAPTER_RESET_ON_LOGON`, default `N` for prod, `Y` for simulator) |
+| StartTime/EndTime | not set: the session never ends, no daily logout or reset (since 05.11.2026; before, `00:00:00`-`00:00:00` UTC reset it every day at 06:00 Bishkek). `start_time`/`end_time` in the transport config set a schedule, both or neither |
+| ResetOnLogon | `adapters.reset_on_logon` per adapter. With `N` the numbers continue across logons and the gap is recovered with ResendRequest (35=2) / SequenceReset-GapFill (35=4); checked on `quik-fix-2` 05.11.2026. With `Y` (141=Y) the QUIK adapter also clears its store of sent messages |
 | Auth | Logon `Username` (553) / `Password` (554) when configured |
 | TLS | optional via config |
 

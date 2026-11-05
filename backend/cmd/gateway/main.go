@@ -179,6 +179,13 @@ func main() {
 		}
 		obs.Emit(observability.Event{Type: eventType, Subtype: subtype, AdapterID: adapterID, Message: message, Severity: sev})
 	})
+	sessionDown := newSessionDownAlarm(fixSessionDownGrace, func(adapterID, sessionID string) {
+		obs.Emit(observability.Event{
+			Type: observability.TypeError, Subtype: observability.CritFIXSessionDown,
+			AdapterID: adapterID, SessionID: sessionID, Severity: observability.SeverityCritical,
+			ErrorCode: observability.CritFIXSessionDown, Message: "FIX session down", FailureStage: "fix_session",
+		})
+	})
 	manager.SetFIXHandler(func(kind, adapterID, sessionID, msgType, direction, clOrdID, reason string, seq int) {
 		e := observability.Event{
 			Type: observability.TypeFIX, Subtype: kind, AdapterID: adapterID, SessionID: sessionID,
@@ -187,13 +194,12 @@ func main() {
 		if seq > 0 {
 			e.FIXSeqNum = &seq
 		}
-		if kind == "FIX_SESSION_DISCONNECTED" {
+		switch kind {
+		case "FIX_SESSION_DISCONNECTED":
 			e.Severity = observability.SeverityWarning
-			obs.Emit(observability.Event{
-				Type: observability.TypeError, Subtype: observability.CritFIXSessionDown,
-				AdapterID: adapterID, SessionID: sessionID, Severity: observability.SeverityCritical,
-				ErrorCode: observability.CritFIXSessionDown, Message: "FIX session down", FailureStage: "fix_session",
-			})
+			sessionDown.down(adapterID, sessionID)
+		case "FIX_SESSION_CONNECTED":
+			sessionDown.up(adapterID)
 		}
 		obs.Emit(e)
 	})
