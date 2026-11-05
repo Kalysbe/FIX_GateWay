@@ -642,10 +642,9 @@ pre.long { break-inside: auto; }
       <tr><td><span class="arrow">→</span>price</td><td>число</td><td>Цена</td></tr>
       <tr><td><span class="arrow">→</span>quantity</td><td>число</td><td>Сумма неисполненных остатков заявок по цене</td></tr>
       <tr><td><span class="arrow">→</span>volume</td><td>число</td><td>Объём: price × quantity</td></tr>
-      <tr><td><span class="arrow">→</span>orders</td><td>число</td><td>Число заявок по цене</td></tr>
     </tbody>
   </table>
-  <p>Массивы присутствуют всегда, в том числе пустые. Без board или symbol — 400. Класс вне п. <a href="#s9-1">9.1</a> — пустой стакан.</p>
+  <p>Число заявок по цене не передаётся; отдельные заявки — в котировках (п. <a href="#s4-4">4.4</a>). Массивы присутствуют всегда, в том числе пустые. Без board или symbol — 400. Класс вне п. <a href="#s9-1">9.1</a> — пустой стакан.</p>
   <p class="caption">Пример запроса:</p>
 <pre>curl "https://&lt;адрес-шлюза&gt;/api/v1/orderbook?board=LIST_GBA&amp;symbol=GBA02270915" \
   -H "Authorization: Bearer &lt;API-токен&gt;"</pre>
@@ -662,22 +661,19 @@ pre.long { break-inside: auto; }
       {
         "price": 90.00000000,
         "quantity": 18.00000000,
-        "volume": 1620,
-        "orders": 1
+        "volume": 1620
       }
     ],
     "offers": [
       {
         "price": 95.00000000,
         "quantity": 5878.00000000,
-        "volume": 558410,
-        "orders": 2
+        "volume": 558410
       },
       {
         "price": 96.00000000,
         "quantity": 1.00000000,
-        "volume": 96,
-        "orders": 1
+        "volume": 96
       }
     ]
   }

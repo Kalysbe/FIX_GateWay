@@ -203,8 +203,8 @@ INSERT INTO public."Orders" SELECT d, c, s, f, o, st, p, b FROM (VALUES
 		t.Fatal(err)
 	}
 	got, _ := json.Marshal(book)
-	want := `{"bids":[{"price":91.00000000,"quantity":2.00000000,"volume":182,"orders":1},{"price":90.00000000,"quantity":18.00000000,"volume":1620,"orders":1}],` +
-		`"offers":[{"price":95.00000000,"quantity":5878.00000000,"volume":558410,"orders":2},{"price":96.00000000,"quantity":1.00000000,"volume":96,"orders":1}]}`
+	want := `{"bids":[{"price":91.00000000,"quantity":2.00000000,"volume":182},{"price":90.00000000,"quantity":18.00000000,"volume":1620}],` +
+		`"offers":[{"price":95.00000000,"quantity":5878.00000000,"volume":558410},{"price":96.00000000,"quantity":1.00000000,"volume":96}]}`
 	if string(got) != want {
 		t.Fatalf("book\n got %s\nwant %s", got, want)
 	}

@@ -334,10 +334,10 @@ paths:
                 board: LIST_GBA
                 symbol: GBA02270915
                 bids:
-                  - {price: 90.00000000, quantity: 18.00000000, volume: 1620, orders: 1}
+                  - {price: 90.00000000, quantity: 18.00000000, volume: 1620}
                 offers:
-                  - {price: 95.00000000, quantity: 5878.00000000, volume: 558410, orders: 2}
-                  - {price: 96.00000000, quantity: 1.00000000, volume: 96, orders: 1}
+                  - {price: 95.00000000, quantity: 5878.00000000, volume: 558410}
+                  - {price: 96.00000000, quantity: 1.00000000, volume: 96}
         "400":
           description: Не указаны board и symbol
         "401":
@@ -784,13 +784,12 @@ components:
       example: {"TradeDate": "2026-11-02T00:00:00", "ClassCode": "LIST_GBA", "SecCode": "GBA02280810", "FaceUnit": "KGS", "SecShortName": "ГКО", "SecFullName": "Государственная бумага"}
     BookLevel:
       type: object
-      required: [price, quantity, volume, orders]
+      required: [price, quantity, volume]
       additionalProperties: false
       properties:
         price: {type: number, description: Цена}
         quantity: {type: number, description: Остаток заявок по цене}
         volume: {type: number, description: price × quantity}
-        orders: {type: integer, description: Число заявок по цене}
     MarketDataRow:
       type: object
       additionalProperties: true

@@ -14,12 +14,12 @@ import (
 // The broker order book is read from QUIK Orders for one instrument: board and
 // symbol are required, the class must be served, an outage is a 503.
 func TestBrokerOrderBookComesFromQUIKOrders(t *testing.T) {
-	level := quikexport.BookLevel{Price: json.RawMessage("95.00000000"), Quantity: json.RawMessage("5878.00000000"), Volume: json.RawMessage("558410"), Orders: 2}
+	level := quikexport.BookLevel{Price: json.RawMessage("95.00000000"), Quantity: json.RawMessage("5878.00000000"), Volume: json.RawMessage("558410")}
 	src := &testOrderSource{book: quikexport.OrderBook{Bids: []quikexport.BookLevel{}, Offers: []quikexport.BookLevel{level}}}
 	s := &Server{quikOrders: src}
 	w := httptest.NewRecorder()
 	s.listBrokerOrderBook(w, brokerOrderRequest("/api/v1/orderbook?board=LIST_GBA&symbol=GBA02270915"))
-	want := `{"board":"LIST_GBA","symbol":"GBA02270915","bids":[],"offers":[{"price":95.00000000,"quantity":5878.00000000,"volume":558410,"orders":2}]}`
+	want := `{"board":"LIST_GBA","symbol":"GBA02270915","bids":[],"offers":[{"price":95.00000000,"quantity":5878.00000000,"volume":558410}]}`
 	if w.Code != 200 || strings.TrimSpace(w.Body.String()) != want {
 		t.Fatalf("%d %s", w.Code, w.Body.String())
 	}

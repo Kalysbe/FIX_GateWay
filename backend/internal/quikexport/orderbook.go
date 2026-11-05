@@ -10,13 +10,12 @@ import (
 )
 
 // BookLevel is one price of an order book: the remaining quantity (Balance)
-// of the active orders at that price, its volume (price × quantity) and how
-// many orders make it up. Participants are not part of it.
+// of the active orders at that price and its volume (price × quantity).
+// Participants and the number of orders are not part of it.
 type BookLevel struct {
 	Price    json.RawMessage `json:"price"`
 	Quantity json.RawMessage `json:"quantity"`
 	Volume   json.RawMessage `json:"volume"`
-	Orders   int             `json:"orders"`
 }
 
 // OrderBook is an instrument's book (поручение пользователя 05.11.2026): bids
@@ -29,7 +28,7 @@ type OrderBook struct {
 // orderBookRows groups today's active Orders rows of one instrument, every
 // firm, by side and price. Rows without a price or remaining quantity hold no
 // place in the book.
-const orderBookRows = `SELECT btrim(o."Operation"::text), o."Price"::text, sum(o."Balance")::text, count(*)
+const orderBookRows = `SELECT btrim(o."Operation"::text), o."Price"::text, sum(o."Balance")::text
 FROM public."Orders" o
 WHERE btrim(o."State"::text)=$1
 AND o."TradeDate"::date=(now() AT TIME ZONE 'Asia/Bishkek')::date
@@ -60,8 +59,7 @@ func (s *Store) GetOrderBook(ctx context.Context, classCode, secCode, activeStat
 	var bids, offers []level
 	for rows.Next() {
 		var operation, price, quantity string
-		var n int
-		if err := rows.Scan(&operation, &price, &quantity, &n); err != nil {
+		if err := rows.Scan(&operation, &price, &quantity); err != nil {
 			return out, err
 		}
 		px, err := decimal.NewFromString(price)
@@ -72,7 +70,7 @@ func (s *Store) GetOrderBook(ctx context.Context, classCode, secCode, activeStat
 		if err != nil {
 			continue
 		}
-		l := level{BookLevel{Price: json.RawMessage(price), Quantity: json.RawMessage(quantity), Volume: json.RawMessage(px.Mul(qty).String()), Orders: n}, px}
+		l := level{BookLevel{Price: json.RawMessage(price), Quantity: json.RawMessage(quantity), Volume: json.RawMessage(px.Mul(qty).String())}, px}
 		switch OperationSide(operation) {
 		case "BUY":
 			bids = append(bids, l)

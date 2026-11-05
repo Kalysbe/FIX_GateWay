@@ -240,15 +240,15 @@ REST-фильтры: `?board=<ClassCode>&symbol=<SecCode>`, оба необяз�
 
 `GET /api/v1/orderbook?board=<ClassCode>&symbol=<SecCode>` возвращает стакан одного инструмента: те же активные заявки сегодняшнего торгового дня всех участников, что и котировки, сложенные по цене. `board` и `symbol` обязательны, без них — HTTP 400.
 
-`bids` — покупка, от высокой цены к низкой; `offers` — продажа, от низкой к высокой. Уровень содержит `price`, `quantity` (сумма остатков заявок по цене), `volume` = `price` × `quantity` и `orders` (число заявок по цене). Участники не раскрываются. Числа — JSON-числа с исходной точностью. Массивы присутствуют всегда, в том числе пустые; класс, не выбранный администратором, даёт пустой стакан. Лимит частоты — операция `GetOrderBook`. Источник недоступен — HTTP 503.
+`bids` — покупка, от высокой цены к низкой; `offers` — продажа, от низкой к высокой. Уровень содержит `price`, `quantity` (сумма остатков заявок по цене) и `volume` = `price` × `quantity`. Участники и число заявок по цене не раскрываются; отдельные заявки — в котировках. Числа — JSON-числа с исходной точностью. Массивы присутствуют всегда, в том числе пустые; класс, не выбранный администратором, даёт пустой стакан. Лимит частоты — операция `GetOrderBook`. Источник недоступен — HTTP 503.
 
 ```json
-{"board":"LIST_GBA","symbol":"GBA02270915","bids":[{"price":90.00000000,"quantity":18.00000000,"volume":1620,"orders":1}],"offers":[{"price":95.00000000,"quantity":5878.00000000,"volume":558410,"orders":2},{"price":96.00000000,"quantity":1.00000000,"volume":96,"orders":1}]}
+{"board":"LIST_GBA","symbol":"GBA02270915","bids":[{"price":90.00000000,"quantity":18.00000000,"volume":1620}],"offers":[{"price":95.00000000,"quantity":5878.00000000,"volume":558410},{"price":96.00000000,"quantity":1.00000000,"volume":96}]}
 ```
 
 ### Изменение контракта 05.11.2026
 
-Стакан `GET /api/v1/orderbook` строится из таблицы QUIK `Orders`, а не из FIX Market Data. `board` и `symbol` стали обязательными. Вместо `{source, live, books: [OrderBook], note}` возвращается один стакан `{board, symbol, bids, offers}`; уровень вместо `{price, size}` строками — `{price, quantity, volume, orders}` числами. Поля `security_id`, `currency`, `name`, `last`, `last_size`, `last_time`, `bid`, `bid_size`, `offer`, `offer_size`, `updated_at` убраны: лучшие цены и последняя сделка есть в `GET /api/v1/market-data/{board}/{symbol}`.
+Стакан `GET /api/v1/orderbook` строится из таблицы QUIK `Orders`, а не из FIX Market Data. `board` и `symbol` стали обязательными. Вместо `{source, live, books: [OrderBook], note}` возвращается один стакан `{board, symbol, bids, offers}`; уровень вместо `{price, size}` строками — `{price, quantity, volume}` числами. Поля `security_id`, `currency`, `name`, `last`, `last_size`, `last_time`, `bid`, `bid_size`, `offer`, `offer_size`, `updated_at` убраны: лучшие цены и последняя сделка есть в `GET /api/v1/market-data/{board}/{symbol}`.
 
 ### Изменение контракта 26.10.2026
 
