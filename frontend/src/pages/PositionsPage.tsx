@@ -3,7 +3,8 @@ import { useQuery } from "@tanstack/react-query";
 import { api, apiWithHeaders } from "../api";
 import { liveRefetchInterval } from "../lib/poll";
 import { dbValue, parseDBJSON, type DBOrder } from "../lib/rawOrders";
-import { rawColumns, rawSearchText } from "../components/rawColumns";
+import { rawSearchText } from "../components/rawColumns";
+import { quikColumns, type QuikColumn } from "../components/quikColumns";
 import { useAdminStream } from "../hooks/useAdminStream";
 import { PageHeader } from "../components/PageHeader";
 import { DataTable } from "../components/DataTable";
@@ -13,6 +14,36 @@ type PositionsResp = { cash: DBOrder[]; instruments: DBOrder[] };
 
 const text = (row: DBOrder, field: string) => dbValue(row[field]).trim().toLowerCase();
 
+// Balances of a DepoLimits row; limits, values and the load date are in the
+// column menu.
+const DEPO_COLUMNS: QuikColumn[] = [
+  { id: "firm", header: "Фирма", field: "FirmId" },
+  { id: "client", header: "Клиент / счёт", field: "ClientCode", sub: "Trdacc" },
+  { id: "sec", header: "Инструмент", field: "SecCode" },
+  { id: "kind", header: "Срок", field: "LimitKind" },
+  { id: "open", header: "Входящий", field: "OpenBal", kind: "number" },
+  { id: "current", header: "Текущий", field: "CurrentBal", kind: "number" },
+  { id: "lockedBuy", header: "Блок. покупка", field: "LockedBuy", kind: "number" },
+  { id: "lockedSell", header: "Блок. продажа", field: "LockedSell", kind: "number" },
+  { id: "price", header: "Ср. цена", field: "AwgPositionPrice", kind: "number", frac: 2, sub: "WAPositionPriceCurrency" },
+];
+
+// Balances of a MoneyLimits row.
+const MONEY_COLUMNS: QuikColumn[] = [
+  { id: "firm", header: "Фирма", field: "FirmId" },
+  { id: "client", header: "Клиент / тег", field: "ClientCode", sub: "Tag" },
+  { id: "currency", header: "Валюта", field: "CurrCode" },
+  { id: "kind", header: "Срок", field: "LimitKind" },
+  { id: "open", header: "Входящий", field: "OpenBal", kind: "number", frac: 2 },
+  { id: "current", header: "Текущий", field: "CurrentBal", kind: "number", frac: 2 },
+  { id: "locked", header: "Заблокировано", field: "Locked", kind: "number", frac: 2 },
+  { id: "limit", header: "Текущий лимит", field: "CurrentLimit", kind: "number", frac: 2 },
+];
+
+// A row is empty when every balance is zero or null; hiding it is display only.
+const BALANCES = { instruments: ["OpenBal", "CurrentBal", "LockedBuy", "LockedSell"], cash: ["OpenBal", "CurrentBal", "Locked", "CurrentLimit"] };
+const isZero = (v: DBOrder[string]) => v == null || /^-?0*(\.0*)?$/.test(String(v).trim());
+
 // Current rows of QUIK "DepoLimits" and "MoneyLimits" as stored; the Gateway
 // keeps no copy of them.
 export default function PositionsPage() {
@@ -21,6 +52,7 @@ export default function PositionsPage() {
   const [firmFilter, setFirmFilter] = useState("");
   const [clientFilter, setClientFilter] = useState("");
   const [tab, setTab] = useState<"instruments" | "cash">("instruments");
+  const [hideZero, setHideZero] = useState(true);
 
   const brokersQ = useQuery({
     queryKey: ["brokers"],
@@ -42,15 +74,20 @@ export default function PositionsPage() {
       .sort((a, b) => a[1].localeCompare(b[1], "ru"));
   }, [brokersQ.data]);
 
-  const matches = (r: DBOrder) => text(r, "FirmId").includes(firmFilter.trim().toLowerCase()) && text(r, "ClientCode").includes(clientFilter.trim().toLowerCase());
-  const instruments = (positions.data?.instruments ?? []).filter(matches);
-  const cash = (positions.data?.cash ?? []).filter(matches);
+  const matches = (balances: string[]) => (r: DBOrder) => text(r, "FirmId").includes(firmFilter.trim().toLowerCase()) && text(r, "ClientCode").includes(clientFilter.trim().toLowerCase())
+    && (!hideZero || balances.some(f => !isZero(r[f])));
+  const allInstruments = positions.data?.instruments ?? [];
+  const allCash = positions.data?.cash ?? [];
+  const instruments = allInstruments.filter(matches(BALANCES.instruments));
+  const cash = allCash.filter(matches(BALANCES.cash));
   const rows = tab === "instruments" ? instruments : cash;
+  // Columns from every loaded row, so filters never drop a column.
+  const columns = useMemo(() => tab === "instruments" ? quikColumns(allInstruments, DEPO_COLUMNS) : quikColumns(allCash, MONEY_COLUMNS), [tab, allInstruments, allCash]);
   const rowKey = (r: DBOrder) => ["LoadDate", "FirmId", "ClientCode", "SecCode", "Trdacc", "Tag", "CurrCode", "LimitKind"].map(f => dbValue(r[f])).join("\u0000");
 
   return (
-    <div className="space-y-4">
-      <PageHeader title="Позиции" subtitle="Строки таблиц QUIK DepoLimits и MoneyLimits за последнюю дату в том виде, в каком они хранятся в базе" />
+    <div className="raw-orders space-y-4">
+      <PageHeader title="Позиции" subtitle="Таблицы QUIK DepoLimits и MoneyLimits за последнюю дату. Остальные поля — в меню столбцов" />
 
       <div className="card space-y-3">
         <div className="flex flex-wrap items-center gap-2">
@@ -98,10 +135,14 @@ export default function PositionsPage() {
             value={clientFilter}
             onChange={(e) => setClientFilter(e.target.value)}
           />
+          <label className="flex items-center gap-2 text-sm text-muted">
+            <input type="checkbox" checked={hideZero} onChange={(e) => setHideZero(e.target.checked)} />
+            Скрыть нулевые остатки
+          </label>
         </div>
 
         {positions.error && <ErrorBanner error={positions.error} onRetry={() => positions.refetch()} />}
-        <DataTable key={tab} title={tab === "instruments" ? "Позиции по инструментам" : "Денежные позиции"} rows={positions.error ? [] : rows} columns={rawColumns(rows)} rowKey={rowKey} getSearchText={rawSearchText(rows)} loading={positions.isLoading} resetKey={brokerFilter + ":" + firmFilter + ":" + clientFilter} exportName={tab === "instruments" ? "positions" : "cash-positions"} showTotals={false} emptyTitle={positions.error ? "Позиции временно недоступны" : "В этой выборке позиций нет"} />
+        <DataTable key={tab} title={tab === "instruments" ? "Позиции по инструментам" : "Денежные позиции"} rows={positions.error ? [] : rows} columns={columns} rowKey={rowKey} getSearchText={rawSearchText(rows)} loading={positions.isLoading} resetKey={brokerFilter + ":" + firmFilter + ":" + clientFilter + ":" + hideZero} exportName={tab === "instruments" ? "positions" : "cash-positions"} showTotals={false} emptyTitle={positions.error ? "Позиции временно недоступны" : "В этой выборке позиций нет"} emptyHint={hideZero && (tab === "instruments" ? allInstruments : allCash).length ? "Нулевые остатки скрыты" : undefined} />
       </div>
     </div>
   );
