@@ -335,6 +335,37 @@ func (s *Store) FenceSendAttempt(ctx context.Context, id uuid.UUID) error {
 	return nil
 }
 
+// ReleaseSendFence undoes FenceSendAttempt when the adapter proved that nothing
+// reached the wire, and returns the order to the queue for another adapter.
+func (s *Store) ReleaseSendFence(ctx context.Context, id uuid.UUID, reason string) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	var from domain.OrderStatus
+	var attempted *time.Time
+	if err := tx.QueryRow(ctx, `SELECT status, fix_send_attempted_at FROM orders WHERE id=$1 FOR UPDATE`, id).Scan(&from, &attempted); err != nil {
+		return err
+	}
+	if attempted == nil || (from != domain.OrderQueued && from != domain.OrderRouting) {
+		return ErrCannotFailover
+	}
+	_, err = tx.Exec(ctx, `
+		UPDATE orders SET fix_send_attempted_at=NULL, status=$2, adapter_id=NULL, updated_at=now() WHERE id=$1`, id, domain.OrderQueued)
+	if err != nil {
+		return err
+	}
+	_, err = tx.Exec(ctx, `
+		INSERT INTO order_events (order_id, event_type, from_status, to_status, message)
+		VALUES ($1,'ORDER_FAILOVER',$2,$3,$4)`, id, string(from), string(domain.OrderQueued), reason)
+	if err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
 const orderLockSelect = `
 		SELECT id, broker_id, client_order_id, side, order_type,
 		       time_in_force, quantity, price, filled_quantity, status, adapter_id,

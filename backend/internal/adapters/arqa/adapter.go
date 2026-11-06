@@ -185,7 +185,7 @@ func (a *Adapter) HealthCheck(ctx context.Context) (domain.HealthDetails, error)
 func (a *Adapter) SendOrder(ctx context.Context, order domain.Order) (string, error) {
 	if !a.app.isLoggedOn() {
 		a.errors.Add(1)
-		return "", fmt.Errorf("adapter %s not logged on", a.meta.ID)
+		return "", fmt.Errorf("adapter %s not logged on: %w", a.meta.ID, domain.ErrFIXNotTransmitted)
 	}
 	clOrdID := ""
 	if order.FixClOrdID != nil {

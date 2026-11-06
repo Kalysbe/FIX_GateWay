@@ -266,6 +266,13 @@ func (w *Worker) processSend(ctx context.Context, order domain.Order) error {
 	if err != nil {
 		metrics.AdapterErrors.WithLabelValues(ad.ID()).Inc()
 		w.emitOrder(routed, observability.TypeError, observability.ErrFIX, "FIX_SEND_FAILED", err.Error(), "fix_adapter")
+		if errors.Is(err, domain.ErrFIXNotTransmitted) {
+			// Nothing reached the wire: release the fence and retry, possibly on another adapter.
+			if releaseErr := w.orders.ReleaseSendFence(ctx, routed.ID, "FIX send not transmitted: "+err.Error()); releaseErr != nil {
+				return fmt.Errorf("%w: FIX send for order %s: %v; fence release failed: %v", errReconciliationRequired, routed.ID, err, releaseErr)
+			}
+			return fmt.Errorf("FIX send for order %s not transmitted: %w", routed.ID, err)
+		}
 		return fmt.Errorf("%w: FIX send for order %s: %v", errReconciliationRequired, routed.ID, err)
 	}
 	sent, err := w.orders.MarkSent(ctx, order.ID, ad.ID(), rawFIX)
