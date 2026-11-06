@@ -40,6 +40,13 @@ type sessionApp struct {
 	secDefMu   sync.Mutex
 	secDefWait *secDefWaiter
 
+	// resetNextLogon makes the next Logon carry ResetSeqNumFlag (141=Y): both
+	// sides start again from 1. Set for the first logon of the working day and
+	// after a logon failed on sequence numbers; cleared once logged on.
+	resetNextLogon atomic.Bool
+	// logonsSent counts Logons since the last successful logon.
+	logonsSent atomic.Int32
+
 	onFIX func(kind, sessionID, msgType, direction, clOrdID, reason string, seq int)
 }
 
@@ -66,6 +73,8 @@ func (a *sessionApp) OnCreate(sessionID quickfix.SessionID) {
 
 func (a *sessionApp) OnLogon(sessionID quickfix.SessionID) {
 	a.loggedOn.Store(true)
+	a.resetNextLogon.Store(false)
+	a.logonsSent.Store(0)
 	a.log.Info("fix session logon", "adapter_id", a.adapterID, "session", sessionID.String())
 	a.emitFIX("FIX_SESSION_CONNECTED", sessionID.String(), "A", "IN", "", "", 0)
 }
@@ -118,13 +127,44 @@ func (a *sessionApp) sentBySeq(raw string) (sentMessage, bool) {
 
 func (a *sessionApp) ToAdmin(msg *quickfix.Message, sessionID quickfix.SessionID) {
 	a.rememberSent(msg)
-	if kind, _ := msg.MsgType(); kind == "A" {
+	switch kind, _ := msg.MsgType(); kind {
+	case "A":
 		if a.username != "" {
 			msg.Body.SetString(tag.Username, a.username)
 		}
 		if a.password != "" {
 			msg.Body.SetString(tag.Password, a.password)
 		}
+		// While waiting for a Logon reply QuickFIX does not pass the venue's
+		// Logout on, so a refusal over numbers is seen only as logons that
+		// never succeed: after three of them the next one resets.
+		if a.logonsSent.Add(1) > maxLogonsBeforeReset {
+			a.requestSequenceReset("logons refused since the last successful one")
+		}
+		// QuickFIX resets its store and renumbers this Logon to 1 when it
+		// carries 141=Y, and does not reset again on the venue's 141=Y reply.
+		if a.resetNextLogon.Load() {
+			msg.Body.SetBool(tag.ResetSeqNumFlag, true)
+			a.log.Info("fix logon with sequence reset", "adapter_id", a.adapterID)
+		}
+	case "5":
+		// The QUIK adapter starts again from 1 when it is restarted (every day
+		// at 09:05): its Logon is then below our expected number and QuickFIX
+		// logs out. Without a reset the session would stay refused until the
+		// venue's counter caught up (36 minutes on 06.11.2026).
+		if text, _ := msg.Body.GetString(tag.Text); !a.loggedOn.Load() && strings.HasPrefix(text, "MsgSeqNum too low") {
+			a.requestSequenceReset("venue restarted its sequence numbers: " + text)
+		}
+	}
+}
+
+// maxLogonsBeforeReset is how many Logons may go unanswered by a successful
+// logon before the next one resets the sequence numbers.
+const maxLogonsBeforeReset = 3
+
+func (a *sessionApp) requestSequenceReset(reason string) {
+	if !a.resetNextLogon.Swap(true) {
+		a.log.Warn("fix sequence numbers out of step; next logon resets them", "adapter_id", a.adapterID, "reason", reason)
 	}
 }
 func (a *sessionApp) ToApp(msg *quickfix.Message, sessionID quickfix.SessionID) error {

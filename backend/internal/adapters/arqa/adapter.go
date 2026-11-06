@@ -43,6 +43,11 @@ func New(meta domain.Adapter, log *slog.Logger, onExec domain.ExecutionHandler, 
 	return a
 }
 
+// ResetSequenceAtNextLogon makes the next Logon start the numbers again from 1
+// (141=Y). It is used for the first logon of the working day: the QUIK
+// adapter is restarted every morning and starts from 1 itself.
+func (a *Adapter) ResetSequenceAtNextLogon() { a.app.resetNextLogon.Store(true) }
+
 func (a *Adapter) SetFIXHandler(fn func(kind, sessionID, msgType, direction, clOrdID, reason string, seq int)) {
 	if a.app != nil {
 		a.app.onFIX = fn

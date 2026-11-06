@@ -77,7 +77,7 @@ func (m *Manager) SetObserver(fn func(eventType, subtype, adapterID, message str
 
 func (m *Manager) StartAll(ctx context.Context) error {
 	if m.inSession() {
-		if err := m.startEnabled(ctx); err != nil {
+		if err := m.startEnabled(ctx, false); err != nil {
 			return err
 		}
 	} else {
@@ -91,7 +91,9 @@ func (m *Manager) StartAll(ctx context.Context) error {
 	return nil
 }
 
-func (m *Manager) startEnabled(ctx context.Context) error {
+// startEnabled starts the enabled adapters; newDay makes their first Logon
+// reset the sequence numbers.
+func (m *Manager) startEnabled(ctx context.Context, newDay bool) error {
 	list, err := m.store.List(ctx)
 	if err != nil {
 		return err
@@ -100,7 +102,7 @@ func (m *Manager) startEnabled(ctx context.Context) error {
 		if !meta.Enabled {
 			continue
 		}
-		if err := m.startOne(ctx, meta); err != nil {
+		if err := m.startAdapter(ctx, meta, newDay); err != nil {
 			m.log.Error("adapter start failed", "adapter_id", meta.ID, "error", err)
 			_ = m.store.UpdateStatus(ctx, meta.ID, domain.AdapterOffline, false)
 			_ = m.store.AddEvent(ctx, meta.ID, "START_FAILED", err.Error())
@@ -129,7 +131,9 @@ func (m *Manager) scheduleLoop(ctx context.Context) {
 		case open && m.paused.Load():
 			m.log.Info("FIX session hours begin: starting adapters", "hours", m.hours.String())
 			m.paused.Store(false)
-			if err := m.startEnabled(ctx); err != nil {
+			// The QUIK adapters were restarted overnight and start from 1:
+			// the first Logon of the day resets the numbers on both sides.
+			if err := m.startEnabled(ctx, true); err != nil {
 				m.log.Error("adapter list unavailable; retrying", "error", err)
 				m.paused.Store(true)
 			}
@@ -147,6 +151,10 @@ func (m *Manager) scheduleLoop(ctx context.Context) {
 }
 
 func (m *Manager) startOne(ctx context.Context, meta domain.Adapter) error {
+	return m.startAdapter(ctx, meta, false)
+}
+
+func (m *Manager) startAdapter(ctx context.Context, meta domain.Adapter, resetSequence bool) error {
 	if !m.inSession() {
 		return errOutsideSessionHours
 	}
@@ -172,11 +180,16 @@ func (m *Manager) startOne(ctx context.Context, meta domain.Adapter) error {
 	default:
 		return fmt.Errorf("unknown adapter type %s", meta.Type)
 	}
-	if impl, ok := ad.(*arqa.Adapter); ok && m.onFIX != nil {
-		id := meta.ID
-		impl.SetFIXHandler(func(kind, sessionID, msgType, direction, clOrdID, reason string, seq int) {
-			m.onFIX(kind, id, sessionID, msgType, direction, clOrdID, reason, seq)
-		})
+	if impl, ok := ad.(*arqa.Adapter); ok {
+		if m.onFIX != nil {
+			id := meta.ID
+			impl.SetFIXHandler(func(kind, sessionID, msgType, direction, clOrdID, reason string, seq int) {
+				m.onFIX(kind, id, sessionID, msgType, direction, clOrdID, reason, seq)
+			})
+		}
+		if resetSequence {
+			impl.ResetSequenceAtNextLogon()
+		}
 	}
 	if err := ad.Start(ctx); err != nil {
 		return err
