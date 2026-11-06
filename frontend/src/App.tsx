@@ -5,6 +5,7 @@ import AppShell from "./components/AppShell";
 import { BreadcrumbProvider } from "./components/breadcrumbs";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { ToastProvider } from "./components/Toast";
+import { ConfirmProvider } from "./components/confirm";
 import { AdminStreamProvider } from "./hooks/useAdminStream";
 import { PageSpinner } from "./components/feedback";
 import { lazyPage } from "./lib/lazyPage";
@@ -45,6 +46,7 @@ function Private() {
   if (!valid) return <Navigate to="/login" replace />;
   return (
     <ToastProvider>
+      <ConfirmProvider>
       <AdminStreamProvider>
         <BreadcrumbProvider>
           <AppShell>
@@ -56,6 +58,7 @@ function Private() {
           </AppShell>
         </BreadcrumbProvider>
       </AdminStreamProvider>
+      </ConfirmProvider>
     </ToastProvider>
   );
 }

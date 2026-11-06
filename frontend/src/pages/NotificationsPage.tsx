@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { ActionButton } from "../components/ActionButton";
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { api } from "../api";
@@ -91,15 +92,13 @@ export default function NotificationsPage() {
         title="Уведомления"
         subtitle="События системы и торгового потока · повторяющиеся ошибки объединяются"
         actions={
-          <button type="button" className="btn-muted" onClick={() => readAll.mutate()} disabled={readAll.isPending}>
+          <ActionButton onAction={() => readAll.mutateAsync()} disabled={!q.data?.unread} success="Все уведомления отмечены прочитанными" failure="Не удалось отметить уведомления">
             Прочитать все
-          </button>
+          </ActionButton>
         }
       />
       <div className="notification-toolbar"><div className="flex gap-1"><button type="button" className={unreadOnly ? "btn-muted" : "btn"} aria-pressed={!unreadOnly} onClick={() => { setUnreadOnly(false); setPage(1); }}>Все события</button><button type="button" className={unreadOnly ? "btn" : "btn-muted"} aria-pressed={unreadOnly} onClick={() => { setUnreadOnly(true); setPage(1); }}>Непрочитанные · {formatNumber(q.data?.unread ?? 0)}</button></div><span>{q.isFetching ? "Обновление…" : `Всего ${formatNumber(total)}`}</span></div>
       {q.error && <ErrorBanner error={q.error} onRetry={() => q.refetch()} />}
-      {readAll.error && <ErrorBanner error={readAll.error} />}
-      {readOne.error && <ErrorBanner error={readOne.error} />}
       <div className="space-y-2">
         {items.map((n) => (
           <div key={n.id} className={`card notification-card ${!n.read_at ? "notification-unread" : ""} border ${tone(n.severity)}`}>
@@ -121,9 +120,9 @@ export default function NotificationsPage() {
                   Логи
                 </Link>
                 {!n.read_at && (
-                  <button type="button" className="btn-muted" disabled={readOne.isPending} onClick={() => readOne.mutate(n.id)}>
+                  <ActionButton onAction={() => readOne.mutateAsync(n.id)} failure="Не удалось отметить уведомление">
                     Прочитано
-                  </button>
+                  </ActionButton>
                 )}
               </div>
             </div>

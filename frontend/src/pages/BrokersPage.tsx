@@ -6,6 +6,7 @@ import { formatDateTime, formatRelative } from "../labels";
 import { liveRefetchInterval } from "../lib/poll";
 import { useAdminStream } from "../hooks/useAdminStream";
 import { useToast } from "../components/Toast";
+import { ActionButton } from "../components/ActionButton";
 import { StatusBadge } from "../components/StatusBadge";
 import { Icons } from "../components/icons";
 import { PageHeader } from "../components/PageHeader";
@@ -29,19 +30,16 @@ export default function BrokersPage() {
   const [showCreate, setShowCreate] = useState(false);
   const create = useMutation({
     mutationFn: ({ code, name }: BrokerCreateValues) => api("/api/v1/admin/brokers", { method: "POST", body: JSON.stringify({ code, name, description: "" }) }),
-    onSuccess: () => {
+    onSuccess: (_, values) => {
+      toast.push(`Брокер «${values.name}» создан`, "ok");
       setShowCreate(false);
       qc.invalidateQueries({ queryKey: ["brokers"] });
     },
   });
 
   async function setStatus(id: number, status: string) {
-    try {
-      await api(`/api/v1/admin/brokers/${id}`, { method: "PATCH", body: JSON.stringify({ status }) });
-      qc.invalidateQueries({ queryKey: ["brokers"] });
-    } catch (err) {
-      toast.push(err instanceof Error ? err.message : "Не удалось изменить статус");
-    }
+    await api(`/api/v1/admin/brokers/${id}`, { method: "PATCH", body: JSON.stringify({ status }) });
+    await qc.invalidateQueries({ queryKey: ["brokers"] });
   }
 
 
@@ -52,7 +50,9 @@ export default function BrokersPage() {
     { id: "connected", header: "Подключение", value: b => b.connected ? "Подключён" : "Нет соединения", cell: b => <><StatusBadge status={b.connected ? "CONNECTED" : "OFFLINE"} />{b.connected && <div className="mt-1 text-[10px] text-muted">{formatRelative(b.last_activity)}{b.last_ip ? " · " + b.last_ip : ""}</div>}</> },
     { id: "status", header: "Статус", value: b => b.status, cell: b => <StatusBadge status={b.status} /> },
     { id: "created", header: "Создан", value: b => dateValue(b.created_at), cell: b => formatDateTime(b.created_at), className: "text-[10px] whitespace-nowrap" },
-    { id: "actions", header: "Действия", value: () => "", sortable: false, cell: b => <div className="flex gap-1.5"><Link className="btn-muted" to={"/brokers/" + b.id + "?tab=tokens"}>Открыть</Link><button type="button" className="btn-muted" onClick={() => setStatus(b.id, b.status === "ACTIVE" ? "BLOCKED" : "ACTIVE")}>{b.status === "ACTIVE" ? "Заблокировать" : "Активировать"}</button></div> },
+    { id: "actions", header: "Действия", value: () => "", sortable: false, cell: b => <div className="flex gap-1.5"><Link className="btn-muted" to={"/brokers/" + b.id + "?tab=tokens"}>Открыть</Link>{b.status === "ACTIVE"
+      ? <ActionButton onAction={() => setStatus(b.id, "BLOCKED")} success={`Брокер «${b.name}» заблокирован`} failure="Не удалось изменить статус" confirm={{ title: `Заблокировать «${b.name}»?`, description: "Новые запросы с токенами брокера будут отклоняться, пока его не активируют снова. Заявки, уже отправленные в QUIK, этим не снимаются.", confirmLabel: "Заблокировать", danger: true }}>Заблокировать</ActionButton>
+      : <ActionButton onAction={() => setStatus(b.id, "ACTIVE")} success={`Брокер «${b.name}» активирован`} failure="Не удалось изменить статус">Активировать</ActionButton>}</div> },
   ];
 
   return (

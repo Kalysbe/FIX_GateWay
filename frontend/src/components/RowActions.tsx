@@ -1,9 +1,33 @@
 import { Icons } from "./icons";
 import { useToast } from "./Toast";
+import { useConfirm, type ConfirmOptions } from "./confirm";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "./ui/dropdown-menu";
 
-export function RowActions({ label, actions }: { label: string; actions: { label: string; run: () => void | Promise<void>; danger?: boolean }[] }) {
+export type RowAction = {
+  label: string;
+  run: () => void | Promise<unknown>;
+  danger?: boolean;
+  /** Toast after the action succeeds. */
+  success?: string;
+  /** Ask first; the action then runs from the dialog. */
+  confirm?: Omit<ConfirmOptions, "action" | "success">;
+};
+
+export function RowActions({ label, actions }: { label: string; actions: RowAction[] }) {
   const toast = useToast();
+  const ask = useConfirm();
+  async function run(action: RowAction) {
+    if (action.confirm) {
+      await ask({ ...action.confirm, action: async () => { await action.run(); }, success: action.success });
+      return;
+    }
+    try {
+      await action.run();
+      if (action.success) toast.push(action.success, "ok");
+    } catch (error) {
+      toast.push(error instanceof Error ? error.message : "Не удалось выполнить действие");
+    }
+  }
   return (
     <DropdownMenu modal={false}>
       <DropdownMenuTrigger asChild>
@@ -16,9 +40,8 @@ export function RowActions({ label, actions }: { label: string; actions: { label
           <DropdownMenuItem
             key={action.label}
             variant={action.danger ? "destructive" : "default"}
-            onSelect={() => {
-              Promise.resolve().then(action.run).catch((error) => toast.push(error instanceof Error ? error.message : "Не удалось выполнить действие"));
-            }}
+            // Let the menu close before a dialog takes focus.
+            onSelect={() => { window.setTimeout(() => void run(action), 0); }}
           >
             {action.label}
           </DropdownMenuItem>

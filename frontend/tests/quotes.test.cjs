@@ -28,6 +28,8 @@ const common = {
   '../components/PageHeader': { PageHeader: ({ title, subtitle }) => React.createElement('header', null, title, ' ', subtitle) },
   '../components/feedback': { ErrorBanner: () => React.createElement('p', null, 'error-banner'), PageSpinner: () => null },
   '../components/DataTable': table,
+  '../lib/urlState': { useUrlState: () => ['', () => {}] },
+  '../components/RowDrawer': { RowDrawer: () => null },
 };
 
 const quote = '{"OrderNum":7412,"ClassCode":"LIST_GD","TradeDate":"2026-10-26T00:00:00","SecCode":"GD052270215","Price":100.00000000,"Value":1000.00,"Balance":10.00000000,"Qty":10.00000000,"FirmId":"SENTI2004","Operation":"Купля","State":"Активна"}';

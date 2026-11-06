@@ -1,4 +1,7 @@
 import { RowActions } from "../components/RowActions";
+import { ActionButton } from "../components/ActionButton";
+import { useConfirm } from "../components/confirm";
+import { useToast } from "../components/Toast";
 import { DataTable } from "../components/DataTable";
 import { dateValue } from "../lib/table";
 import { useEffect, useMemo, useState } from "react";
@@ -134,7 +137,9 @@ export default function BrokerDetailPage() {
   const [revealedToken, setRevealedToken] = useState<string | null>(null);
   const [revealTitle, setRevealTitle] = useState("ТОКЕН СОЗДАН");
   const [revealNote, setRevealNote] = useState("");
-  const [confirmRevoke, setConfirmRevoke] = useState<APIToken | null>(null);
+  const [firmSaving, setFirmSaving] = useState(false);
+  const toast = useToast();
+  const confirm = useConfirm();
   const [editFirm, setEditFirm] = useState<APIToken | null>(null);
   const [editFirmValue, setEditFirmValue] = useState("");
   const [editFirmError, setEditFirmError] = useState("");
@@ -209,7 +214,6 @@ export default function BrokerDetailPage() {
 
   async function revoke(tokenId: string) {
     await api(`/api/v1/admin/tokens/${tokenId}/revoke`, { method: "POST" });
-    setConfirmRevoke(null);
     qc.invalidateQueries({ queryKey: ["tokens", id] });
     qc.invalidateQueries({ queryKey: ["security", id] });
   }
@@ -217,6 +221,7 @@ export default function BrokerDetailPage() {
   async function saveFirm() {
     if (!editFirm) return;
     setEditFirmError("");
+    setFirmSaving(true);
     try {
       await api(`/api/v1/admin/tokens/${editFirm.id}`, {
         method: "PATCH",
@@ -225,7 +230,10 @@ export default function BrokerDetailPage() {
     } catch (err) {
       setEditFirmError((err as Error).message || "Не удалось изменить фирму");
       return;
+    } finally {
+      setFirmSaving(false);
     }
+    toast.push(`Фирма токена «${editFirm.name}» изменена`, "ok");
     setEditFirm(null);
     qc.invalidateQueries({ queryKey: ["tokens", id] });
     qc.invalidateQueries({ queryKey: ["accounts", id] });
@@ -339,50 +347,34 @@ export default function BrokerDetailPage() {
                 </button>
               </div>
               <div className="overflow-x-auto">
-                <DataTable<APIToken> title="Токены брокера" rows={tokenList} columns={[{ id: "c0", header: "Название", value: (t) => t.name },
-{ id: "c1", header: "Статус", value: (t) => t.status },
-{ id: "c2", header: "Права", value: (t) => (t.permissions || []).join(" ") },
-{ id: "c3", header: "Истекает", value: (t) => dateValue(t.expires_at) },
-{ id: "c4", header: "Последнее использование", value: (t) => dateValue(t.last_used_at) },
-{ id: "actions", header: "Действия", value: () => "", sortable: false }]} rowKey={row => row.id} renderRow={(t) => (
-                      <tr key={t.id} className="align-middle">
-                        <td>
-                          <div className="font-medium">{t.name}</div>
-                          <div className="font-mono text-[11px] text-faint">{t.token_prefix}…</div>
-                        </td>
-                        <td>
-                          <StatusBadge status={t.status} />
-                        </td>
-                        <td>
-                          <div className="flex items-center gap-1 text-muted">
-                            {(t.permissions || []).slice(0, 6).map((p) => {
-                              const Icon = PERM_ICON[p] || Icons.lock;
-                              return (
-                                <span key={p} title={p} className="rounded bg-subtle p-1 text-muted">
-                                  <Icon size={13} />
-                                </span>
-                              );
-                            })}
-                          </div>
-                        </td>
-                        <td className={expiresTone(t.expires_at)}>
-                          {t.expires_at ? formatDate(t.expires_at) : "Без срока"}
-                        </td>
-                        <td>
-                          <div className="text-sm">{t.last_used_at ? formatDateTime(t.last_used_at) : "—"}</div>
-                          {t.last_used_ip && <div className="font-mono text-[11px] text-faint">{t.last_used_ip}</div>}
-                        </td>
-                        <td className="relative">
-                          {t.status === "ACTIVE" && (
-                            <RowActions label={"Действия токена " + t.name} actions={[
-                              { label: "Изменить фирму", run: () => { setEditFirm(t); setEditFirmValue(t.quik_firm || ""); setEditFirmError(""); } },
-                              { label: "Ротировать токен", run: () => rotate(t.id) },
-                              { label: "Отозвать токен", danger: true, run: () => setConfirmRevoke(t) },
-                            ]} />
-                          )}
-                        </td>
-                      </tr>
-                    )} emptyTitle="Записей пока нет" />
+                <DataTable<APIToken> title="Токены брокера" rows={tokenList} rowKey={row => row.id} emptyTitle="Записей пока нет"
+                  selection={{
+                    canSelect: (t) => t.status === "ACTIVE",
+                    actions: [{
+                      label: "Отозвать выбранные", danger: true,
+                      run: async (list) => {
+                        const failed: string[] = [];
+                        for (const t of list) { try { await revoke(t.id); } catch { failed.push(t.name); } }
+                        if (failed.length) throw new Error(`Не удалось отозвать: ${failed.join(", ")}. Остальные отозваны.`);
+                      },
+                      confirm: (list) => ({ title: `Отозвать токены: ${list.length}?`, danger: true, confirmLabel: "Отозвать все", description: <>Перестанут работать сразу: <span className="font-medium text-ink">{list.map(t => t.name).join(", ")}</span>. Любой запрос с ними получит HTTP 401.</> }),
+                      success: (list) => `Отозвано токенов: ${list.length}`,
+                    }],
+                  }}
+                  columns={[
+                    { id: "c0", header: "Название", value: (t) => t.name, cell: (t) => <><div className="font-medium">{t.name}</div><div className="font-mono text-[11px] text-faint">{t.token_prefix}…</div></> },
+                    { id: "c1", header: "Статус", value: (t) => t.status, cell: (t) => <StatusBadge status={t.status} /> },
+                    { id: "c2", header: "Права", value: (t) => (t.permissions || []).join(" "), cell: (t) => <div className="flex items-center gap-1 text-muted">{(t.permissions || []).slice(0, 6).map((p) => { const Icon = PERM_ICON[p] || Icons.lock; return <span key={p} title={p} className="rounded bg-subtle p-1 text-muted"><Icon size={13} /></span>; })}</div> },
+                    { id: "c3", header: "Истекает", value: (t) => dateValue(t.expires_at), cell: (t) => <span className={expiresTone(t.expires_at)}>{t.expires_at ? formatDate(t.expires_at) : "Без срока"}</span> },
+                    { id: "c4", header: "Последнее использование", value: (t) => dateValue(t.last_used_at), cell: (t) => <><div className="text-sm">{t.last_used_at ? formatDateTime(t.last_used_at) : "—"}</div>{t.last_used_ip && <div className="font-mono text-[11px] text-faint">{t.last_used_ip}</div>}</> },
+                    { id: "actions", header: "Действия", value: () => "", sortable: false, cell: (t) => t.status === "ACTIVE" ? (
+                      <RowActions label={"Действия токена " + t.name} actions={[
+                        { label: "Изменить фирму", run: () => { setEditFirm(t); setEditFirmValue(t.quik_firm || ""); setEditFirmError(""); } },
+                        { label: "Ротировать токен", run: () => rotate(t.id), success: `Токен «${t.name}» ротирован`, confirm: { title: "Ротировать токен?", description: "Будет выпущен новый токен. Старый продолжит работать, пока вы его не отзовёте.", confirmLabel: "Ротировать" } },
+                        { label: "Отозвать токен", danger: true, run: () => revoke(t.id), success: `Токен «${t.name}» отозван`, confirm: { title: "Отозвать токен?", danger: true, confirmLabel: "Отозвать", description: <><span className="font-medium text-ink">{t.name}</span> перестанет работать сразу. Любой запрос с этим токеном получит HTTP 401.</> } },
+                      ]} />
+                    ) : null },
+                  ]} />
               </div>
               <div className="m-4 flex gap-2 rounded-lg border border-info/20 bg-info-soft px-3 py-2.5 text-sm text-info">
                 <Icons.info size={18} className="mt-0.5 shrink-0 text-info" />
@@ -591,23 +583,38 @@ export default function BrokerDetailPage() {
       {manageIP && (
         <Modal title="Управление IP Whitelist" onClose={() => setManageIP(false)}>
           <label className="mb-3 flex items-center gap-2 text-sm">
-            <input type="checkbox" checked={wlEnabled} onChange={(e) => toggleWhitelist(e.target.checked)} />
+            <input type="checkbox" checked={wlEnabled} onChange={(e) => {
+              const enabled = e.target.checked;
+              void confirm({
+                title: enabled ? "Включить IP whitelist?" : "Выключить IP whitelist?",
+                description: enabled
+                  ? ipEntries.length ? "Запросы брокера будут приниматься только с адресов из списка." : "Список пуст: после включения брокер не сможет обратиться к API ни с одного адреса."
+                  : "Запросы брокера будут приниматься с любого адреса.",
+                confirmLabel: enabled ? "Включить" : "Выключить",
+                danger: enabled ? !ipEntries.length : true,
+                action: () => toggleWhitelist(enabled),
+                success: enabled ? "IP whitelist включён" : "IP whitelist выключен",
+              });
+            }} />
             Включить whitelist
           </label>
-          <IPEntryForm onAdd={addIP} />
-          <DataTable<IPWhitelistEntry> title="Адреса доступа" rows={ipEntries} columns={[{ id: "c0", header: "IP / CIDR", value: (e) => e.ip_cidr },
-{ id: "c1", header: "Описание", value: (e) => e.note },
-{ id: "actions", header: "Действия", value: () => "", sortable: false }]} rowKey={row => row.id} renderRow={(e) => (
-                <tr key={e.id}>
-                  <td className="font-mono">{e.ip_cidr}</td>
-                  <td>{e.note || "—"}</td>
-                  <td>
-                    <button type="button" className="btn-muted" onClick={() => removeIP(e.id)}>
-                      Удалить
-                    </button>
-                  </td>
-                </tr>
-              )} emptyTitle="Записей пока нет" />
+          <IPEntryForm onAdd={async (values) => { await addIP(values); toast.push(`Адрес ${values.ip} добавлен`, "ok"); }} />
+          <DataTable<IPWhitelistEntry> title="Адреса доступа" rows={ipEntries} rowKey={row => row.id} emptyTitle="Записей пока нет"
+            selection={{ actions: [{
+              label: "Удалить выбранные", danger: true,
+              run: async (list) => { for (const e of list) await removeIP(e.id); },
+              confirm: (list) => ({ title: `Удалить адреса: ${list.length}?`, danger: true, confirmLabel: "Удалить", description: `${list.map(e => e.ip_cidr).join(", ")} больше не смогут обращаться к API, пока whitelist включён.` }),
+              success: (list) => `Удалено адресов: ${list.length}`,
+            }] }}
+            columns={[
+              { id: "c0", header: "IP / CIDR", value: (e) => e.ip_cidr, className: "font-mono" },
+              { id: "c1", header: "Описание", value: (e) => e.note, cell: (e) => e.note || "—" },
+              { id: "actions", header: "Действия", value: () => "", sortable: false, cell: (e) => (
+                <ActionButton onAction={() => removeIP(e.id)} success={`Адрес ${e.ip_cidr} удалён`} confirm={{ title: "Удалить адрес?", description: `${e.ip_cidr} больше не сможет обращаться к API, пока whitelist включён.`, confirmLabel: "Удалить", danger: true }}>
+                  Удалить
+                </ActionButton>
+              ) },
+            ]} />
         </Modal>
       )}
 
@@ -657,7 +664,8 @@ export default function BrokerDetailPage() {
               disabled={createToken.isPending || !tokenName || !quikFirm.trim() || perms.length === 0}
               onClick={() => createToken.mutate()}
             >
-              Создать
+              {createToken.isPending && <Icons.refresh size={14} className="animate-spin" />}
+              {createToken.isPending ? "Создание…" : "Создать"}
             </button>
           </div>
         </Modal>
@@ -674,8 +682,9 @@ export default function BrokerDetailPage() {
             <button type="button" className="btn-muted" onClick={() => setEditFirm(null)}>
               Отмена
             </button>
-            <button type="button" className="btn" disabled={!editFirmValue.trim()} onClick={() => saveFirm()}>
-              Сохранить
+            <button type="button" className="btn" disabled={!editFirmValue.trim() || firmSaving} onClick={() => saveFirm()}>
+              {firmSaving && <Icons.refresh size={14} className="animate-spin" />}
+              {firmSaving ? "Сохранение…" : "Сохранить"}
             </button>
           </div>
         </Modal>
@@ -688,7 +697,7 @@ export default function BrokerDetailPage() {
             {revealedToken}
           </div>
           <div className="flex justify-end gap-2">
-            <button type="button" className="btn" onClick={() => navigator.clipboard.writeText(revealedToken)}>
+            <button type="button" className="btn" onClick={() => navigator.clipboard.writeText(revealedToken).then(() => toast.push("Токен скопирован в буфер обмена", "ok"), () => toast.push("Браузер не дал скопировать: выделите токен вручную"))}>
               Копировать токен
             </button>
             <button type="button" className="btn-muted" onClick={() => setRevealedToken(null)}>
@@ -698,22 +707,6 @@ export default function BrokerDetailPage() {
         </Modal>
       )}
 
-      {confirmRevoke && (
-        <Modal title="Отозвать токен?" onClose={() => setConfirmRevoke(null)}>
-          <p className="mb-4 text-sm text-muted">
-            <span className="font-medium">{confirmRevoke.name}</span> перестанет работать сразу. Любой запрос с этим
-            токеном получит HTTP 401.
-          </p>
-          <div className="flex justify-end gap-2">
-            <button type="button" className="btn-muted" onClick={() => setConfirmRevoke(null)}>
-              Отмена
-            </button>
-            <button type="button" className="btn" onClick={() => revoke(confirmRevoke.id)}>
-              Отозвать
-            </button>
-          </div>
-        </Modal>
-      )}
 
       {editOpen && (
         <Modal title="Редактировать брокера" onClose={() => setEditOpen(false)}>
@@ -723,6 +716,7 @@ export default function BrokerDetailPage() {
             onSave={async (values) => {
               await api(`/api/v1/admin/brokers/${id}`, { method: "PATCH", body: JSON.stringify(values) });
               setEditOpen(false);
+              toast.push("Изменения брокера сохранены", "ok");
               qc.invalidateQueries({ queryKey: ["broker", id] });
               qc.invalidateQueries({ queryKey: ["brokers"] });
             }}

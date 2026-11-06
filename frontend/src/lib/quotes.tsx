@@ -22,8 +22,8 @@ export function instrumentPath(board: DBOrder[string] | undefined, symbol: DBOrd
 }
 
 export function quoteColumns(): TableColumn<DBOrder>[] {
-  const num = (field: string, header: string, digits = 2): TableColumn<DBOrder> =>
-    ({ id: field, header, value: r => dbSortValue(r[field]), exportValue: r => dbValue(r[field]), cell: r => fmt(r[field], digits), numeric: true });
+  const num = (field: string, header: string, digits = 2, trend = false): TableColumn<DBOrder> =>
+    ({ id: field, header, value: r => dbSortValue(r[field]), exportValue: r => dbValue(r[field]), cell: r => fmt(r[field], digits), numeric: true, trend });
   return [
     { id: "operation", header: "Операция", value: r => dbValue(r.Operation), cell: r => <span className={isBuy(r.Operation) ? "badge-success" : "badge-danger"}>{r.Operation == null ? "—" : dbValue(r.Operation)}</span> },
     { id: "number", header: "№ заявки", value: r => dbSortValue(r.OrderNum), exportValue: r => dbValue(r.OrderNum), className: "font-mono",
@@ -32,10 +32,10 @@ export function quoteColumns(): TableColumn<DBOrder>[] {
     { id: "class", header: "Класс", value: r => dbValue(r.ClassCode), className: "font-mono" },
     { id: "symbol", header: "Инструмент", value: r => dbValue(r.SecCode), className: "font-mono font-medium",
       cell: r => r.ClassCode != null && r.SecCode != null ? <Link className="text-accent" to={instrumentPath(r.ClassCode, r.SecCode)}>{dbValue(r.SecCode)}</Link> : dbValue(r.SecCode) },
-    num("Price", "Цена"),
+    num("Price", "Цена", 2, true),
     num("Value", "Сумма"),
     num("Qty", "Количество", 0),
-    num("Balance", "Остаток", 0),
+    num("Balance", "Остаток", 0, true),
     { id: "date", header: "Дата", value: r => dbValue(r.TradeDate), cell: r => dbValue(r.TradeDate).slice(0, 10), className: "font-mono" },
   ];
 }

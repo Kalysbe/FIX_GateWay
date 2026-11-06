@@ -75,7 +75,7 @@ export default function LogsPage() {
 
   const [from, setFrom] = useState(isoDayStart());
   const [to, setTo] = useState("");
-  const [severity, setSeverity] = useState("");
+  const [severity, setSeverity] = useState(params.get("severity") || "");
   const [ip, setIp] = useState("");
   const [requestId, setRequestId] = useState("");
   const [orderId, setOrderId] = useState("");

@@ -24,6 +24,8 @@ export type QuikColumn = {
   hidden?: boolean;
   link?: (row: DBOrder) => string | undefined;
   render?: (row: DBOrder, text: ReactNode) => ReactNode;
+  /** In a live table, a change of the value flashes up or down. */
+  trend?: boolean;
 };
 
 function fieldIndex(rows: DBOrder[]): Map<string, string> {
@@ -76,7 +78,7 @@ export function quikColumns(rows: DBOrder[], spec: QuikColumn[]): TableColumn<DB
     const kind = c.kind ?? "text";
     chosen.push({
       id: c.id, header: c.header, title: sub ? `${field} / ${sub}` : field,
-      numeric: kind === "number",
+      numeric: kind === "number", trend: c.trend,
       defaultHidden: c.hidden || (rows.length > 0 && rows.every(r => blank(r[field]))),
       value: r => dbSortValue(r[field]), exportValue: r => dbValue(r[field]),
       cell: r => {

@@ -1,9 +1,12 @@
 // @vitest-environment jsdom
 import { afterEach, expect, test, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render as rtlRender, screen, within } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
+import type { ReactElement } from "react";
 import { DataTable, type ServerPage, type TableColumn } from "../src/components/DataTable";
 
 afterEach(cleanup);
+const render = (ui: ReactElement) => { const r = rtlRender(ui, { wrapper: ({ children }) => <MemoryRouter>{children}</MemoryRouter> }); return { ...r, rerender: (next: ReactElement) => r.rerender(next) }; };
 
 type Row = { id: number; symbol: string; price: number };
 const columns: TableColumn<Row>[] = [
@@ -66,4 +69,53 @@ test("server pages move from the table footer", () => {
   fireEvent.click(within(group).getByRole("button", { name: /Предыдущие 200/ }));
   expect(onPrevious).toHaveBeenCalledOnce();
   expect((within(group).getByRole("button", { name: /Следующие 200/ }) as HTMLButtonElement).disabled).toBe(true);
+});
+
+test("a live table marks new rows and the direction of a changed trend value, not the first load", () => {
+  const trendCols: TableColumn<Row>[] = [{ id: "symbol", header: "Инструмент", value: r => r.symbol }, { id: "price", header: "Цена", value: r => r.price, numeric: true, trend: true }];
+  const table = (data: Row[], resetKey = "") => <DataTable title="Live" live rows={data} columns={trendCols} rowKey={r => r.id} resetKey={resetKey} />;
+  const { rerender } = render(table(rows(2)));
+  expect(document.querySelector(".row-flash-new, .row-flash-changed")).toBeNull();
+  rerender(table([{ id: 0, symbol: "AAA", price: 3 }, { id: 1, symbol: "AAA", price: 1 }, { id: 2, symbol: "BBB", price: 2 }]));
+  const [first, second, third] = bodyRows();
+  expect(first.className).toContain("row-flash-changed");
+  expect(within(first).getAllByRole("cell")[1].className).toContain("cell-up");
+  expect(within(second).getAllByRole("cell")[1].className).toContain("cell-down");
+  expect(third.className).toContain("row-flash-new");
+  expect(screen.getByRole("status").textContent).toBe("+1 новая строка");
+  // Another filter or server page is a new baseline: nothing flashes.
+  rerender(table(rows(4), "other"));
+  expect(document.querySelector(".row-flash-new, .row-flash-changed")).toBeNull();
+});
+
+test("selected rows get bulk actions and the selection clears after they run", async () => {
+  const run = vi.fn(async () => {});
+  render(<DataTable title="Sel" rows={rows(3)} columns={columns} rowKey={r => r.id} selection={{ canSelect: r => r.id !== 2, actions: [{ label: "Отметить", run }] }} />);
+  const boxes = screen.getAllByRole("checkbox", { name: "Выбрать строку" }) as HTMLInputElement[];
+  expect(boxes[2].disabled).toBe(true);
+  fireEvent.click(screen.getByRole("checkbox", { name: "Выбрать строки страницы" }));
+  expect(screen.getByRole("region", { name: "Действия с выбранными строками" }).textContent).toContain("Выбрано: 2");
+  fireEvent.click(screen.getByRole("button", { name: "Отметить" }));
+  await vi.waitFor(() => expect(run).toHaveBeenCalledWith([expect.objectContaining({ id: 0 }), expect.objectContaining({ id: 1 })]));
+  await vi.waitFor(() => expect(screen.queryByRole("region", { name: "Действия с выбранными строками" })).toBeNull());
+});
+
+test("search, sort and page come back from the URL", () => {
+  rtlRender(<MemoryRouter initialEntries={["/x?q=AAA&sort=price:desc&page=2&rows=10"]}><DataTable title="Url" urlState rows={rows(30, id => ({ price: id }))} columns={columns} rowKey={r => r.id} /></MemoryRouter>);
+  expect((search() as HTMLInputElement).value).toBe("AAA");
+  expect(screen.getByRole("columnheader", { name: "Цена" }).getAttribute("aria-sort")).toBe("descending");
+  expect(pager().textContent).toContain("11–20");
+  expect(within(bodyRows()[0]).getAllByRole("cell")[1].textContent).toBe("19");
+});
+
+test("a row opens by click or Enter, but not from a link or button inside it", () => {
+  const open = vi.fn();
+  const linked: TableColumn<Row>[] = [...columns.slice(0, 2), { id: "go", header: "", value: () => "", cell: () => <button type="button">Действие</button> }];
+  render(<DataTable title="Click" rows={rows(2)} columns={linked} rowKey={r => r.id} onRowClick={open} />);
+  fireEvent.click(screen.getAllByRole("button", { name: "Действие" })[0]);
+  expect(open).not.toHaveBeenCalled();
+  fireEvent.click(bodyRows()[1].querySelector("td")!);
+  expect(open).toHaveBeenLastCalledWith(expect.objectContaining({ id: 1 }), expect.any(Array));
+  fireEvent.keyDown(bodyRows()[0], { key: "Enter" });
+  expect(open).toHaveBeenLastCalledWith(expect.objectContaining({ id: 0 }), expect.any(Array));
 });

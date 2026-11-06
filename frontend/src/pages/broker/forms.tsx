@@ -1,6 +1,7 @@
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { errorText, Field, FormError } from "../../components/ui/form";
+import { Icons } from "../../components/icons";
 import { brokerCreateSchema, brokerEditSchema, ipEntrySchema, type BrokerCreateValues, type BrokerEditValues, type IPEntryValues } from "../../lib/schemas";
 
 export function BrokerCreateForm({ onCreate, onCancel }: { onCreate: (values: BrokerCreateValues) => Promise<unknown>; onCancel: () => void }) {
@@ -14,7 +15,7 @@ export function BrokerCreateForm({ onCreate, onCancel }: { onCreate: (values: Br
     <FormError error={errors.root} />
     <div className="flex justify-end gap-2">
       <button type="button" className="btn-muted" onClick={onCancel}>Отмена</button>
-      <button className="btn" type="submit" disabled={isSubmitting}>Создать</button>
+      <button className="btn" type="submit" disabled={isSubmitting}>{isSubmitting && <Icons.refresh size={14} className="animate-spin" />}{isSubmitting ? "Создание…" : "Создать"}</button>
     </div>
   </form>;
 }
@@ -30,7 +31,7 @@ export function BrokerEditForm({ initial, onSave, onCancel }: { initial: BrokerE
     <FormError error={errors.root} />
     <div className="flex justify-end gap-2">
       <button type="button" className="btn-muted" onClick={onCancel}>Отмена</button>
-      <button type="submit" className="btn" disabled={isSubmitting}>Сохранить</button>
+      <button type="submit" className="btn" disabled={isSubmitting}>{isSubmitting && <Icons.refresh size={14} className="animate-spin" />}{isSubmitting ? "Сохранение…" : "Сохранить"}</button>
     </div>
   </form>;
 }
@@ -44,7 +45,7 @@ export function IPEntryForm({ onAdd }: { onAdd: (values: IPEntryValues) => Promi
     <div className="grid items-start gap-2 sm:grid-cols-[1fr_1fr_auto]">
       <Field label="IP / CIDR" labelClassName="sr-only" error={errors.ip} className="space-y-1"><input className="input" placeholder="185.10.10.10 или CIDR" {...register("ip")} /></Field>
       <Field label="Описание" labelClassName="sr-only" className="space-y-1"><input className="input" placeholder="Описание" {...register("note")} /></Field>
-      <button className="btn" type="submit" disabled={isSubmitting}>Добавить</button>
+      <button className="btn" type="submit" disabled={isSubmitting}>{isSubmitting && <Icons.refresh size={14} className="animate-spin" />}Добавить</button>
     </div>
     <FormError error={errors.root} />
   </form>;

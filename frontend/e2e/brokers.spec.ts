@@ -29,6 +29,7 @@ test.describe("брокеры", () => {
     await dialog.getByLabel("Название").fill("Гамма Брокер");
     await dialog.getByRole("button", { name: "Создать" }).click();
     await expect(dialog).toBeHidden();
+    await expect(page.getByText("Брокер «Гамма Брокер» создан")).toBeVisible();
     await expect(table.getByRole("link", { name: "Гамма Брокер" })).toBeVisible();
     expect(sent.find(r => r.method === "POST" && r.path === "/api/v1/admin/brokers")?.body).toEqual({ code: "GAMMA", name: "Гамма Брокер", description: "" });
     // Focus returns to the button that opened the dialog.

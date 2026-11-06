@@ -32,6 +32,8 @@ function renderPage(text, error = null) {
     '../api': { apiWithHeaders: () => { throw Error('unexpected network request'); } },
     '../lib/poll': { liveRefetchInterval: () => 2000 },
     '../lib/rawOrders': raw,
+    '../lib/urlState': { useUrlState: () => ['', () => {}] },
+    '../components/RowDrawer': { RowDrawer: () => null },
     '../hooks/useAdminStream': { useAdminStream: () => ({ connected: true, subscribe: () => () => {} }) },
     '../components/PageHeader': { PageHeader: ({ title }) => React.createElement('header', null, title) },
     '../components/feedback': { ErrorBanner: () => React.createElement('p', null, 'error-banner') },

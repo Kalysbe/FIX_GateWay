@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { api } from "../api";
@@ -11,8 +12,13 @@ import { StatusBadge } from "../components/StatusBadge";
 import type { Dashboard } from "../types/admin";
 import { GatewayMonitoring } from "../components/GatewayMonitoring";
 
+const RUNTIME_KEY = "fixgw-dashboard-runtime";
+
 export default function DashboardPage() {
   const { connected } = useAdminStream();
+  // The telemetry section stays open or closed the way the user left it.
+  const [runtimeOpen, setRuntimeOpen] = useState(() => { try { return localStorage.getItem(RUNTIME_KEY) === "1"; } catch { return false; } });
+  const rememberRuntime = (open: boolean) => { setRuntimeOpen(open); try { localStorage.setItem(RUNTIME_KEY, open ? "1" : "0"); } catch { /* storage may be blocked */ } };
   const q = useQuery({
     queryKey: ["dashboard"],
     staleTime: 5000,
@@ -40,17 +46,17 @@ export default function DashboardPage() {
         <Stat label="Заявок в QUIK" value={d.stats?.total ?? "—"} />
         <Stat label="Исполнено" value={d.stats?.filled ?? "—"} />
         <Stat label="Отклонено" value={d.stats?.rejected ?? "—"} />
-        <Stat label="Активных" value={d.stats?.active ?? "—"} />
+        <Stat label="Активных" value={d.stats?.active ?? "—"} to="/orders" hint="Открыть активные заявки" />
       </div>
       {d.observability && <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <Stat label="Запросов сегодня" value={d.observability.requests_today} />
-        <Stat label="Доля успеха" value={formatPct(d.observability.success_rate)} raw />
-        <Stat label="Задержка · P95" value={formatMs(d.observability.p95_latency_ms)} raw />
-        <Stat label="Брокеров онлайн" value={d.observability.connected_now ?? d.connected_brokers?.length ?? 0} />
+        <Stat label="Запросов сегодня" value={d.observability.requests_today} to="/logs/api" hint="Журнал API-запросов" />
+        <Stat label="Доля успеха" value={formatPct(d.observability.success_rate)} raw to="/logs/errors" hint="Ошибки за сегодня" />
+        <Stat label="Задержка · P95" value={formatMs(d.observability.p95_latency_ms)} raw to="/monitoring" hint="Мониторинг шлюза" />
+        <Stat label="Брокеров онлайн" value={d.observability.connected_now ?? d.connected_brokers?.length ?? 0} to="/brokers" hint="Список брокеров" />
       </div>}
       <div className="grid gap-3 md:grid-cols-3">
         {Object.entries(d.system).map(([k, v]) => (
-          <div key={k} className="card flex items-center justify-between gap-3">
+          <Link key={k} to="/monitoring" title="Мониторинг шлюза" className="card card-link flex items-center justify-between gap-3">
             <div>
               <div className="text-[13px] text-muted">{systemKeyLabel(k)}</div>
               <div className="mt-2">
@@ -66,17 +72,17 @@ export default function DashboardPage() {
                     : "bg-danger"
               }`}
             />
-          </div>
+          </Link>
         ))}
       </div>
-      {d.observability && <div className="dashboard-detail-stats"><span>Ошибки запросов <strong>{formatNumber(d.observability.failed)}</strong></span><span>Критические <strong className="text-danger">{formatNumber(d.observability.critical_today)}</strong></span><span>Средняя задержка <strong>{formatMs(d.observability.avg_latency_ms)}</strong></span><span>P99 <strong>{formatMs(d.observability.p99_latency_ms)}</strong></span><span>Ошибки входа <strong>{formatNumber(d.observability.auth_failures_today)}</strong></span></div>}
+      {d.observability && <div className="dashboard-detail-stats"><Link to="/logs/errors">Ошибки запросов <strong>{formatNumber(d.observability.failed)}</strong></Link><Link to="/logs/errors?severity=CRITICAL">Критические <strong className="text-danger">{formatNumber(d.observability.critical_today)}</strong></Link><span>Средняя задержка <strong>{formatMs(d.observability.avg_latency_ms)}</strong></span><span>P99 <strong>{formatMs(d.observability.p99_latency_ms)}</strong></span><Link to="/logs/auth">Ошибки входа <strong>{formatNumber(d.observability.auth_failures_today)}</strong></Link></div>}
       <div className="grid gap-3 md:grid-cols-2">
         <div className="card">
           <h2 className="mb-3 text-[15px] font-semibold tracking-tight">FIX-адаптеры</h2>
           {d.adapters.some(isHiddenAdapter) && <p className="mb-3 text-xs text-muted">Отключены: {d.adapters.filter(isHiddenAdapter).length}. <Link to="/adapters" className="text-accent">Все адаптеры →</Link></p>}
           <div className="space-y-2">
             {d.adapters.filter((a) => !isHiddenAdapter(a)).map((a) => (
-              <div key={a.id} className="flex items-center justify-between rounded-md bg-surface px-3 py-2">
+              <Link key={a.id} to="/adapters" className="flex items-center justify-between rounded-md bg-surface px-3 py-2 hover:bg-subtle">
                 <div>
                   <div className="font-medium">{displayAdapterName(a.name)}</div>
                   <div className="font-mono text-xs text-muted">
@@ -89,7 +95,7 @@ export default function DashboardPage() {
                     активных {a.active_orders} · готово {a.processed_orders}
                   </div>
                 </div>
-              </div>
+              </Link>
             ))}
             {d.adapters.every(isHiddenAdapter) && <EmptyState title="Нет включённых адаптеров" />}
           </div>
@@ -203,18 +209,18 @@ export default function DashboardPage() {
           </table>
         </div>
       </div>
-      <details className="dashboard-runtime"><summary><span>Телеметрия и путь заявки</span><span>Нагрузка сервера · графики · FIX-сессии</span></summary><div className="mt-4"><GatewayMonitoring dashboard={d} /></div></details>
+      <details className="dashboard-runtime" open={runtimeOpen} onToggle={e => rememberRuntime(e.currentTarget.open)}><summary><span>Телеметрия и путь заявки</span><span>Нагрузка сервера · графики · FIX-сессии</span></summary><div className="mt-4"><GatewayMonitoring dashboard={d} /></div></details>
     </div>
   );
 }
 
-function Stat({ label, value, raw }: { label: string; value: number | string; raw?: boolean }) {
-  return (
-    <div className={"card metric-card " + (/Отклонено|Ошиб/.test(label) ? "metric-card-danger" : /Исполнено|успеха/.test(label) ? "metric-card-success" : "")} >
-      <div className="text-[11px] text-muted">{label}</div>
-      <div className="mt-1.5 font-mono text-[1.7rem] font-medium tracking-tight">
-        {raw ? value : formatNumber(Number(value) || 0)}
-      </div>
+function Stat({ label, value, raw, to, hint }: { label: string; value: number | string; raw?: boolean; to?: string; hint?: string }) {
+  const className = "card metric-card " + (/Отклонено|Ошиб/.test(label) ? "metric-card-danger" : /Исполнено|успеха/.test(label) ? "metric-card-success" : "");
+  const body = <>
+    <div className="flex items-center justify-between text-[11px] text-muted">{label}{to && <span className="metric-card-go" aria-hidden>→</span>}</div>
+    <div className="mt-1.5 font-mono text-[1.7rem] font-medium tracking-tight">
+      {raw ? value : formatNumber(Number(value) || 0)}
     </div>
-  );
+  </>;
+  return to ? <Link to={to} title={hint} className={className + " card-link"}>{body}</Link> : <div className={className}>{body}</div>;
 }

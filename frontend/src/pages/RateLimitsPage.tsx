@@ -7,7 +7,9 @@ import { PageHeader } from "../components/PageHeader";
 import { TradingLimits } from "../components/TradingLimits";
 import { DataTable, type TableColumn } from "../components/DataTable";
 import { StatusBadge } from "../components/StatusBadge";
+import { Icons } from "../components/icons";
 import { Field } from "../components/ui/form";
+import { useToast } from "../components/Toast";
 import { ratePolicySchema, type RatePolicyValues } from "../lib/schemas";
 
 type Policy = { scope: string; subject: string; operation: string; rate: number; burst: number; concurrent: number; enabled: boolean };
@@ -22,6 +24,7 @@ export default function RateLimitsPage() {
   const { register, handleSubmit, setValue, watch, formState: { errors, isSubmitting: saving } } = form;
   const draft = watch();
   const [message, setMessage] = useState("");
+  const toast = useToast();
   const user = getSessionUser();
   const canEdit = user?.role === "ADMIN" || user?.role === "SUPER_ADMIN";
   const rows = new Map<string, Policy | Usage>();
@@ -29,7 +32,7 @@ export default function RateLimitsPage() {
   q.data?.usage.forEach(p => rows.set(key(p), p));
   const save = handleSubmit(async values => {
     setMessage("");
-    try { await api("/api/v1/admin/rate-limits", { method: "PUT", body: JSON.stringify(values) }); setMessage("Лимит сохранён"); await q.refetch(); }
+    try { await api("/api/v1/admin/rate-limits", { method: "PUT", body: JSON.stringify(values) }); setMessage("Лимит сохранён"); toast.push(`Лимит ${values.scope} / ${values.subject || "*"} / ${values.operation} сохранён`, "ok"); await q.refetch(); }
     catch (error) { setMessage(error instanceof Error ? error.message : "Ошибка сохранения"); }
   });
   // The scope decides which subject and operation make sense.
@@ -63,7 +66,7 @@ export default function RateLimitsPage() {
       {(["rate", "burst", "concurrent"] as const).map(field => <Field key={field} label={field} error={errors[field]}><input className="input w-full" type="number" min={1} max={1000000} {...register(field, { valueAsNumber: true })} /></Field>)}
       <label className="flex items-center gap-2 self-end pb-2 text-sm"><input type="checkbox" {...register("enabled")} />Ограничение включено</label>
       <Field label="Причина изменения" error={errors.reason}><input className="input w-full" maxLength={1000} {...register("reason")} /></Field>
-      <button className="btn self-end" disabled={saving}>{saving ? "Сохранение…" : "Сохранить"}</button>
+      <button className="btn self-end" disabled={saving}>{saving && <Icons.refresh size={14} className="animate-spin" />}{saving ? "Сохранение…" : "Сохранить"}</button>
       {message && <p role="status" className="md:col-span-3">{message}</p>}
     </form>}
   </div>;
