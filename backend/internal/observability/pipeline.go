@@ -85,22 +85,20 @@ func (p *Pipeline) Run(ctx context.Context) {
 	notifyDone := make(chan struct{})
 	go func() { defer close(notifyDone); p.runNotifications(ctx) }()
 	defer func() { <-notifyDone }()
-	_ = p.store.EnsurePartitions(ctx)
 	{
 		c, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		if err := p.store.ApplyRetention(c, p.settings.Retention); err != nil && p.log != nil {
 			p.log.Warn("obs retention failed", "error", err)
 		} else if p.log != nil {
-			p.log.Info("obs retention applied", "days", p.settings.Retention.KeepDays())
+			p.log.Info("obs retention applied", "log_days", LogKeepDays)
 		}
 		cancel()
 	}
 	t := time.NewTicker(80 * time.Millisecond)
 	defer t.Stop()
-	retain := time.NewTicker(6 * time.Hour)
+	// Hourly, so a file is gone within an hour of turning eight days old.
+	retain := time.NewTicker(time.Hour)
 	defer retain.Stop()
-	part := time.NewTicker(24 * time.Hour)
-	defer part.Stop()
 	alerts := time.NewTicker(time.Minute)
 	defer alerts.Stop()
 	buf := make([]Event, 0, 128)
@@ -151,8 +149,6 @@ func (p *Pipeline) Run(ctx context.Context) {
 				p.log.Warn("obs retention failed", "error", err)
 			}
 			cancel()
-		case <-part.C:
-			_ = p.store.EnsurePartitions(context.Background())
 		case <-alerts.C:
 			p.checkBrokerThresholds(ctx)
 		}
@@ -317,16 +313,16 @@ func (p *Pipeline) runNotifications(ctx context.Context) {
 }
 
 func (p *Pipeline) checkBrokerThresholds(ctx context.Context) {
-	ids, err := p.store.DistinctBrokersSince(ctx, time.Now().Add(-5*time.Minute))
-	if err != nil || len(ids) == 0 {
+	rates, err := p.store.BrokerErrorRates(5 * time.Minute)
+	if err != nil || len(rates) == 0 {
 		return
 	}
-	for _, id := range ids {
-		total, failed, avgMs, err := p.store.BrokerErrorRate(ctx, id, 5*time.Minute)
-		if err != nil || total < 20 {
+	for id, r := range rates {
+		total, failed, avgMs := r[0], r[1], r[2]
+		if total < 20 {
 			continue
 		}
-		pct := float64(failed) * 100 / float64(total)
+		pct := failed * 100 / total
 		bid := id
 		switch {
 		case pct >= p.settings.ErrorCritPct:

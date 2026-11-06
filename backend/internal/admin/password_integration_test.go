@@ -4,6 +4,8 @@ package admin
 
 import (
 	"context"
+	"github.com/fix-gateway/backend/internal/audit"
+	"github.com/fix-gateway/backend/internal/observability"
 	"github.com/fix-gateway/backend/internal/platform/migrate"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -44,7 +46,13 @@ func TestExplicitPasswordRotationRevokesSessions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.RotatePassword(ctx, email, "new-explicit-password-123"); err != nil {
+	logs, err := observability.OpenFileLog(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer logs.Close()
+	auditLog := audit.NewStore(logs)
+	if err := store.RotatePassword(ctx, auditLog, email, "new-explicit-password-123"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.AuthenticateSession(ctx, "fixture-jwt", token); err == nil {
@@ -59,8 +67,14 @@ func TestExplicitPasswordRotationRevokesSessions(t *testing.T) {
 	if _, err := store.Authenticate(ctx, email, "new-explicit-password-123"); err != nil {
 		t.Fatal(err)
 	}
-	var count int
-	if err := pool.QueryRow(ctx, `SELECT count(*) FROM audit_logs WHERE action='ADMIN_PASSWORD_ROTATED' AND entity_id=$1 AND request_payload IS NULL`, user.ID.String()).Scan(&count); err != nil || count != 1 {
+	records, err := auditLog.Records(ctx)
+	count := 0
+	for _, e := range records {
+		if e.Subtype == "ADMIN_PASSWORD_ROTATED" && e.TargetID == user.ID.String() && len(e.Metadata) == 0 {
+			count++
+		}
+	}
+	if err != nil || count != 1 {
 		t.Fatalf("rotation was not safely audited: %d %v", count, err)
 	}
 }

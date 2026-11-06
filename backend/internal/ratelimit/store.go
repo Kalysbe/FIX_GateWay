@@ -11,8 +11,13 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+// AuditFunc writes the RATE_LIMIT_UPDATED audit line (the audit package
+// cannot be imported here: it depends on metrics, which depends on ratelimit).
+type AuditFunc func(ctx context.Context, actor string, brokerID *int64, policyKey string, payload json.RawMessage) error
+
 type Store struct {
 	Pool         *pgxpool.Pool
+	Audit        AuditFunc
 	Admission    *Admission
 	DefaultRead  int
 	DefaultTrade int
@@ -176,8 +181,11 @@ func (s *Store) Upsert(ctx context.Context, p Policy, actor, reason string) erro
 	if err != nil {
 		return err
 	}
-	_, err = tx.Exec(ctx, `INSERT INTO audit_logs(actor_type,actor_id,broker_id,action,entity_type,entity_id,request_payload,result) VALUES('admin',$1,$2,'RATE_LIMIT_UPDATED','rate_limit',$3,$4,'success')`, actor, bid, p.Key(), payload)
-	if err != nil {
+	// The change is committed only once its audit line is in the log file.
+	if s.Audit == nil {
+		return fmt.Errorf("audit log unavailable")
+	}
+	if err = s.Audit(ctx, actor, bid, p.Key(), payload); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)

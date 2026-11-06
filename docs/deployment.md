@@ -2,18 +2,15 @@
 
 ## Prerequisites
 
-Dashboard business metrics are calculated by PostgreSQL function `gateway_dashboard_compute()`
-(migration 000021) and stored in `gateway_dashboard_cache` (migration 000022).
-`gateway_dashboard_snapshot()` reads that persisted snapshot immediately. The gateway triggers
-`gateway_refresh_dashboard_snapshot()` in the background at most once per minute; a database
-advisory lock prevents duplicate refreshes across gateway instances. The migration warms the
-cache once. Successful data survives gateway restarts; failed refreshes do not replace it with
-zeroes. A lifecycle-bound gateway worker checks refreshes every 15 seconds even without
-dashboard visitors. Persisted data older than five minutes remains available with `stale: true`,
-and the dashboard displays a warning and `generated_at`. An empty cache returns a retryable
-503 response instead of a JSON parsing error.
-The authenticated API also shares a 5-second memory cache between viewers (up to one minute
-of stale memory data during refresh). Live monitoring renders independently of daily statistics.
+Logs and the audit trail are kept in files, not in the database (поручение пользователя
+06.11.2026): `LOG_DIR` (default `<FIX_SESSION_DIR>/logs`, on the FIX volume) holds one file per
+Bishkek date, `2026-11-06.log`, one JSON event per line. Files older than 7 days (today and
+the six days before) are deleted at start-up and every hour. Migration 000042 dropped
+`obs_events`, `audit_logs` and the SQL dashboard snapshot; alerts (`obs_notifications`) and
+export jobs stay in the database. `OBS_*_RETENTION_DAYS` now only govern alerts.
+Dashboard and broker statistics are counted from these files (broker "month" covers the
+7 days on disk). The authenticated API shares a 5-second memory cache between viewers.
+Live monitoring renders independently of daily statistics.
 
 Set `PROMETHEUS_URL` for gateway access to Prometheus (`http://prometheus:9090` in Compose,
 `http://localhost:9090` for a local process). Monitoring history uses the

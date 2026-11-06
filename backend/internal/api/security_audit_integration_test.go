@@ -48,7 +48,7 @@ func TestSecurityAuditDatabase(t *testing.T) {
 	}
 	defer pool.Close()
 	bs := brokers.NewStore(pool, "audit-pepper")
-	as := audit.NewStore(pool)
+	as := audit.NewStore(testLogFiles(t))
 	osStore := orders.NewStore(pool)
 	svc := orders.NewService(osStore, bs, as)
 	users := admin.NewUserStore(pool)

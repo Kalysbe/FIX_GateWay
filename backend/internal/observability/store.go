@@ -2,9 +2,9 @@ package observability
 
 import (
 	"context"
-	"encoding/json"
+	"errors"
 	"fmt"
-	"strconv"
+	"sort"
 	"strings"
 	"time"
 
@@ -14,85 +14,66 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+var ErrLogNotFound = errors.New("log event not found")
+
+// Store keeps log events in daily files (FileLog); notifications and export
+// jobs stay in the database.
 type Store struct {
-	pool *pgxpool.Pool
+	pool  *pgxpool.Pool
+	files *FileLog
 }
 
-func NewStore(pool *pgxpool.Pool) *Store { return &Store{pool: pool} }
+func NewStore(pool *pgxpool.Pool, files *FileLog) *Store { return &Store{pool: pool, files: files} }
 
-const insertSQL = `
-INSERT INTO obs_events (
-	id, ts, event_type, subtype, severity, request_id, trace_id,
-	broker_id, broker_code, broker_name, token_id,
-	client_ip, forwarded_for, user_agent, http_method, endpoint, route, query_params, protocol,
-	status_code, response_time_ms, request_size, response_size, perf_class, result,
-	order_id, client_order_id, account_id, instrument, side, quantity, price,
-	adapter_id, session_id, fix_msg_type, fix_direction, fix_seq_num,
-	error_code, error_message, failure_stage, message,
-	actor_type, actor_id, target_type, target_id, before_state, after_state, metadata
-) VALUES (
-	$1,$2,$3,$4,$5,$6,$7,
-	$8,$9,$10,$11,
-	$12,$13,$14,$15,$16,$17,$18,$19,
-	$20,$21,$22,$23,$24,$25,
-	$26,$27,$28,$29,$30,$31,$32,
-	$33,$34,$35,$36,$37,
-	$38,$39,$40,$41,
-	$42,$43,$44,$45,$46,$47,$48
-)`
+func (s *Store) Files() *FileLog { return s.files }
 
 func (s *Store) InsertBatch(ctx context.Context, events []Event) error {
-	if len(events) == 0 {
-		return nil
+	if s.files == nil {
+		return errors.New("log files unavailable")
 	}
-	batch := &pgx.Batch{}
-	for i := range events {
-		e := &events[i]
-		e.Normalize()
-		batch.Queue(insertSQL, args(e)...)
-	}
-	br := s.pool.SendBatch(ctx, batch)
-	return br.Close()
+	return s.files.Append(events...)
 }
 
 func (s *Store) Insert(ctx context.Context, e Event) error {
-	e.Normalize()
-	_, err := s.pool.Exec(ctx, insertSQL, args(&e)...)
-	return err
+	return s.InsertBatch(ctx, []Event{e})
 }
 
-func args(e *Event) []any {
-	return []any{
-		e.ID, e.Timestamp, e.Type, e.Subtype, e.Severity, nullStr(e.RequestID), nullStr(e.TraceID),
-		e.BrokerID, nullStr(e.BrokerCode), nullStr(e.BrokerName), e.TokenID,
-		nullStr(e.ClientIP), nullStr(e.ForwardedFor), nullStr(e.UserAgent),
-		nullStr(e.HTTPMethod), nullStr(e.Endpoint), nullStr(e.Route), nullStr(e.QueryParams), nullStr(e.Protocol),
-		e.StatusCode, e.ResponseTimeMs, e.RequestSize, e.ResponseSize, nullStr(e.PerfClass), nullStr(e.Result),
-		e.OrderID, nullStr(e.ClientOrderID), nullStr(e.AccountID), nullStr(e.Instrument), nullStr(e.Side), nullStr(e.Quantity), nullStr(e.Price),
-		nullStr(e.AdapterID), nullStr(e.SessionID), nullStr(e.FIXMsgType), nullStr(e.FIXDirection), e.FIXSeqNum,
-		nullStr(e.ErrorCode), nullStr(e.ErrorMessage), nullStr(e.FailureStage), nullStr(e.Message),
-		nullStr(e.ActorType), nullStr(e.ActorID), nullStr(e.TargetType), nullStr(e.TargetID),
-		nullRaw(e.Before), nullRaw(e.After), nullRaw(e.Metadata),
-	}
-}
-
-func nullStr(s string) any {
-	if s == "" {
+// scan calls fn for every stored event of the days touching from..to, newest
+// day first. fn returns false to stop.
+func (s *Store) scan(from, to time.Time, fn func(*Event) bool) error {
+	if s.files == nil {
 		return nil
 	}
-	return s
-}
-
-func nullRaw(b json.RawMessage) any {
-	if len(b) == 0 {
-		return nil
+	days, err := s.files.Events(from, to)
+	if err != nil {
+		return err
 	}
-	return b
+	for _, events := range days {
+		for i := len(events) - 1; i >= 0; i-- {
+			if !fn(&events[i]) {
+				return nil
+			}
+		}
+	}
+	return nil
 }
 
 func (s *Store) Get(ctx context.Context, id uuid.UUID) (Event, error) {
-	row := s.pool.QueryRow(ctx, eventSelect+` WHERE id=$1 LIMIT 1`, id)
-	return scanEvent(row)
+	var out *Event
+	err := s.scan(time.Time{}, time.Time{}, func(e *Event) bool {
+		if e.ID == id {
+			out = e
+			return false
+		}
+		return true
+	})
+	if err != nil {
+		return Event{}, err
+	}
+	if out == nil {
+		return Event{}, ErrLogNotFound
+	}
+	return *out, nil
 }
 
 func clampLogListLimit(n int) int {
@@ -105,280 +86,143 @@ func clampLogListLimit(n int) int {
 	return n
 }
 
+func newer(a, b *Event) bool {
+	if !a.Timestamp.Equal(b.Timestamp) {
+		return a.Timestamp.After(b.Timestamp)
+	}
+	return strings.Compare(a.ID.String(), b.ID.String()) > 0
+}
+
+// List returns matching events newest first; the list view omits the bulky
+// before/after/metadata blobs, as the database query did.
 func (s *Store) List(ctx context.Context, f Filter) ([]Event, bool, error) {
 	f.Limit = clampLogListLimit(f.Limit)
-	where, args := f.where(1)
-	q := eventListSelect + where + ` ORDER BY ts DESC, id DESC LIMIT $` + strconv.Itoa(len(args)+1)
-	args = append(args, f.Limit+1)
-	rows, err := s.pool.Query(ctx, q, args...)
+	var found []*Event
+	err := s.scan(f.From, f.To, func(e *Event) bool {
+		if f.match(e) {
+			found = append(found, e)
+		}
+		return true
+	})
 	if err != nil {
 		return nil, false, err
 	}
-	defer rows.Close()
-	var out []Event
-	for rows.Next() {
-		e, err := scanEvent(rows)
-		if err != nil {
-			return nil, false, err
-		}
-		out = append(out, e)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, false, err
-	}
-	more := len(out) > f.Limit
+	sort.SliceStable(found, func(i, j int) bool { return newer(found[i], found[j]) })
+	more := len(found) > f.Limit
 	if more {
-		out = out[:f.Limit]
+		found = found[:f.Limit]
 	}
-	if out == nil {
-		out = []Event{}
+	out := make([]Event, 0, len(found))
+	for _, e := range found {
+		c := *e
+		c.Before, c.After, c.Metadata = nil, nil, nil
+		out = append(out, c)
 	}
 	return out, more, nil
 }
 
 func (s *Store) Count(ctx context.Context, f Filter) (int64, error) {
-	where, args := f.where(1)
 	var n int64
-	err := s.pool.QueryRow(ctx, `SELECT COUNT(*) FROM obs_events`+where, args...).Scan(&n)
+	err := s.scan(f.From, f.To, func(e *Event) bool {
+		if f.match(e) {
+			n++
+		}
+		return true
+	})
 	return n, err
 }
 
-func (f Filter) where(start int) (string, []any) {
-	var b strings.Builder
-	var args []any
-	i := start
-	add := func(clause string, v any) {
-		if b.Len() == 0 {
-			b.WriteString(" WHERE ")
-		} else {
-			b.WriteString(" AND ")
-		}
-		b.WriteString(strings.ReplaceAll(clause, "?", "$"+strconv.Itoa(i)))
-		args = append(args, v)
-		i++
+func (f Filter) match(e *Event) bool {
+	if !f.From.IsZero() && e.Timestamp.Before(f.From) {
+		return false
 	}
-	if !f.From.IsZero() {
-		add("ts >= ?", f.From)
+	if !f.To.IsZero() && e.Timestamp.After(f.To) {
+		return false
 	}
-	if !f.To.IsZero() {
-		add("ts <= ?", f.To)
+	if f.BrokerID != nil && (e.BrokerID == nil || *e.BrokerID != *f.BrokerID) {
+		return false
 	}
-	if f.BrokerID != nil {
-		add("broker_id = ?", *f.BrokerID)
-	}
-	if f.Type != "" {
-		add("event_type = ?", f.Type)
+	if f.Type != "" && e.Type != f.Type {
+		return false
 	}
 	if len(f.Types) > 0 {
-		if b.Len() == 0 {
-			b.WriteString(" WHERE ")
-		} else {
-			b.WriteString(" AND ")
+		ok := false
+		for _, t := range f.Types {
+			if e.Type == t {
+				ok = true
+				break
+			}
 		}
-		b.WriteString("event_type = ANY($")
-		b.WriteString(strconv.Itoa(i))
-		b.WriteString(")")
-		args = append(args, f.Types)
-		i++
+		if !ok {
+			return false
+		}
 	}
-	if f.Subtype != "" {
-		add("subtype = ?", f.Subtype)
+	if f.Subtype != "" && e.Subtype != f.Subtype {
+		return false
 	}
-	if f.Severity != "" {
-		add("severity = ?", f.Severity)
+	if f.Severity != "" && e.Severity != f.Severity {
+		return false
 	}
-	if f.Status != "" {
-		add("result = ?", f.Status)
+	if f.Status != "" && e.Result != f.Status {
+		return false
 	}
-	if f.Result != "" {
-		add("result = ?", f.Result)
+	if f.Result != "" && e.Result != f.Result {
+		return false
 	}
-	if f.StatusCode != nil {
-		add("status_code = ?", *f.StatusCode)
+	if f.StatusCode != nil && (e.StatusCode == nil || *e.StatusCode != *f.StatusCode) {
+		return false
 	}
-	if f.ClientIP != "" {
-		add("client_ip = ?", f.ClientIP)
+	if f.ClientIP != "" && e.ClientIP != f.ClientIP {
+		return false
 	}
-	if f.RequestID != "" {
-		add("request_id = ?", f.RequestID)
+	if f.RequestID != "" && e.RequestID != f.RequestID {
+		return false
 	}
-	if f.TraceID != "" {
-		add("trace_id = ?", f.TraceID)
+	if f.TraceID != "" && e.TraceID != f.TraceID {
+		return false
 	}
-	if f.OrderID != nil {
-		add("order_id = ?", *f.OrderID)
+	if f.OrderID != nil && (e.OrderID == nil || *e.OrderID != *f.OrderID) {
+		return false
 	}
-	if f.ClientOrderID != "" {
-		add("client_order_id = ?", f.ClientOrderID)
+	if f.ClientOrderID != "" && e.ClientOrderID != f.ClientOrderID {
+		return false
 	}
-	if f.AdapterID != "" {
-		add("adapter_id = ?", f.AdapterID)
+	if f.AdapterID != "" && e.AdapterID != f.AdapterID {
+		return false
 	}
-	if f.Endpoint != "" {
-		add("endpoint ILIKE ?", "%"+f.Endpoint+"%")
+	if f.Endpoint != "" && !strings.Contains(strings.ToLower(e.Endpoint), strings.ToLower(f.Endpoint)) {
+		return false
 	}
-	if f.HTTPMethod != "" {
-		add("http_method = ?", strings.ToUpper(f.HTTPMethod))
+	if f.HTTPMethod != "" && e.HTTPMethod != strings.ToUpper(f.HTTPMethod) {
+		return false
 	}
-	if f.ErrorCode != "" {
-		add("error_code = ?", f.ErrorCode)
+	if f.ErrorCode != "" && e.ErrorCode != f.ErrorCode {
+		return false
 	}
 	if !f.CursorTS.IsZero() && f.CursorID != uuid.Nil {
-		if b.Len() == 0 {
-			b.WriteString(" WHERE ")
-		} else {
-			b.WriteString(" AND ")
-		}
-		b.WriteString("(ts, id) < ($")
-		b.WriteString(strconv.Itoa(i))
-		b.WriteString(", $")
-		b.WriteString(strconv.Itoa(i + 1))
-		b.WriteString(")")
-		args = append(args, f.CursorTS, f.CursorID)
-		i += 2
-	}
-	return b.String(), args
-}
-
-const eventSelect = `
-SELECT id, ts, event_type, subtype, severity, request_id, trace_id,
-       broker_id, broker_code, broker_name, token_id,
-       client_ip, forwarded_for, user_agent, http_method, endpoint, route, query_params, protocol,
-       status_code, response_time_ms, request_size, response_size, perf_class, result,
-       order_id, client_order_id, account_id, instrument, side, quantity, price,
-       adapter_id, session_id, fix_msg_type, fix_direction, fix_seq_num,
-       error_code, error_message, failure_stage, message,
-       actor_type, actor_id, target_type, target_id, before_state, after_state, metadata, ts
-FROM obs_events`
-
-// eventListSelect omits bulky JSON blobs so the logs table can page cheaply.
-const eventListSelect = `
-SELECT id, ts, event_type, subtype, severity, request_id, trace_id,
-       broker_id, broker_code, broker_name, token_id,
-       client_ip, forwarded_for, user_agent, http_method, endpoint, route, query_params, protocol,
-       status_code, response_time_ms, request_size, response_size, perf_class, result,
-       order_id, client_order_id, account_id, instrument, side, quantity, price,
-       adapter_id, session_id, fix_msg_type, fix_direction, fix_seq_num,
-       error_code, error_message, failure_stage, message,
-       actor_type, actor_id, target_type, target_id, NULL::jsonb, NULL::jsonb, NULL::jsonb, ts
-FROM obs_events`
-
-func scanEvent(row pgx.Row) (Event, error) {
-	var e Event
-	var (
-		reqID, trace, bCode, bName, ip, xff, ua, method, ep, route, qp, proto *string
-		perf, result, coid, acct, instr, side, qty, px                        *string
-		adapter, sess, msgType, dir, errCode, errMsg, stage, msg              *string
-		actorT, actorID, tgtT, tgtID                                          *string
-		before, after, meta                                                   []byte
-		tokenID, orderID                                                      *uuid.UUID
-		created                                                               time.Time
-	)
-	err := row.Scan(
-		&e.ID, &e.Timestamp, &e.Type, &e.Subtype, &e.Severity, &reqID, &trace,
-		&e.BrokerID, &bCode, &bName, &tokenID,
-		&ip, &xff, &ua, &method, &ep, &route, &qp, &proto,
-		&e.StatusCode, &e.ResponseTimeMs, &e.RequestSize, &e.ResponseSize, &perf, &result,
-		&orderID, &coid, &acct, &instr, &side, &qty, &px,
-		&adapter, &sess, &msgType, &dir, &e.FIXSeqNum,
-		&errCode, &errMsg, &stage, &msg,
-		&actorT, &actorID, &tgtT, &tgtID, &before, &after, &meta, &created,
-	)
-	if err != nil {
-		return e, err
-	}
-	e.RequestID = deref(reqID)
-	e.TraceID = deref(trace)
-	e.BrokerCode = deref(bCode)
-	e.BrokerName = deref(bName)
-	e.TokenID = tokenID
-	e.ClientIP = deref(ip)
-	e.ForwardedFor = deref(xff)
-	e.UserAgent = deref(ua)
-	e.HTTPMethod = deref(method)
-	e.Endpoint = deref(ep)
-	e.Route = deref(route)
-	e.QueryParams = deref(qp)
-	e.Protocol = deref(proto)
-	e.PerfClass = deref(perf)
-	e.Result = deref(result)
-	e.OrderID = orderID
-	e.ClientOrderID = deref(coid)
-	e.AccountID = deref(acct)
-	e.Instrument = deref(instr)
-	e.Side = deref(side)
-	e.Quantity = deref(qty)
-	e.Price = deref(px)
-	e.AdapterID = deref(adapter)
-	e.SessionID = deref(sess)
-	e.FIXMsgType = deref(msgType)
-	e.FIXDirection = deref(dir)
-	e.ErrorCode = deref(errCode)
-	e.ErrorMessage = deref(errMsg)
-	e.FailureStage = deref(stage)
-	e.Message = deref(msg)
-	e.ActorType = deref(actorT)
-	e.ActorID = deref(actorID)
-	e.TargetType = deref(tgtT)
-	e.TargetID = deref(tgtID)
-	e.Before = before
-	e.After = after
-	e.Metadata = meta
-	e.CreatedAt = created
-	return e, nil
-}
-
-func deref(s *string) string {
-	if s == nil {
-		return ""
-	}
-	return *s
-}
-
-func (s *Store) EnsurePartitions(ctx context.Context) error {
-	now := time.Now().UTC()
-	start := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC).AddDate(0, -1, 0)
-	for i := 0; i < 4; i++ {
-		d := start.AddDate(0, i, 0)
-		next := d.AddDate(0, 1, 0)
-		name := fmt.Sprintf("obs_events_%s", d.Format("2006_01"))
-		_, err := s.pool.Exec(ctx, fmt.Sprintf(
-			`CREATE TABLE IF NOT EXISTS %s PARTITION OF obs_events FOR VALUES FROM ('%s') TO ('%s')`,
-			pgIdent(name), d.Format("2006-01-02"), next.Format("2006-01-02"),
-		))
-		if err != nil && !strings.Contains(err.Error(), "overlaps") {
-			return err
+		cursor := Event{Timestamp: f.CursorTS, ID: f.CursorID}
+		if !newer(&cursor, e) {
+			return false
 		}
 	}
-	return nil
+	return true
 }
 
-func pgIdent(name string) string {
-	if len(name) == 0 {
-		return name
-	}
-	for _, c := range name {
-		if !(c == '_' || c >= '0' && c <= '9' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z') {
-			return `"` + strings.ReplaceAll(name, `"`, `""`) + `"`
-		}
-	}
-	return name
-}
-
+// ApplyRetention deletes log files older than LogKeepDays and old notifications.
 func (s *Store) ApplyRetention(ctx context.Context, cfg Retention) error {
-	days := cfg.KeepDays()
-	if days <= 0 {
-		days = 15
+	var errs []error
+	if s.files != nil {
+		errs = append(errs, s.files.Cleanup(time.Now()))
 	}
-	if _, err := s.pool.Exec(ctx, `DELETE FROM obs_events WHERE ts < now() - make_interval(days => $1)`, days); err != nil {
-		return err
+	if s.pool != nil {
+		days := cfg.KeepDays()
+		_, _ = s.pool.Exec(ctx, `DELETE FROM obs_notifications WHERE last_seen_at < now() - make_interval(days => $1)`, days)
+		_, _ = s.pool.Exec(ctx, `DELETE FROM obs_export_jobs WHERE created_at < now() - interval '7 days'`)
 	}
-	_, _ = s.pool.Exec(ctx, `DELETE FROM obs_notifications WHERE last_seen_at < now() - make_interval(days => $1)`, days)
-	_, _ = s.pool.Exec(ctx, `DELETE FROM obs_export_jobs WHERE created_at < now() - interval '7 days'`)
-	_, _ = s.pool.Exec(ctx, `DELETE FROM audit_logs WHERE created_at < now() - make_interval(days => $1)`, days)
-	return nil
+	return errors.Join(errs...)
 }
 
+// KeepDays is the notification retention; log files always keep LogKeepDays.
 func (cfg Retention) KeepDays() int {
 	days := cfg.APIDays
 	for _, n := range []int{cfg.BusinessDays, cfg.AuthDays, cfg.SystemDays, cfg.ErrorDays, cfg.DebugDays, cfg.AuditDays} {
@@ -400,6 +244,20 @@ type Retention struct {
 	ErrorDays    int
 	DebugDays    int
 	AuditDays    int
+}
+
+func nullStr(s string) any {
+	if s == "" {
+		return nil
+	}
+	return s
+}
+
+func deref(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
 }
 
 func (s *Store) UpsertNotification(ctx context.Context, n Notification, window time.Duration) (Notification, bool, error) {

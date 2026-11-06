@@ -62,7 +62,7 @@ CREATE TABLE public."Securities" ("TradeDate" timestamp,"ClassCode" text,"SecCod
 	}
 	t.Cleanup(readOnly.Close)
 	bs := brokers.NewStore(pool, "accounts-test-pepper")
-	as := audit.NewStore(pool)
+	as := audit.NewStore(testLogFiles(t))
 	osStore := orders.NewStore(pool)
 	users := admin.NewUserStore(pool)
 	cfg := config.Config{AuthFailMaxPerMinute: 100, JWTSecret: "accounts-test-jwt-secret-32-bytes!!"}

@@ -61,7 +61,7 @@ INSERT INTO public."Orders" VALUES
 	}
 	t.Cleanup(readOnly.Close)
 	bs := brokers.NewStore(pool, "source-test-pepper")
-	as := audit.NewStore(pool)
+	as := audit.NewStore(testLogFiles(t))
 	osStore := orders.NewStore(pool)
 	svc := orders.NewService(osStore, bs, as)
 	s := NewServer(config.Config{AuthFailMaxPerMinute: 100}, slog.New(slog.NewTextHandler(io.Discard, nil)), pool, bs, svc, osStore, nil, nil, nil, as, nil, realtime.NewHub(), nil)

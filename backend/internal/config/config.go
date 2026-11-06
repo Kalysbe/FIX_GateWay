@@ -14,6 +14,7 @@ import (
 type Config struct {
 	loadError                error
 	ExportDir                string
+	LogDir                   string // daily log files, one per Bishkek date, kept 7 days
 	BackupStatusFile         string
 	FIXSessionDir            string
 	PrometheusURL            string
@@ -97,6 +98,7 @@ func Load() Config {
 	}
 	c := Config{
 		ExportDir:                getEnv("EXPORT_DIR", filepath.Join(fixSessionDir, "exports")),
+		LogDir:                   getEnv("LOG_DIR", filepath.Join(fixSessionDir, "logs")),
 		BackupStatusFile:         getEnv("BACKUP_STATUS_FILE", ""),
 		FIXSessionDir:            fixSessionDir,
 		PrometheusURL:            getEnv("PROMETHEUS_URL", ""),

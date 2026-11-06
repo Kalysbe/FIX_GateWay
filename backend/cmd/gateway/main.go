@@ -87,9 +87,16 @@ func main() {
 		}
 	}
 
+	// Logs and the audit trail go to daily files, not the database.
+	logFiles, err := observability.OpenFileLog(cfg.LogDir)
+	if err != nil {
+		log.Error("log directory unavailable", "dir", cfg.LogDir, "error", err)
+		os.Exit(1)
+	}
+	defer logFiles.Close()
 	brokerStore := brokers.NewStore(pool, cfg.APITokenPepper)
 	orderStore := orders.NewStore(pool)
-	auditStore := audit.NewStore(pool)
+	auditStore := audit.NewStore(logFiles)
 	orderSvc := orders.NewService(orderStore, brokerStore, auditStore)
 	if quikExportStore != nil {
 		// Accounts a firm may trade come only from QUIK Trdaccs, instruments from Securities.
@@ -99,7 +106,7 @@ func main() {
 	adapterStore := adapters.NewStore(pool)
 	outboxStore := outbox.NewStore(pool)
 	hub := realtime.NewHub()
-	obsStore := observability.NewStore(pool)
+	obsStore := observability.NewStore(pool, logFiles)
 	obsSettings := observability.DefaultSettings()
 	obsSettings.FastMS = cfg.ObsFastMS
 	obsSettings.NormalMS = cfg.ObsNormalMS
@@ -236,7 +243,6 @@ func main() {
 			metrics.ExecutionInboxApplyFailures.Inc()
 		}
 	})
-	go server.RunDashboardRefresh(ctx)
 	marketClasses := quikexport.NewClassSettings(pool)
 	server.SetMarketDataClasses(marketClasses)
 	orderSvc.SetServedClasses(marketClasses.Classes)
@@ -270,7 +276,7 @@ func main() {
 		})
 	}
 	admission := ratelimit.NewAdmissionWithCapacity(int64(cfg.RateLimitMaxStates))
-	rateStore := &ratelimit.Store{Pool: pool, Admission: admission, DefaultRead: cfg.DefaultRateLimitRPS, DefaultTrade: cfg.DefaultOrderRateLimit}
+	rateStore := &ratelimit.Store{Pool: pool, Audit: auditStore.RateLimitUpdated, Admission: admission, DefaultRead: cfg.DefaultRateLimitRPS, DefaultTrade: cfg.DefaultOrderRateLimit}
 	if err := rateStore.Refresh(ctx); err != nil {
 		log.Error("rate limit configuration unavailable", "error", err)
 		os.Exit(1)

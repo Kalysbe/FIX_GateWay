@@ -20,15 +20,15 @@ import (
 
 func brokerDataTestServer(t *testing.T) *Server {
 	t.Helper()
-	// Auth rejection writes audit records. A closed pool makes those writes
-	// fail immediately without opening a database connection in unit tests.
+	// Auth rejection writes audit lines to a temporary log directory. A closed
+	// pool fails broker lookups without opening a database connection.
 	pool, err := pgxpool.New(context.Background(), "postgres://test@localhost/unused?sslmode=disable")
 	if err != nil {
 		t.Fatal(err)
 	}
 	pool.Close()
 	return &Server{
-		audit: audit.NewStore(pool), brokers: brokers.NewStore(pool, "test"),
+		audit: audit.NewStore(testLogFiles(t)), brokers: brokers.NewStore(pool, "test"),
 		authFailLimiter: ratelimit.NewSlidingWindow(time.Minute, 100),
 	}
 }

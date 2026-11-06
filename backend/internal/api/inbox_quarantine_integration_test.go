@@ -49,7 +49,7 @@ func TestExecutionInboxQuarantineAPI(t *testing.T) {
 	users := admin.NewUserStore(pool)
 	brokerStore := brokers.NewStore(pool, cfg.APITokenPepper)
 	orderStore := orders.NewStore(pool)
-	auditStore := audit.NewStore(pool)
+	auditStore := audit.NewStore(testLogFiles(t))
 	adapterStore := adapters.NewStore(pool)
 	manager := adapters.NewManager(adapterStore, log, routing.New(cfg.LBStrategy), nil, t.TempDir(), time.Second)
 	srv := api.NewServer(cfg, log, pool, brokerStore, orders.NewService(orderStore, brokerStore, auditStore), orderStore,
@@ -162,8 +162,14 @@ func TestExecutionInboxQuarantineAPI(t *testing.T) {
 	if code, _ := call("POST", "/api/v1/admin/execution-inbox/cases/"+entryID+"/resolve", operator, map[string]string{"note": "again"}); code != 409 {
 		t.Fatalf("double resolve %d", code)
 	}
-	var audits int
-	if err := pool.QueryRow(ctx, `SELECT count(*) FROM audit_logs WHERE entity_id=$1 AND action IN ('EXECUTION_INBOX_QUARANTINE','EXECUTION_INBOX_CASE_RESOLVE')`, entryID).Scan(&audits); err != nil || audits != 2 {
-		t.Fatalf("audit rows %d %v", audits, err)
+	records, err := auditStore.Records(ctx)
+	audits := 0
+	for _, e := range records {
+		if e.TargetID == entryID && (e.Subtype == "EXECUTION_INBOX_QUARANTINE" || e.Subtype == "EXECUTION_INBOX_CASE_RESOLVE") {
+			audits++
+		}
+	}
+	if err != nil || audits != 2 {
+		t.Fatalf("audit lines %d %v", audits, err)
 	}
 }

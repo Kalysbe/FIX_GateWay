@@ -38,7 +38,6 @@ import (
 
 type Server struct {
 	dashboardCache     snapshotCache
-	dashboardRefreshMu sync.Mutex
 	monitoringCache    snapshotCache
 	cfg                config.Config
 	log                *slog.Logger
@@ -87,10 +86,6 @@ func NewServer(
 		hmacNonces:      auth.NewNonceCache(10 * time.Minute),
 		maxBody:         1 << 20,
 		authFailLimiter: ratelimit.NewSlidingWindow(time.Minute, cfg.AuthFailMaxPerMinute),
-	}
-	// Refill an expired persisted snapshot before the first dashboard visit.
-	if pool != nil {
-		s.refreshDashboardSnapshot()
 	}
 	return s
 }
@@ -796,12 +791,7 @@ func (s *Server) adminLogin(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 	data, err := s.dashboardCache.get(r.Context(), 5*time.Second, func(ctx context.Context) (any, error) {
-		s.refreshDashboardSnapshot()
-		var raw []byte
-		if err := s.pool.QueryRow(ctx, `SELECT gateway_dashboard_snapshot()`).Scan(&raw); err != nil {
-			return nil, err
-		}
-		snapshot, err := decodeDashboardSnapshot(raw)
+		snapshot, err := s.dashboardSnapshot(ctx)
 		if err != nil {
 			return nil, err
 		}
@@ -811,8 +801,8 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 		}
 		snapshot["adapters"] = ads
 		snapshot["adapters_available"] = s.manager.AvailableCount()
-		// The persisted snapshot only sees logged write requests; presence must
-		// match the Brokers page (token use and live gRPC streams).
+		// The log only sees logged write requests; presence must match the
+		// Brokers page (token use and live gRPC streams).
 		live := s.connectedBrokers(ctx)
 		snapshot["connected_brokers"] = live
 		if o, ok := snapshot["observability"].(map[string]any); ok {
@@ -822,16 +812,11 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 		return snapshot, nil
 	})
 	if err != nil {
-		if errors.Is(err, errDashboardPending) {
-			writeErr(w, http.StatusServiceUnavailable, "Статистика рассчитывается. Повторите запрос через несколько секунд.")
-			return
-		}
 		s.writeInternal(w, err)
 		return
 	}
 	w.Header().Set("Cache-Control", "no-store")
-	// The persisted dashboard remains an audit/operations snapshot. Current
-	// order counters must come from the same source as the order list; when
+	// Current order counters must come from the same source as the order list; when
 	// that source is down only the counters are missing, never substituted.
 	response := map[string]any{}
 	for key, value := range data.(map[string]any) {
@@ -855,55 +840,41 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, response)
 }
 
-var errDashboardPending = errors.New("dashboard snapshot pending")
-
-func decodeDashboardSnapshot(raw []byte) (map[string]any, error) {
-	if len(raw) == 0 {
-		return nil, errDashboardPending
-	}
-	var snapshot map[string]any
-	if err := json.Unmarshal(raw, &snapshot); err != nil {
+// dashboardSnapshot counts today's activity from today's log file.
+func (s *Server) dashboardSnapshot(ctx context.Context) (map[string]any, error) {
+	var brokerCount int64
+	if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM brokers`).Scan(&brokerCount); err != nil {
 		return nil, err
 	}
-	if snapshot == nil {
-		return nil, errDashboardPending
+	snapshot := map[string]any{"brokers": brokerCount, "generated_at": time.Now().UTC()}
+	overview := observability.OverviewStats{SuccessRate: 100}
+	topBrokers, topErrors := []observability.TopBroker{}, []observability.ErrorCount{}
+	if s.obs != nil {
+		store := s.obs.Store()
+		var err error
+		if overview, err = store.Overview(ctx); err != nil {
+			return nil, err
+		}
+		today := observability.StartOfDay(time.Now())
+		if topBrokers, err = store.TopBrokers(ctx, today, 10); err != nil {
+			return nil, err
+		}
+		if topErrors, err = store.TopErrors(ctx, today, 10); err != nil {
+			return nil, err
+		}
 	}
+	raw, err := json.Marshal(overview)
+	if err != nil {
+		return nil, err
+	}
+	var obs map[string]any
+	if err := json.Unmarshal(raw, &obs); err != nil {
+		return nil, err
+	}
+	snapshot["observability"] = obs
+	snapshot["top_brokers"] = topBrokers
+	snapshot["top_errors"] = topErrors
 	return snapshot, nil
-}
-
-// Keep persisted statistics warm even when nobody has the dashboard open.
-func (s *Server) RunDashboardRefresh(ctx context.Context) {
-	ticker := time.NewTicker(15 * time.Second)
-	defer ticker.Stop()
-	for {
-		if ctx.Err() != nil {
-			return
-		}
-		s.refreshDashboardSnapshotContext(ctx)
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-		}
-	}
-}
-
-func (s *Server) refreshDashboardSnapshot() {
-	s.refreshDashboardSnapshotContext(context.Background())
-}
-
-func (s *Server) refreshDashboardSnapshotContext(parent context.Context) {
-	if !s.dashboardRefreshMu.TryLock() {
-		return
-	}
-	go func() {
-		defer s.dashboardRefreshMu.Unlock()
-		ctx, cancel := context.WithTimeout(parent, 60*time.Second)
-		defer cancel()
-		if _, err := s.pool.Exec(ctx, `SELECT gateway_refresh_dashboard_snapshot()`); err != nil && s.log != nil {
-			s.log.Warn("dashboard snapshot refresh failed", "error", err)
-		}
-	}()
 }
 func (s *Server) connectedBrokers(ctx context.Context) []observability.ConnectedBroker {
 	list := []observability.ConnectedBroker{}

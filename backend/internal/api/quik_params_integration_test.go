@@ -88,7 +88,7 @@ INSERT INTO public."Orders" SELECT n, c, (now() AT TIME ZONE 'Asia/Bishkek')::da
 	}
 	t.Cleanup(readOnly.Close)
 	bs := brokers.NewStore(pool, "params-test-pepper")
-	as := audit.NewStore(pool)
+	as := audit.NewStore(testLogFiles(t))
 	osStore := orders.NewStore(pool)
 	users := admin.NewUserStore(pool)
 	cfg := config.Config{AuthFailMaxPerMinute: 100, JWTSecret: "params-test-jwt-secret-32-bytes!!!!"}
@@ -169,8 +169,14 @@ INSERT INTO public."Orders" SELECT n, c, (now() AT TIME ZONE 'Asia/Bishkek')::da
 	if got := get("/api/v1/market-data", 200); got != `[{"ClassCode":"AUCT_GBA","SecCode":"GBA02270915","CouponValue":2.5,"status":"торгуется","FaceUnit":"KGS","SecShortName":"ГКО аукцион","SecFullName":"ГКО аукцион","ClassName":"Аукцион ГКО",`+trading("1")+`]` {
 		t.Fatal(got)
 	}
-	var audited int
-	if err := pool.QueryRow(ctx, `SELECT count(*) FROM audit_logs WHERE action='MARKET_DATA_CLASSES_UPDATED' AND entity_id='market_data_classes'`).Scan(&audited); err != nil || audited == 0 {
+	records, err := as.Records(ctx)
+	audited := 0
+	for _, e := range records {
+		if e.Subtype == "MARKET_DATA_CLASSES_UPDATED" && e.TargetID == "market_data_classes" {
+			audited++
+		}
+	}
+	if err != nil || audited == 0 {
 		t.Fatal("class change not audited", audited, err)
 	}
 	if got := call("GET", "/api/v1/admin/classes", jwt, nil, 200); got != `[{"ClassCode":"AUCT_GBA","ClassName":"Аукцион ГКО"},{"ClassCode":"LIST_GBA","ClassName":"Листинговые:облигации"}]` {

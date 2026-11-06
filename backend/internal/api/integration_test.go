@@ -58,7 +58,7 @@ func TestOrderCreateIntegration(t *testing.T) {
 	_ = users.EnsureAdmin(ctx, cfg.AdminEmail, cfg.AdminPassword)
 	brokerStore := brokers.NewStore(pool, cfg.APITokenPepper)
 	orderStore := orders.NewStore(pool)
-	auditStore := audit.NewStore(pool)
+	auditStore := audit.NewStore(testLogFiles(t))
 	orderSvc := orders.NewService(orderStore, brokerStore, auditStore)
 	adapterStore := adapters.NewStore(pool)
 	outboxStore := outbox.NewStore(pool)
