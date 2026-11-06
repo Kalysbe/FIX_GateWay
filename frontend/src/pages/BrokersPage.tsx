@@ -28,11 +28,13 @@ export default function BrokersPage() {
     refetchInterval: liveRefetchInterval(connected, 5000),
   });
   const [showCreate, setShowCreate] = useState(false);
+  const [createDirty, setCreateDirty] = useState(false);
   const create = useMutation({
     mutationFn: ({ code, name }: BrokerCreateValues) => api("/api/v1/admin/brokers", { method: "POST", body: JSON.stringify({ code, name, description: "" }) }),
     onSuccess: (_, values) => {
       toast.push(`Брокер «${values.name}» создан`, "ok");
       setShowCreate(false);
+      setCreateDirty(false);
       qc.invalidateQueries({ queryKey: ["brokers"] });
     },
   });
@@ -68,11 +70,11 @@ export default function BrokersPage() {
         }
       />
       {q.error && <ErrorBanner error={q.error} onRetry={() => q.refetch()} />}
-      <DataTable title="Брокеры" rows={q.data?.brokers ?? []} columns={columns} rowKey={b => b.id} loading={q.isLoading} searchPlaceholder="Название, код, статус…" onRefresh={() => void q.refetch()} refreshing={q.isFetching} emptyTitle="Брокеров пока нет" summary={rows => [{ label: "Брокеров", value: rows.length }, { label: "Подключены", value: rows.filter(b => b.connected).length, tone: "success" }, { label: "Активны", value: rows.filter(b => b.status === "ACTIVE").length }, { label: "Заблокированы", value: rows.filter(b => b.status === "BLOCKED").length, tone: "danger" }]} />
+      <DataTable urlState title="Брокеры" rows={q.data?.brokers ?? []} columns={columns} rowKey={b => b.id} loading={q.isLoading} searchPlaceholder="Название, код, статус…" onRefresh={() => void q.refetch()} refreshing={q.isFetching} emptyTitle="Брокеров пока нет" summary={rows => [{ label: "Брокеров", value: rows.length }, { label: "Подключены", value: rows.filter(b => b.connected).length, tone: "success" }, { label: "Активны", value: rows.filter(b => b.status === "ACTIVE").length }, { label: "Заблокированы", value: rows.filter(b => b.status === "BLOCKED").length, tone: "danger" }]} />
 
       {showCreate && (
-        <Modal title="Создать брокера" onClose={() => setShowCreate(false)}>
-          <BrokerCreateForm onCreate={values => create.mutateAsync(values)} onCancel={() => setShowCreate(false)} />
+        <Modal title="Создать брокера" dirty={createDirty} onClose={() => { setShowCreate(false); setCreateDirty(false); }}>
+          <BrokerCreateForm onCreate={values => create.mutateAsync(values)} onDirtyChange={setCreateDirty} onCancel={() => { setShowCreate(false); setCreateDirty(false); }} />
         </Modal>
       )}
     </div>

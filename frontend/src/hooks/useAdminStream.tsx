@@ -2,7 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { useQueryClient } from "@tanstack/react-query";
 import { isSessionValid, consumeAdminEvents, redirectToLogin } from "../api";
 
-import { eventRefresh } from "../lib/eventRefresh";
+import { eventRefresh, refreshKeysFor } from "../lib/eventRefresh";
 
 export type AdminStreamMsg = { type?: string; data?: unknown };
 
@@ -45,37 +45,8 @@ export function AdminStreamProvider({ children }: { children: ReactNode }) {
 
     const onMessage = (msg: AdminStreamMsg) => {
       listeners.current.forEach((fn) => fn(msg));
-      switch (msg.type) {
-        case "notification.new":
-          refresh.add([["notifications"]]);
-          break;
-        case "order.updated":
-        case "trade.created":
-          refresh.add([["admin-orders"]]);
-          refresh.add([["order"]]);
-          refresh.add([["order-trace"]]);
-          refresh.add([["admin-trades"]]);
-          refresh.add([["admin-trade"]]);
-          refresh.add([["dashboard"]]);
-          break;
-        case "moneylimits.updated":
-        case "depolimits.updated":
-          refresh.add([["admin-positions"]]);
-          break;
-        case "marketdata.tick":
-          refresh.add([["admin-market-data"]]);
-          break;
-        case "adapter.status_changed":
-          refresh.add([["adapters"]]);
-          refresh.add([["dashboard"]]);
-          break;
-        case "obs.event":
-          refresh.add([["dashboard"]]);
-          refresh.add([["logs"], ["broker-logs"], ["broker-errors"]]);
-          break;
-        default:
-          break;
-      }
+      const keys = refreshKeysFor(msg.type);
+      if (keys.length) refresh.add(keys);
     };
 
     const connect = () => {

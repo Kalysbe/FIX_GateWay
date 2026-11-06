@@ -6,6 +6,7 @@ import { BreadcrumbProvider } from "./components/breadcrumbs";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { ToastProvider } from "./components/Toast";
 import { ConfirmProvider } from "./components/confirm";
+import { SessionGuard } from "./components/SessionGuard";
 import { AdminStreamProvider } from "./hooks/useAdminStream";
 import { PageSpinner } from "./components/feedback";
 import { lazyPage } from "./lib/lazyPage";
@@ -47,6 +48,7 @@ function Private() {
   return (
     <ToastProvider>
       <ConfirmProvider>
+      <SessionGuard />
       <AdminStreamProvider>
         <BreadcrumbProvider>
           <AppShell>

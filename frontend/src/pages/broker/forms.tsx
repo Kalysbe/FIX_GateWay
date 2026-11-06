@@ -1,11 +1,13 @@
+import { useEffect } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { errorText, Field, FormError } from "../../components/ui/form";
 import { Icons } from "../../components/icons";
 import { brokerCreateSchema, brokerEditSchema, ipEntrySchema, type BrokerCreateValues, type BrokerEditValues, type IPEntryValues } from "../../lib/schemas";
 
-export function BrokerCreateForm({ onCreate, onCancel }: { onCreate: (values: BrokerCreateValues) => Promise<unknown>; onCancel: () => void }) {
-  const { register, handleSubmit, setError, formState: { errors, isSubmitting } } = useForm<BrokerCreateValues>({ resolver: zodResolver(brokerCreateSchema), defaultValues: { code: "", name: "" } });
+export function BrokerCreateForm({ onCreate, onCancel, onDirtyChange }: { onCreate: (values: BrokerCreateValues) => Promise<unknown>; onCancel: () => void; onDirtyChange?: (dirty: boolean) => void }) {
+  const { register, handleSubmit, setError, formState: { errors, isSubmitting, isDirty } } = useForm<BrokerCreateValues>({ resolver: zodResolver(brokerCreateSchema), defaultValues: { code: "", name: "" } });
+  useEffect(() => onDirtyChange?.(isDirty), [isDirty, onDirtyChange]);
   const submit = handleSubmit(async values => {
     try { await onCreate(values); } catch (error) { setError("root", { message: errorText(error, "Не удалось создать брокера") }); }
   });
@@ -20,8 +22,9 @@ export function BrokerCreateForm({ onCreate, onCancel }: { onCreate: (values: Br
   </form>;
 }
 
-export function BrokerEditForm({ initial, onSave, onCancel }: { initial: BrokerEditValues; onSave: (values: BrokerEditValues) => Promise<unknown>; onCancel: () => void }) {
-  const { register, handleSubmit, setError, formState: { errors, isSubmitting } } = useForm<BrokerEditValues>({ resolver: zodResolver(brokerEditSchema), defaultValues: initial });
+export function BrokerEditForm({ initial, onSave, onCancel, onDirtyChange }: { initial: BrokerEditValues; onSave: (values: BrokerEditValues) => Promise<unknown>; onCancel: () => void; onDirtyChange?: (dirty: boolean) => void }) {
+  const { register, handleSubmit, setError, formState: { errors, isSubmitting, isDirty } } = useForm<BrokerEditValues>({ resolver: zodResolver(brokerEditSchema), defaultValues: initial });
+  useEffect(() => onDirtyChange?.(isDirty), [isDirty, onDirtyChange]);
   const submit = handleSubmit(async values => {
     try { await onSave({ name: values.name.trim(), description: values.description.trim() }); } catch (error) { setError("root", { message: errorText(error, "Не удалось сохранить брокера") }); }
   });
@@ -36,8 +39,9 @@ export function BrokerEditForm({ initial, onSave, onCancel }: { initial: BrokerE
   </form>;
 }
 
-export function IPEntryForm({ onAdd }: { onAdd: (values: IPEntryValues) => Promise<unknown> }) {
-  const { register, handleSubmit, reset, setError, formState: { errors, isSubmitting } } = useForm<IPEntryValues>({ resolver: zodResolver(ipEntrySchema), defaultValues: { ip: "", note: "" } });
+export function IPEntryForm({ onAdd, onDirtyChange }: { onAdd: (values: IPEntryValues) => Promise<unknown>; onDirtyChange?: (dirty: boolean) => void }) {
+  const { register, handleSubmit, reset, setError, formState: { errors, isSubmitting, isDirty } } = useForm<IPEntryValues>({ resolver: zodResolver(ipEntrySchema), defaultValues: { ip: "", note: "" } });
+  useEffect(() => onDirtyChange?.(isDirty), [isDirty, onDirtyChange]);
   const submit = handleSubmit(async values => {
     try { await onAdd(values); reset(); } catch (error) { setError("root", { message: errorText(error, "Не удалось добавить адрес") }); }
   });

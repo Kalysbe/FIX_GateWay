@@ -30,6 +30,7 @@ const common = {
   '../components/DataTable': table,
   '../lib/urlState': { useUrlState: () => ['', () => {}] },
   '../components/RowDrawer': { RowDrawer: () => null },
+  '../hooks/useAdminStream': { useAdminStream: () => ({ connected: false, subscribe: () => () => {} }) },
 };
 
 const quote = '{"OrderNum":7412,"ClassCode":"LIST_GD","TradeDate":"2026-10-26T00:00:00","SecCode":"GD052270215","Price":100.00000000,"Value":1000.00,"Balance":10.00000000,"Qty":10.00000000,"FirmId":"SENTI2004","Operation":"Купля","State":"Активна"}';

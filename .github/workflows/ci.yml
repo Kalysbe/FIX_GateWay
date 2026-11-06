@@ -121,6 +121,12 @@ jobs:
         run: node scripts/local-smoke.mjs
       - name: Verify overload, durable queue and outage recovery
         run: node scripts/local-reliability.mjs
+      - name: Administrator scenarios against the real gateway (Playwright)
+        working-directory: frontend
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+          npm run test:stand
       - name: Show container logs on failure
         if: failure()
         run: docker compose -f deploy/docker-compose.local.yml logs --tail 100

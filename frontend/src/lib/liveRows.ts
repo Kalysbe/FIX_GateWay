@@ -10,6 +10,7 @@ const EMPTY: LiveMarks = { rows: new Map(), cells: new Map(), added: 0 };
 export const LIVE_MARK_MS = 2600;
 
 const toNumber = (v: SortValue) => typeof v === "number" ? v : typeof v === "string" && v.trim() !== "" && Number.isFinite(Number(v)) ? Number(v) : null;
+type Seen<T> = { row: T; values: (number | null)[] };
 export const cellKey = (row: string, column: string) => `${row}\u0000${column}`;
 
 /**
@@ -26,7 +27,7 @@ export function useLiveMarks<T>({ rows, rowKey, enabled, resetKey, trend }: {
   resetKey: string;
   trend: { id: string; value: (row: T) => SortValue }[];
 }): LiveMarks {
-  const previous = useRef<Map<string, { signature: string; values: (number | null)[] }> | null>(null);
+  const previous = useRef<Map<string, Seen<T>> | null>(null);
   const baselineFor = useRef(resetKey);
   const [marks, setMarks] = useState<LiveMarks>(EMPTY);
 
@@ -38,19 +39,21 @@ export function useLiveMarks<T>({ rows, rowKey, enabled, resetKey, trend }: {
       setMarks(EMPTY);
     }
     const before = previous.current;
-    const next = new Map<string, { signature: string; values: (number | null)[] }>();
+    const next = new Map<string, Seen<T>>();
     const rowMarks = new Map<string, RowMark>();
     const cellMarks = new Map<string, Trend>();
     let added = 0;
     for (const row of rows) {
       const key = String(rowKey(row));
-      const signature = JSON.stringify(row);
-      const values = trend.map(t => toNumber(t.value(row)));
-      next.set(key, { signature, values });
       const old = before?.get(key);
+      // React Query keeps an unchanged row the same object across refetches,
+      // so only rows that are new objects are compared by content.
+      if (old && old.row === row) { next.set(key, old); continue; }
+      const values = trend.map(t => toNumber(t.value(row)));
+      next.set(key, { row, values });
       if (!before) continue;
       if (!old) { rowMarks.set(key, "new"); added++; continue; }
-      if (old.signature === signature) continue;
+      if (JSON.stringify(old.row) === JSON.stringify(row)) continue;
       rowMarks.set(key, "changed");
       trend.forEach((t, i) => {
         const a = old.values[i], b = values[i];

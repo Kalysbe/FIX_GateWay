@@ -4,6 +4,7 @@ import { Link } from "react-router-dom";
 import { api, getSessionUser } from "../api";
 import { formatDateTime } from "../labels";
 import { ErrorBanner } from "./feedback";
+import { ActionButton } from "./ActionButton";
 
 type Case = {
   event_id: number; order_id: string; client_order_id: string; event_type: string;
@@ -24,7 +25,7 @@ export function ReconciliationQueue({ orderId }: { orderId?: string }) {
     mutationFn: ({ id, note }: { id: number; note: string }) => api(`/api/v1/admin/reconciliation/${id}/resolve`, {
       method: "POST", body: JSON.stringify({ note }),
     }),
-    onSuccess: () => { void q.refetch(); },
+    onSuccess: (_, { id }) => { setNotes(old => { const next = { ...old }; delete next[id]; return next; }); void q.refetch(); },
   });
   const cases = q.data?.cases || [];
   if (!q.isLoading && !q.error && cases.length === 0) return <div className="reconciliation-clear" role="status"><span aria-hidden="true">✓</span>Случаев для сверки нет</div>;
@@ -32,7 +33,6 @@ export function ReconciliationQueue({ orderId }: { orderId?: string }) {
     <h2 className="font-medium">Сверка неопределённых отправок</h2>
     <p className="text-xs text-muted">Случаи закрываются по FIX-подтверждению. Для отмены требуется конечный статус заявки. Комментарий оператора и история решения сохраняются.</p>
     {q.error && <ErrorBanner error={q.error} onRetry={() => q.refetch()} />}
-    {resolve.error && <ErrorBanner error={resolve.error} onRetry={() => resolve.reset()} />}
     {q.isLoading && <p className="text-sm">Загрузка…</p>}
     {!q.isLoading && !q.error && cases.length === 0 && <p className="text-sm text-muted">Случаев для сверки нет.</p>}
     {cases.map(c => <div key={c.event_id} className="rounded-lg border border-line p-3 space-y-2 text-sm">
@@ -42,7 +42,8 @@ export function ReconciliationQueue({ orderId }: { orderId?: string }) {
         <p>{c.evidence_event_id ? `Есть FIX-подтверждение: событие №${c.evidence_event_id}` : "Подтверждение отсутствует. Требуется сверка с торговым контуром."}</p>
         {canResolve && c.evidence_event_id && <div className="flex flex-wrap gap-2">
           <input className="input flex-1" aria-label={`Комментарий к случаю ${c.event_id}`} placeholder="Комментарий оператора" maxLength={2000} value={notes[c.event_id] || ""} onChange={e => setNotes({ ...notes, [c.event_id]: e.target.value })} />
-          <button className="btn" disabled={resolve.isPending || !(notes[c.event_id] || "").trim()} onClick={() => resolve.mutate({ id: c.event_id, note: notes[c.event_id] })}>Закрыть по подтверждению</button>
+          <ActionButton className="btn" disabled={!(notes[c.event_id] || "").trim()} onAction={() => resolve.mutateAsync({ id: c.event_id, note: notes[c.event_id] })} success={`Случай ${c.client_order_id} закрыт`} failure="Не удалось закрыть случай"
+            confirm={{ title: `Закрыть случай ${c.client_order_id}?`, description: <>Случай закрывается по FIX-подтверждению №{c.evidence_event_id}. Комментарий сохранится в истории решения: «{(notes[c.event_id] || "").trim()}».</>, confirmLabel: "Закрыть случай" }}>Закрыть по подтверждению</ActionButton>
         </div>}
       </>}
     </div>)}

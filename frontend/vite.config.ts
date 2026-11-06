@@ -2,6 +2,16 @@ import { fileURLToPath, URL } from "node:url";
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
+// The gateway the dev server and `vite preview` forward API calls to; the local
+// stand (deploy/docker-compose.local.yml) publishes it on 28080.
+const gateway = process.env.GATEWAY_URL ?? "http://localhost:8080";
+const proxy = {
+  "/api": { target: gateway, ws: true },
+  "/health": gateway,
+  "/ready": gateway,
+  "/broker-swagger": gateway,
+};
+
 export default defineConfig({
   plugins: [react()],
   resolve: {
@@ -21,13 +31,6 @@ export default defineConfig({
       },
     },
   },
-  server: {
-    port: 5173,
-    proxy: {
-      "/api": { target: "http://localhost:8080", ws: true },
-      "/health": "http://localhost:8080",
-      "/ready": "http://localhost:8080",
-      "/broker-swagger": "http://localhost:8080",
-    },
-  },
+  server: { port: 5173, proxy },
+  preview: { proxy },
 });

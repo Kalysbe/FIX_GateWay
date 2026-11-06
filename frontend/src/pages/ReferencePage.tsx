@@ -62,11 +62,11 @@ export default function ReferencePage() {
       {tab === "instruments" ? <>
         <p className="text-xs text-muted">Таблица QUIK Securities за последнюю дату. Остальные поля — в меню столбцов</p>
         {instruments.error && <ErrorBanner error={instruments.error} onRetry={() => instruments.refetch()} />}
-        <DataTable title="Инструменты" rows={instrumentRows} columns={quikColumns(instrumentRows, SECURITY_COLUMNS)} rowKey={i => `${dbValue(i.ClassCode)}\u0000${dbValue(i.SecCode)}`} getSearchText={rawSearchText(instrumentRows)} loading={instruments.isLoading} exportName="instruments" showTotals={false} emptyTitle={instruments.error ? "Таблица Securities недоступна" : "В Securities нет строк"} />
+        <DataTable urlState="i" title="Инструменты" rows={instrumentRows} columns={quikColumns(instrumentRows, SECURITY_COLUMNS)} rowKey={i => `${dbValue(i.ClassCode)}\u0000${dbValue(i.SecCode)}`} getSearchText={rawSearchText(instrumentRows)} loading={instruments.isLoading} exportName="instruments" showTotals={false} emptyTitle={instruments.error ? "Таблица Securities недоступна" : "В Securities нет строк"} />
       </> : <>
         <p className="text-xs text-muted">Строки таблицы QUIK Firms в том виде, в каком они хранятся в базе</p>
         {firms.error && <ErrorBanner error={firms.error} onRetry={() => firms.refetch()} />}
-        <DataTable title="Фирмы" rows={firmRows} columns={rawColumns(firmRows)} rowKey={f => `${dbValue(f.FirmId)}\u0000${dbValue(f.Exchange)}`} getSearchText={rawSearchText(firmRows)} loading={firms.isLoading} exportName="firms" showTotals={false} emptyTitle={firms.error ? "Таблица Firms недоступна" : "В Firms нет строк"} />
+        <DataTable urlState="f" title="Фирмы" rows={firmRows} columns={rawColumns(firmRows)} rowKey={f => `${dbValue(f.FirmId)}\u0000${dbValue(f.Exchange)}`} getSearchText={rawSearchText(firmRows)} loading={firms.isLoading} exportName="firms" showTotals={false} emptyTitle={firms.error ? "Таблица Firms недоступна" : "В Firms нет строк"} />
       </>}
     </div>
   );

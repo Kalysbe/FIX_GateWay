@@ -235,10 +235,10 @@ function NotificationBell() {
       <Tooltip>
         <TooltipTrigger asChild>
           <PopoverTrigger asChild>
-            <button type="button" className="icon-btn relative" aria-label="Уведомления">
+            <button type="button" className="icon-btn relative" aria-label={unread > 0 ? `Уведомления, непрочитанных: ${unread > 99 ? "99+" : unread}` : "Уведомления"}>
               <Icons.bell size={17} />
               {unread > 0 && (
-                <span className="absolute right-1 top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-danger px-1 text-[10px] font-semibold leading-none text-white ring-2 ring-[var(--card)]">
+                <span aria-hidden className="absolute right-1 top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-danger px-1 text-[10px] font-semibold leading-none text-white ring-2 ring-[var(--card)]">
                   {unread > 99 ? "99+" : unread}
                 </span>
               )}
@@ -357,7 +357,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
               </nav>
             </div>
             <div className="flex items-center gap-1">
-              <button type="button" className="global-search mr-1" onClick={() => setCommandOpen(true)} aria-label="Поиск раздела">
+              <button type="button" className="global-search mr-1" onClick={() => setCommandOpen(true)} aria-keyshortcuts="Control+K">
                 <Icons.search size={15} />
                 <span>Быстрый переход</span>
                 <kbd>Ctrl K</kbd>

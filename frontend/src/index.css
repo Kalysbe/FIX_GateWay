@@ -20,7 +20,8 @@
   --primary-foreground: #ffffff;
   --subtle: #eff3f5;
   --muted-foreground: #5a6a7a;
-  --faint: #9aa8b4;
+  /* Faint text still meets WCAG AA (4.5:1) on card, page and subtle backgrounds. */
+  --faint: #5f6e7e;
   --border: #e1e7ec;
   --border-soft: #edf1f4;
   --input: #d7dfe5;
@@ -69,7 +70,7 @@
   --primary-foreground: #051d22;
   --subtle: #1b252d;
   --muted-foreground: #92a1ae;
-  --faint: #5d6c78;
+  --faint: #7f8e9b;
   --border: #23303a;
   --border-soft: #1c2730;
   --input: #2c3a45;
@@ -514,8 +515,14 @@ a:focus-visible, summary:focus-visible { outline: 2px solid var(--ring); outline
 .icon-btn:not(:disabled):not(:focus-visible):active { transform: scale(0.97); }
 @media (min-width: 1600px) { .app-main { padding-left: 32px; padding-right: 32px; } }
 @media (max-width: 1100px) { .connection-adapters { display: none; } .global-search { min-width: 0; } .global-search span, .global-search kbd { display: none; } }
-@media (max-width: 767px) { .app-main { padding: 16px 12px; } .app-header { padding: 0 10px; } .connection-bar { padding: 7px 12px; gap: 5px; } .connection-meta { gap: 7px; } .connection-meta > span:last-child { display: none; } .table-loaded { display: none; } .table-toolbar { padding: 10px; } .table-search { max-width: none; } .table-pagination { justify-content: center; } .table-page-size { font-size: 0; } .table-totals { gap: 8px 12px; }.page-heading h1 { font-size: 21px; }.overview-links { width: 100%; flex-wrap: wrap; } }
+@media (max-width: 767px) { .app-main { padding: 16px 12px; } .app-header { padding: 0 10px; } .connection-bar { padding: 7px 12px; gap: 5px; } .connection-meta { gap: 7px; } .connection-meta > span:last-child { display: none; } .table-loaded { display: none; } .table-toolbar { padding: 10px; } .table-search { max-width: none; } .table-pagination { justify-content: center; } .table-page-size { font-size: 0; } .table-page-size select { font-size: 12px; } .table-server-page { order: 3; width: 100%; margin-left: 0; display: grid; grid-template-columns: 1fr 1fr; } .table-server-page > span { grid-column: 1 / -1; text-align: center; } .table-server-page .btn-muted { justify-content: center; } .table-totals { gap: 8px 12px; }.page-heading h1 { font-size: 21px; }.overview-links { width: 100%; flex-wrap: wrap; } }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
   .btn, .btn-muted, .icon-btn { transform: none !important; }
 }
+
+/* Unread notifications in the table: a severity stripe on the first cell. */
+.data-table .table tr.notification-row-unread > td:first-child { box-shadow: inset 3px 0 0 var(--brand); }
+.data-table .table tr.notification-row-critical > td:first-child, .data-table .table tr.notification-row-error > td:first-child { box-shadow: inset 3px 0 0 var(--danger); }
+.data-table .table tr.notification-row-warning > td:first-child { box-shadow: inset 3px 0 0 var(--warning); }
+.data-table .table tr.notification-row-unread > td { font-weight: 450; }

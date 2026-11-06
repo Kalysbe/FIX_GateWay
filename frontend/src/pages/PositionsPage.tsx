@@ -142,7 +142,7 @@ export default function PositionsPage() {
         </div>
 
         {positions.error && <ErrorBanner error={positions.error} onRetry={() => positions.refetch()} />}
-        <DataTable key={tab} title={tab === "instruments" ? "Позиции по инструментам" : "Денежные позиции"} rows={positions.error ? [] : rows} columns={columns} rowKey={rowKey} getSearchText={rawSearchText(rows)} loading={positions.isLoading} resetKey={brokerFilter + ":" + firmFilter + ":" + clientFilter + ":" + hideZero} exportName={tab === "instruments" ? "positions" : "cash-positions"} showTotals={false} emptyTitle={positions.error ? "Позиции временно недоступны" : "В этой выборке позиций нет"} emptyHint={hideZero && (tab === "instruments" ? allInstruments : allCash).length ? "Нулевые остатки скрыты" : undefined} />
+        <DataTable urlState="p" key={tab} title={tab === "instruments" ? "Позиции по инструментам" : "Денежные позиции"} rows={positions.error ? [] : rows} columns={columns} rowKey={rowKey} getSearchText={rawSearchText(rows)} loading={positions.isLoading} resetKey={brokerFilter + ":" + firmFilter + ":" + clientFilter + ":" + hideZero} exportName={tab === "instruments" ? "positions" : "cash-positions"} showTotals={false} emptyTitle={positions.error ? "Позиции временно недоступны" : "В этой выборке позиций нет"} emptyHint={hideZero && (tab === "instruments" ? allInstruments : allCash).length ? "Нулевые остатки скрыты" : undefined} />
       </div>
     </div>
   );

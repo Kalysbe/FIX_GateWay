@@ -8,14 +8,14 @@ type Reply = { status?: number; body?: unknown; headers?: Record<string, string>
 export const reply = (r: Reply) => ({ __reply: r });
 
 /** An unsigned session token: the console only reads its expiry and role. */
-export function sessionToken(role: Role, email = "admin@example.test") {
+export function sessionToken(role: Role, email = "admin@example.test", ttlSeconds = 3600) {
   const part = (v: object) => Buffer.from(JSON.stringify(v)).toString("base64url");
-  return `${part({ alg: "none", typ: "JWT" })}.${part({ sub: "1", email, role, exp: Math.floor(Date.now() / 1000) + 3600 })}.e2e`;
+  return `${part({ alg: "none", typ: "JWT" })}.${part({ sub: "1", email, role, exp: Math.floor(Date.now() / 1000) + ttlSeconds })}.e2e`;
 }
 
 /** Opens the console already signed in with the given role. */
-export async function signIn(page: Page, role: Role = "ADMIN") {
-  const token = sessionToken(role);
+export async function signIn(page: Page, role: Role = "ADMIN", ttlSeconds = 3600) {
+  const token = sessionToken(role, "admin@example.test", ttlSeconds);
   await page.addInitScript(([t, r]) => {
     sessionStorage.setItem("fg_token", t);
     sessionStorage.setItem("fg_user", JSON.stringify({ email: "admin@example.test", role: r }));

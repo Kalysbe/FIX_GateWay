@@ -32,7 +32,7 @@ export default function GrpcPage() {
     <PageHeader title="gRPC · Подписки" subtitle="Подключения внешних систем и их подписки" actions={<span className={connected ? "text-success" : "text-warning"}>{connected ? "● В реальном времени" : "Соединение восстанавливается"}</span>}/>
     {query.error && <ErrorBanner error={query.error} onRetry={() => query.refetch()}/>}
     <p className="text-xs text-muted">Подключений внешних систем: {all.length}</p>
-    <DataTable title="gRPC-подписки" rows={all} columns={columns} rowKey={c => c.id} loading={query.isLoading} searchPlaceholder="Брокер, путь данных, событие…" onRefresh={() => void query.refetch()} refreshing={query.isFetching} emptyTitle="Активных подписок нет" summary={rows => [{ label: "Подключений", value: rows.length }, { label: "Тем событий", value: new Set(rows.flatMap(c => c.topics)).size }, { label: "Путей данных", value: new Set(rows.flatMap(c => c.paths)).size }]} />
+    <DataTable urlState title="gRPC-подписки" rows={all} columns={columns} rowKey={c => c.id} loading={query.isLoading} searchPlaceholder="Брокер, путь данных, событие…" onRefresh={() => void query.refetch()} refreshing={query.isFetching} emptyTitle="Активных подписок нет" summary={rows => [{ label: "Подключений", value: rows.length }, { label: "Тем событий", value: new Set(rows.flatMap(c => c.topics)).size }, { label: "Путей данных", value: new Set(rows.flatMap(c => c.paths)).size }]} />
     <p className="text-sm text-muted">Подключения нашей админки скрыты. Все показанные подписки используют gRPC Stream. Пути показывают источник данных события; обычные HTTP-запросы здесь не отображаются. После отключения клиент исчезает из списка.</p>
   </div>;
 }

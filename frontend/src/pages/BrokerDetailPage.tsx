@@ -146,6 +146,8 @@ export default function BrokerDetailPage() {
 
   const [manageIP, setManageIP] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
+  const [ipDirty, setIpDirty] = useState(false);
+  const [editDirty, setEditDirty] = useState(false);
 
 
   const b = broker.data?.broker;
@@ -581,7 +583,7 @@ export default function BrokerDetailPage() {
 
       {/* Modals */}
       {manageIP && (
-        <Modal title="Управление IP Whitelist" onClose={() => setManageIP(false)}>
+        <Modal title="Управление IP Whitelist" dirty={ipDirty} onClose={() => { setManageIP(false); setIpDirty(false); }}>
           <label className="mb-3 flex items-center gap-2 text-sm">
             <input type="checkbox" checked={wlEnabled} onChange={(e) => {
               const enabled = e.target.checked;
@@ -598,7 +600,7 @@ export default function BrokerDetailPage() {
             }} />
             Включить whitelist
           </label>
-          <IPEntryForm onAdd={async (values) => { await addIP(values); toast.push(`Адрес ${values.ip} добавлен`, "ok"); }} />
+          <IPEntryForm onDirtyChange={setIpDirty} onAdd={async (values) => { await addIP(values); toast.push(`Адрес ${values.ip} добавлен`, "ok"); }} />
           <DataTable<IPWhitelistEntry> title="Адреса доступа" rows={ipEntries} rowKey={row => row.id} emptyTitle="Записей пока нет"
             selection={{ actions: [{
               label: "Удалить выбранные", danger: true,
@@ -619,7 +621,7 @@ export default function BrokerDetailPage() {
       )}
 
       {showCreate && (
-        <Modal title="Создать API-токен" onClose={() => setShowCreate(false)}>
+        <Modal title="Создать API-токен" dirty={tokenName !== "Production API" || quikFirm !== (b?.code ? String(b.code) : "") || expiresIn !== 180 || perms.length !== ALL_PERMS.length} onClose={() => setShowCreate(false)}>
           <label className="mb-3 block space-y-1 text-sm">
             <span className="text-muted">Название токена</span>
             <input className="input" value={tokenName} onChange={(e) => setTokenName(e.target.value)} />
@@ -672,7 +674,7 @@ export default function BrokerDetailPage() {
       )}
 
       {editFirm && (
-        <Modal title="Код фирмы (FIX 5018)" onClose={() => setEditFirm(null)}>
+        <Modal title="Код фирмы (FIX 5018)" dirty={editFirmValue !== (editFirm.quik_firm || "")} onClose={() => setEditFirm(null)}>
           <p className="mb-3 text-sm text-muted">
             Токен <span className="font-medium">{editFirm.name}</span>. Значение уходит в NewOrderSingle tag 5018.
           </p>
@@ -709,13 +711,15 @@ export default function BrokerDetailPage() {
 
 
       {editOpen && (
-        <Modal title="Редактировать брокера" onClose={() => setEditOpen(false)}>
+        <Modal title="Редактировать брокера" dirty={editDirty} onClose={() => { setEditOpen(false); setEditDirty(false); }}>
           <BrokerEditForm
             initial={{ name: b?.name || "", description: b?.description || "" }}
-            onCancel={() => setEditOpen(false)}
+            onDirtyChange={setEditDirty}
+            onCancel={() => { setEditOpen(false); setEditDirty(false); }}
             onSave={async (values) => {
               await api(`/api/v1/admin/brokers/${id}`, { method: "PATCH", body: JSON.stringify(values) });
               setEditOpen(false);
+              setEditDirty(false);
               toast.push("Изменения брокера сохранены", "ok");
               qc.invalidateQueries({ queryKey: ["broker", id] });
               qc.invalidateQueries({ queryKey: ["brokers"] });

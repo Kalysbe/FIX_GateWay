@@ -88,6 +88,15 @@ test("a live table marks new rows and the direction of a changed trend value, no
   expect(document.querySelector(".row-flash-new, .row-flash-changed")).toBeNull();
 });
 
+test("a refetch with the same content does not flash, whether rows are reused or copied", () => {
+  const data = rows(3);
+  const table = (list: Row[]) => <DataTable title="Live" live rows={list} columns={columns} rowKey={r => r.id} />;
+  const { rerender } = render(table(data));
+  rerender(table([...data]));
+  rerender(table(data.map(r => ({ ...r }))));
+  expect(document.querySelector(".row-flash-new, .row-flash-changed")).toBeNull();
+});
+
 test("selected rows get bulk actions and the selection clears after they run", async () => {
   const run = vi.fn(async () => {});
   render(<DataTable title="Sel" rows={rows(3)} columns={columns} rowKey={r => r.id} selection={{ canSelect: r => r.id !== 2, actions: [{ label: "Отметить", run }] }} />);

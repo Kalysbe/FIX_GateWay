@@ -37,6 +37,20 @@ test.describe("вход администратора", () => {
     expect(await page.evaluate(() => [!!sessionStorage.getItem("fg_token"), localStorage.getItem("fg_token")])).toEqual([true, null]);
   });
 
+  test("адрес без доменной зоны (admin@localhost) принимается, явная ошибка — нет", async ({ page }) => {
+    const sent = await mockApi(page, { "POST /api/v1/admin/login": () => reply({ status: 401, body: { error: "invalid credentials" } }) });
+    await page.goto("/login");
+    await page.getByLabel("Электронная почта").fill("admin");
+    await page.getByLabel("Пароль", { exact: true }).fill("x");
+    await page.getByRole("button", { name: "Войти в консоль" }).click();
+    await expect(page.getByText("Неверный адрес почты")).toBeVisible();
+    expect(sent.filter(r => r.path === "/api/v1/admin/login")).toHaveLength(0);
+    await page.getByLabel("Электронная почта").fill("admin@localhost");
+    await page.getByRole("button", { name: "Войти в консоль" }).click();
+    await expect(page.getByRole("alert")).toHaveText("invalid credentials");
+    expect(sent.find(r => r.path === "/api/v1/admin/login")?.body).toEqual({ email: "admin@localhost", password: "x" });
+  });
+
   test("без сессии консоль отправляет на вход", async ({ page }) => {
     await mockApi(page, {});
     await page.goto("/brokers");

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useQuery } from "@tanstack/react-query";
@@ -24,6 +24,14 @@ export default function RateLimitsPage() {
   const { register, handleSubmit, setValue, watch, formState: { errors, isSubmitting: saving } } = form;
   const draft = watch();
   const [message, setMessage] = useState("");
+  // Leaving the page with an unsaved limit asks first.
+  const unsaved = form.formState.isDirty && !form.formState.isSubmitSuccessful;
+  useEffect(() => {
+    if (!unsaved) return;
+    const warn = (e: BeforeUnloadEvent) => { e.preventDefault(); e.returnValue = ""; };
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [unsaved]);
   const toast = useToast();
   const user = getSessionUser();
   const canEdit = user?.role === "ADMIN" || user?.role === "SUPER_ADMIN";
@@ -58,7 +66,7 @@ export default function RateLimitsPage() {
     <TradingLimits />
     <p className="mb-4 text-sm text-muted">Статистика текущего Gateway. Current — запросы в текущей секунде. Категории и операции применяются совместно. Изменения вступают в силу без перезапуска.</p>
     {q.error && <p role="alert">{q.error.message}</p>}
-    <DataTable title="Лимиты API" rows={[...rows.values()]} columns={columns} rowKey={key} loading={q.isLoading} onRefresh={() => void q.refetch()} refreshing={q.isFetching} summary={list => [{ label: "Правил", value: list.length }, { label: "Включены", value: list.filter(p => p.enabled).length, tone: "success" }]} />
+    <DataTable urlState title="Лимиты API" rows={[...rows.values()]} columns={columns} rowKey={key} loading={q.isLoading} onRefresh={() => void q.refetch()} refreshing={q.isFetching} summary={list => [{ label: "Правил", value: list.length }, { label: "Включены", value: list.filter(p => p.enabled).length, tone: "success" }]} />
     {canEdit && <form className="mt-6 grid items-start gap-3 rounded-lg border border-line bg-panel p-4 md:grid-cols-3" onSubmit={e => void save(e)} noValidate>
       <Field label="Scope"><select className="input w-full" {...scopeField}>{["broker", "global", "admin"].map(v => <option key={v}>{v}</option>)}</select></Field>
       <Field label="Broker ID" error={errors.subject}><input className="input w-full read-only:cursor-not-allowed read-only:opacity-60" readOnly={draft.scope !== "broker"} aria-disabled={draft.scope !== "broker"} {...register("subject")} /></Field>

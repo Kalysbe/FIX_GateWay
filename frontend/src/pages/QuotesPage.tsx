@@ -8,6 +8,7 @@ import { instrumentPath, isBuy, quoteColumns } from "../lib/quotes";
 import { orderKey } from "../lib/rawOrders";
 import { useUrlState } from "../lib/urlState";
 import { RowDrawer } from "../components/RowDrawer";
+import { useAdminStream } from "../hooks/useAdminStream";
 import { PageHeader } from "../components/PageHeader";
 import { ErrorBanner } from "../components/feedback";
 import { DataTable } from "../components/DataTable";
@@ -29,6 +30,7 @@ async function loadQuotes(signal: AbortSignal): Promise<DBOrder[]> {
 }
 
 export default function QuotesPage() {
+  const { connected } = useAdminStream();
   const [opFilter, setOpFilter] = useUrlState("op");
   const [classFilter, setClassFilter] = useUrlState("class");
   const [open, setOpen] = useState<DBOrder | null>(null);
@@ -37,7 +39,8 @@ export default function QuotesPage() {
   const quotesQ = useQuery({
     queryKey: ["admin-quotes"],
     queryFn: ({ signal }) => loadQuotes(signal),
-    refetchInterval: liveRefetchInterval(false, 5000, 8000),
+    // order.updated refreshes the quotes while the event stream is up; polling is the fallback.
+    refetchInterval: liveRefetchInterval(connected, 5000),
   });
 
   const quotes = quotesQ.data ?? [];
