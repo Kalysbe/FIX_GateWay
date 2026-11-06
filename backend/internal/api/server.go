@@ -1510,12 +1510,22 @@ func (s *Server) handleDocsAsset(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "not found")
 		return
 	}
-	switch r.URL.Path {
-	case "/docs/kse-logo.png", "/docs/logo_KSE.png", "/docs/kse-favicon.png", "/docs/swagger/swagger-ui.css", "/docs/swagger/swagger-ui-bundle.js", "/docs/swagger/init.js":
-		http.ServeFile(w, r, strings.TrimPrefix(r.URL.Path, "/"))
-	default:
+	file, ok := docsAssets[r.URL.Path]
+	if !ok {
 		writeErr(w, http.StatusNotFound, "not found")
+		return
 	}
+	http.ServeFile(w, r, file)
+}
+
+// docsAssets maps public URLs to files; the request path never becomes a file path.
+var docsAssets = map[string]string{
+	"/docs/kse-logo.png":                 "docs/kse-logo.png",
+	"/docs/logo_KSE.png":                 "docs/logo_KSE.png",
+	"/docs/kse-favicon.png":              "docs/kse-favicon.png",
+	"/docs/swagger/swagger-ui.css":       "docs/swagger/swagger-ui.css",
+	"/docs/swagger/swagger-ui-bundle.js": "docs/swagger/swagger-ui-bundle.js",
+	"/docs/swagger/init.js":              "docs/swagger/init.js",
 }
 
 func (s *Server) handleBrokerSwaggerUI(w http.ResponseWriter, r *http.Request) {
