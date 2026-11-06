@@ -12,9 +12,10 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
-	pb "github.com/fix-gateway/backend/gen/realtime/v1"
+	pb"github.com/fix-gateway/backend/gen/realtime/v1"
 	"github.com/fix-gateway/backend/internal/adapters"
 	"github.com/fix-gateway/backend/internal/admin"
 	"github.com/fix-gateway/backend/internal/audit"
@@ -63,8 +64,10 @@ type Server struct {
 	ratePolicies       *ratelimit.Store
 	executionInbox     *executioninbox.Inbox
 	inboxCases         *executioninbox.CaseStore
+	// Unix seconds when the served gRPC certificate expires; 0 while unknown.
+	grpcCertNotAfter atomic.Int64
 
-	trusted             []*net.IPNet
+	trusted            []*net.IPNet
 	hmacNonces          auth.NonceStore
 	maxBody             int64
 	authFailLimiter     *ratelimit.SlidingWindow
@@ -110,6 +113,10 @@ func (s *Server) SetExecutionInbox(in *executioninbox.Inbox, cases *executioninb
 }
 
 func (s *Server) SetNonceStore(store auth.NonceStore) { s.hmacNonces = store }
+
+// SetGRPCCertificateExpiry tells the safety monitor when the certificate the
+// gRPC server serves expires. A renewed file only counts after a restart.
+func (s *Server) SetGRPCCertificateExpiry(notAfter time.Time) { s.grpcCertNotAfter.Store(notAfter.Unix()) }
 
 // OperationsHandler is served exclusively on the private operations listener.
 // Production container probes and Prometheus do not traverse the public API's

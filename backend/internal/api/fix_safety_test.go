@@ -33,3 +33,36 @@ func TestFIXAlarmRepeatsFailuresButNotNotices(t *testing.T) {
 		}
 	}
 }
+
+// The served gRPC certificate warns once 30 days ahead and is critical once expired.
+func TestGRPCCertProblems(t *testing.T) {
+	now := time.Date(2026, 11, 6, 12, 0, 0, 0, time.UTC)
+	state := func(notAfter time.Time) map[string]fixProblem {
+		out := map[string]fixProblem{}
+		for _, p := range grpcCertProblems(notAfter, now) {
+			out[p.code] = p
+		}
+		return out
+	}
+	if got := grpcCertProblems(time.Time{}, now); got != nil {
+		t.Fatalf("unknown expiry reported %v", got)
+	}
+	far := state(now.Add(200 * 24 * time.Hour))
+	if far["GRPC_CERT_EXPIRING"].active || far["GRPC_CERT_EXPIRED"].active {
+		t.Fatalf("a distant expiry is not a problem: %+v", far)
+	}
+	soon := state(now.Add(10 * 24 * time.Hour))
+	if p := soon["GRPC_CERT_EXPIRING"]; !p.active || !p.notice {
+		t.Fatalf("expiry in 10 days must warn once: %+v", p)
+	}
+	if soon["GRPC_CERT_EXPIRED"].active {
+		t.Fatal("not expired yet")
+	}
+	gone := state(now.Add(-26 * time.Hour))
+	if p := gone["GRPC_CERT_EXPIRED"]; !p.active || p.notice {
+		t.Fatalf("an expired certificate is a repeated failure: %+v", p)
+	}
+	if gone["GRPC_CERT_EXPIRING"].active {
+		t.Fatal("expired supersedes expiring")
+	}
+}

@@ -30,6 +30,27 @@ func fixAlarmDue(previous fixAlarm, p fixProblem, now time.Time) bool {
 	return !previous.active || (!p.notice && now.Sub(previous.notified) >= 5*time.Minute)
 }
 
+// GRPCCertWarnBefore is how early an expiring gRPC server certificate is reported.
+const GRPCCertWarnBefore = 30 * 24 * time.Hour
+
+// grpcCertProblems reports the served gRPC certificate: a warning once from 30
+// days before expiry, a repeated critical alarm once it has expired. Clients
+// that verify TLS, and the admin console's own event stream, fail after that.
+func grpcCertProblems(notAfter, now time.Time) []fixProblem {
+	if notAfter.IsZero() {
+		return nil
+	}
+	until := notAfter.UTC().Format("02.01.2006 15:04 UTC")
+	expired := !now.Before(notAfter)
+	return []fixProblem{
+		{code: "GRPC_CERT_EXPIRING", message: "Скоро истекает сертификат gRPC", notice: true,
+			active: !expired && notAfter.Sub(now) <= GRPCCertWarnBefore,
+			detail: fmt.Sprintf("Сертификат gRPC-сервера действует до %s (осталось %d дн.). Выпустите новый и перезапустите шлюз заранее; если меняется CA, раздайте брокерам новый ca.crt.", until, int(notAfter.Sub(now).Hours()/24))},
+		{code: "GRPC_CERT_EXPIRED", message: "Истёк сертификат gRPC", active: expired,
+			detail: fmt.Sprintf("Сертификат gRPC-сервера истёк %s. Брокеры, проверяющие TLS, не подключаются к gRPC, а поток событий консоли не работает (страницы обновляются опросом). Выпустите новый сертификат и перезапустите шлюз.", until)},
+	}
+}
+
 // Notifications are delivered through Gateway's existing persistent inbox/UI.
 // No email, webhook or external recipient is used by this monitor.
 func (s *Server) RunFIXSafetyMonitor(ctx context.Context) {
@@ -84,6 +105,11 @@ func (s *Server) RunFIXSafetyMonitor(ctx context.Context) {
 			for id, usage := range s.manager.AuditUsage() {
 				publish(fixProblem{code: "FIX_AUDIT_CAPACITY_" + id, message: "Заполняется журнал FIX", active: usage[1] > 0 && usage[0] >= usage[1]*7/10,
 					detail: fmt.Sprintf("Адаптер %s: занято %d из %d байт. При исчерпании лимита приём будет остановлен; требуется освобождение места с сохранением нужной истории.", id, usage[0], usage[1])})
+			}
+		}
+		if at := s.grpcCertNotAfter.Load(); at != 0 {
+			for _, p := range grpcCertProblems(time.Unix(at, 0), time.Now()) {
+				publish(p)
 			}
 		}
 		select {

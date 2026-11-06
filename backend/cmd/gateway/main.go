@@ -290,6 +290,14 @@ func main() {
 		log.Error("gRPC TLS configuration failed; provision certificates", "error", err)
 		os.Exit(1)
 	}
+	if notAfter, err := grpcstream.CertificateExpiry(cfg.GRPCCertFile); err == nil {
+		server.SetGRPCCertificateExpiry(notAfter)
+		if !time.Now().Before(notAfter) {
+			log.Error("gRPC server certificate has expired; TLS clients and the admin event stream cannot connect", "not_after", notAfter)
+		} else if time.Until(notAfter) <= api.GRPCCertWarnBefore {
+			log.Warn("gRPC server certificate expires soon", "not_after", notAfter)
+		}
+	}
 	clientCreds, err := grpcstream.ClientCredentials(cfg.GRPCClientCertFile, cfg.GRPCClientKeyFile, cfg.GRPCCAFile, cfg.GRPCServerName)
 	if err != nil {
 		log.Error("gRPC bridge TLS configuration failed", "error", err)
