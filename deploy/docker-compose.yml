@@ -25,16 +25,8 @@ services:
       timeout: 5s
       retries: 10
 
-  fixsimulator:
-    build:
-      context: ../backend
-      dockerfile: Dockerfile
-      target: fixsimulator
-    restart: unless-stopped
-    ports:
-      - "127.0.0.1:5001:5001"
-      - "127.0.0.1:5002:5002"
-
+  # The gateway talks to the real QUIK FIX adapters (quik-fix-1, quik-fix-2);
+  # the FIX simulator lives only in docker-compose.local.yml.
   gateway:
     build:
       context: ../backend
@@ -49,8 +41,6 @@ services:
         condition: service_completed_successfully
       postgres:
         condition: service_healthy
-      fixsimulator:
-        condition: service_started
     environment:
       HTTP_ADDR: ":8080"
       PROMETHEUS_URL: ${PROMETHEUS_URL:-http://prometheus:9090}
@@ -87,7 +77,8 @@ services:
       REQUIRE_HTTPS: ${REQUIRE_HTTPS:-false}
       HMAC_REQUIRED: ${HMAC_REQUIRED:-false}
       OPERATIONS_ADDR: ":9080"
-      # QUIK is 172.23.10.84; simulator adapters remain disabled in the UAT DB.
+      # QUIK is 172.23.10.84; the server DB has only quik-fix-1 and quik-fix-2
+      # (simulator rows removed 06.11.2026).
       ADAPTER_HOST_OVERRIDE: ${ADAPTER_HOST_OVERRIDE:-}
       # The QUIK FIX adapters work 09:05-04:00 Bishkek; the gateway connects
       # only then and logs out at 03:59.
