@@ -127,8 +127,7 @@ export default function LoginPage() {
                     aria-controls="login-password"
                     title={showPassword ? "Скрыть пароль" : "Показать пароль"}
                   >
-                    <Icons.eye size={19} />
-                    {showPassword && <span className="login-eye-slash" aria-hidden="true" />}
+                    {showPassword ? <Icons.eyeOff size={18} /> : <Icons.eye size={18} />}
                   </button>
                 </div>
               </div>

@@ -1,5 +1,6 @@
-import { useEffect, useId, useRef, useState, type ReactNode } from "react";
-import { Icons } from "./icons";
+import { useRef, useState, type ReactNode } from "react";
+import { cn } from "../lib/utils";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "./ui/dialog";
 
 export function Modal({
   title,
@@ -7,78 +8,47 @@ export function Modal({
   children,
   wide,
   motion = true,
+  bare = false,
 }: {
   title: string;
   onClose: () => void;
   children: ReactNode;
   wide?: boolean;
   motion?: boolean;
+  /** Content draws its own padding and the title stays for screen readers only. */
+  bare?: boolean;
 }) {
-  // Capture the trigger before the focus trap moves focus into the dialog.
-  const [animate] = useState(() => motion && !document.activeElement?.matches(":focus-visible"));
-  const titleId = useId();
   const panelRef = useRef<HTMLDivElement>(null);
-  const lastFocus = useRef<HTMLElement | null>(null);
-  const closeRef = useRef(onClose);
-  useEffect(() => { closeRef.current = onClose; }, [onClose]);
-
-  useEffect(() => {
-    lastFocus.current = document.activeElement as HTMLElement | null;
-    const panel = panelRef.current;
-    const focusable = panel?.querySelector<HTMLElement>('[data-autofocus]') ?? panel?.querySelector<HTMLElement>('input:not(:disabled), select:not(:disabled), textarea:not(:disabled)') ?? panel?.querySelector<HTMLElement>(
-      'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
-    );
-    focusable?.focus();
-
-    function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape") {
-        e.preventDefault();
-        closeRef.current();
-        return;
-      }
-      if (e.key !== "Tab" || !panel) return;
-      const nodes = Array.from(
-        panel.querySelectorAll<HTMLElement>('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'),
-      ).filter((el) => !el.hasAttribute("disabled"));
-      if (!nodes.length) return;
-      const first = nodes[0];
-      const last = nodes[nodes.length - 1];
-      if (e.shiftKey && document.activeElement === first) {
-        e.preventDefault();
-        last.focus();
-      } else if (!e.shiftKey && document.activeElement === last) {
-        e.preventDefault();
-        first.focus();
-      }
-    }
-
-    document.addEventListener("keydown", onKey);
-    return () => {
-      document.removeEventListener("keydown", onKey);
-      lastFocus.current?.focus();
-    };
-  }, []);
-
+  // Pages mount the dialog without a Radix trigger; return focus to what opened it.
+  const [opener] = useState(() => document.activeElement as HTMLElement | null);
   return (
-    <div className="modal-backdrop fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4" data-motion={animate ? undefined : "instant"} onClick={onClose}>
-      <div
+    <Dialog open onOpenChange={(open) => { if (!open) onClose(); }}>
+      <DialogContent
         ref={panelRef}
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby={titleId}
-        className={`modal-panel card max-h-[90vh] w-full overflow-y-auto ${wide ? "max-w-2xl" : "max-w-lg"}`}
-        onClick={(e) => e.stopPropagation()}
+        aria-describedby={undefined}
+        showCloseButton={!bare}
+        className={cn(wide ? "max-w-2xl" : "max-w-lg", !motion && "duration-0 data-[state=open]:animate-none", bare && "gap-0 p-0")}
+        onCloseAutoFocus={(event) => {
+          event.preventDefault();
+          if (opener?.isConnected) opener.focus();
+        }}
+        onOpenAutoFocus={(event) => {
+          // Prefer the field the dialog marks, then the first form control.
+          const panel = panelRef.current;
+          const target =
+            panel?.querySelector<HTMLElement>("[data-autofocus]") ??
+            panel?.querySelector<HTMLElement>("input:not(:disabled), select:not(:disabled), textarea:not(:disabled)");
+          if (target) {
+            event.preventDefault();
+            target.focus();
+          }
+        }}
       >
-        <div className="mb-4 flex items-center justify-between gap-3">
-          <h3 id={titleId} className="text-lg font-semibold">
-            {title}
-          </h3>
-          <button type="button" className="icon-btn" onClick={onClose} aria-label="Закрыть">
-            <Icons.x size={16} />
-          </button>
-        </div>
-        {children}
-      </div>
-    </div>
+        <DialogHeader className={cn(bare && "sr-only")}>
+          <DialogTitle>{title}</DialogTitle>
+        </DialogHeader>
+        <div className="min-w-0">{children}</div>
+      </DialogContent>
+    </Dialog>
   );
 }
