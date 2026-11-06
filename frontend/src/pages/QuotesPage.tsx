@@ -48,7 +48,7 @@ export default function QuotesPage() {
         subtitle="Сегодняшние активные заявки QUIK · таблица Orders, State = «Активна»"
         actions={
           <div className="rounded-lg border border-line bg-panel px-3 py-1.5 text-xs text-ink">
-            <span className="mr-2 text-slate-500">Строк</span>
+            <span className="mr-2 text-muted">Строк</span>
             <span className="font-mono font-semibold">{filtered.length}</span>
           </div>
         }

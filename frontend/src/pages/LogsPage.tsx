@@ -234,7 +234,7 @@ export default function LogsPage() {
       {q.error && <ErrorBanner error={q.error} onRetry={() => q.refetch()} />}
       <div className={q.isPlaceholderData ? "opacity-60" : ""}><DataTable title="Журнал событий" rows={rows} columns={columns} rowKey={row => row.id} loading={q.isLoading} resetKey={qs} initialSort={{ id: "time", direction: "desc" }} searchPlaceholder="Поиск в загруженных событиях…" getSearchText={row => Object.values(row).join(" ")} emptyTitle="Нет событий по выбранным фильтрам" summary={list => [{ label: "Событий", value: list.length }, { label: "Ошибок", value: list.filter(row => ["ERROR", "CRITICAL"].includes(row.severity)).length, tone: "danger" }, { label: "Предупреждений", value: list.filter(row => row.severity === "WARNING").length, tone: "warn" }]} /></div>
       <div className="flex flex-wrap items-center justify-between gap-3 text-sm">
-        <div className="text-slate-500">
+        <div className="text-muted">
           Загружено <span className="font-mono text-ink">{formatNumber(loaded)}</span>
           {q.hasNextPage ? " · есть ещё" : loaded > 0 ? " · это всё по фильтру" : ""}
         </div>
@@ -309,8 +309,8 @@ function LogDetails({ row, onClose }: { row: LogRow; onClose: () => void }) {
 
 function Row({ k, v, mono }: { k: string; v?: string | null; mono?: boolean }) {
   return (
-    <div className="flex justify-between gap-3 border-b border-slate-50 py-1.5">
-      <dt className="text-slate-500">{k}</dt>
+    <div className="flex justify-between gap-3 border-b border-line py-1.5">
+      <dt className="text-muted">{k}</dt>
       <dd className={`text-right ${mono ? "font-mono text-xs" : ""}`}>{v || "—"}</dd>
     </div>
   );

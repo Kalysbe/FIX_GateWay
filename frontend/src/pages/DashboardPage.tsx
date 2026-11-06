@@ -31,11 +31,11 @@ export default function DashboardPage() {
   return (
     <div className="space-y-6">
       {q.error && <ErrorBanner error={q.error} onRetry={() => q.refetch()} />}
-      {d.stale && <p role="status" className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">Показана последняя сохранённая статистика. Данные устарели; шлюз повторяет обновление в фоне.</p>}
+      {d.stale && <p role="status" className="rounded-lg border border-warning/30 bg-warning-soft p-4 text-sm text-warning">Показана последняя сохранённая статистика. Данные устарели; шлюз повторяет обновление в фоне.</p>}
       <PageHeader title="Дашборд" subtitle="Здоровье шлюза и поток ордеров в реальном времени" />
       {d.generated_at && <p className="text-xs text-muted">Данные на {formatDateTime(d.generated_at)} · статистика обновляется в фоне раз в минуту</p>}
       <div className="overview-hero"><div><span className="login-eyebrow">Операционный обзор</span><h2 className="mt-1">Торговый поток и состояние шлюза</h2><p>Заявки, подключения и ключевые показатели в одном пространстве</p></div><div className="overview-links"><Link className="btn" to="/orders">Книга заявок →</Link><Link className="btn-muted" to="/monitoring">Мониторинг</Link></div></div>
-      {d.orders_source_error && <p role="status" className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">Источник заявок QUIK недоступен: счётчики заявок не показаны. Остальные данные дашборда актуальны.</p>}
+      {d.orders_source_error && <p role="status" className="rounded-lg border border-warning/30 bg-warning-soft p-4 text-sm text-warning">Источник заявок QUIK недоступен: счётчики заявок не показаны. Остальные данные дашборда актуальны.</p>}
       <div className="grid gap-3 md:grid-cols-4">
         <Stat label="Заявок в QUIK" value={d.stats?.total ?? "—"} />
         <Stat label="Исполнено" value={d.stats?.filled ?? "—"} />
@@ -60,10 +60,10 @@ export default function DashboardPage() {
             <span
               className={`h-2.5 w-2.5 rounded-full ${
                 String(v).toUpperCase() === "ONLINE"
-                  ? "bg-emerald-500 shadow-[0_0_10px_rgba(16,185,129,0.85)]"
+                  ? "bg-success shadow-[0_0_10px_rgba(16,185,129,0.85)]"
                   : String(v).toUpperCase() === "DEGRADED"
-                    ? "bg-amber-500"
-                    : "bg-rose-500"
+                    ? "bg-warning"
+                    : "bg-danger"
               }`}
             />
           </div>
@@ -106,11 +106,11 @@ export default function DashboardPage() {
               <Link
                 key={b.broker_id}
                 to={`/brokers/${b.broker_id}?tab=activity`}
-                className="flex items-center justify-between rounded-md bg-surface px-3 py-2 hover:bg-slate-100"
+                className="flex items-center justify-between rounded-md bg-surface px-3 py-2 hover:bg-subtle"
               >
                 <div className="min-w-0">
                   <div className="flex items-center gap-2">
-                    <span className="h-2 w-2 shrink-0 rounded-full bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.7)]" />
+                    <span className="h-2 w-2 shrink-0 rounded-full bg-success shadow-[0_0_8px_rgba(16,185,129,0.7)]" />
                     <span className="truncate font-medium">{b.broker_name || b.broker_id}</span>
                   </div>
                   <div className="mt-0.5 font-mono text-xs text-muted">

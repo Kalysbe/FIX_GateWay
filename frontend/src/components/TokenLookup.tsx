@@ -81,7 +81,7 @@ export function TokenLookup({ tokenId, onSelect }: { tokenId: string | null; onS
       <button type="submit" className="btn min-h-11 justify-center gap-2 sm:min-w-32" disabled={loading || !input.trim()}><Icons.search size={16} />{loading ? "Поиск…" : "Найти"}</button>
     </form>
     {loading && <p role="status" className="text-sm text-muted">Ищем токен…</p>}
-    {!tokenId && error && <p role="alert" className="rounded-lg border border-rose-100 bg-rose-50 p-3 text-sm text-danger">{error}</p>}
+    {!tokenId && error && <p role="alert" className="rounded-lg border border-danger/20 bg-danger-soft p-3 text-sm text-danger">{error}</p>}
     {!tokenId && matches?.length === 0 && <div role="status" className="rounded-lg bg-surface px-4 py-5"><p className="text-sm font-medium">Токен не найден</p><p className="mt-1 text-xs text-muted">Проверьте ID или скопируйте токен полностью. По префиксу используются все 8 символов.</p></div>}
     {matches?.length === 1 && tokenId === matches[0].id && <p role="status" className="text-xs text-muted">Токен найден. Общая информация ниже.</p>}
     {matches && matches.length > 1 && <div className="space-y-3">
@@ -97,7 +97,7 @@ export function TokenLookup({ tokenId, onSelect }: { tokenId: string | null; onS
         <div className="min-w-0"><div className="flex flex-wrap items-center gap-3"><h3 id="token-overview-title" className="min-w-0 max-w-full break-words text-lg font-semibold">{token.name}</h3><StatusBadge status={token.status} /></div><p className="mt-1 font-mono text-xs text-muted">{token.token_prefix}…</p>{token.description && <p className="mt-2 break-words text-sm text-muted">{token.description}</p>}</div>
         <div className="flex flex-wrap gap-2"><button type="button" className="btn-muted" onClick={() => void detail.refetch()} disabled={detail.isFetching}>Обновить</button><Link className="btn-muted" to={`/brokers/${overview.broker.id}?tab=tokens`}>Управление токеном<Icons.chevron size={13} /></Link></div>
       </div>
-      {overview.broker.status !== "ACTIVE" && <p role="status" className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">Брокер отключён или заблокирован. Доступ по его токенам ограничен независимо от статуса токена.</p>}
+      {overview.broker.status !== "ACTIVE" && <p role="status" className="rounded-lg border border-warning/30 bg-warning-soft p-3 text-sm text-warning">Брокер отключён или заблокирован. Доступ по его токенам ограничен независимо от статуса токена.</p>}
       <div className="grid gap-6 lg:grid-cols-3">
         <div className="min-w-0"><h4 className="mb-4 text-xs font-semibold uppercase tracking-wide text-muted">Общая информация</h4><dl className="grid gap-4">
           <Field label="ID токена" mono>{token.id}</Field><Field label="Создан">{formatDateTime(token.created_at)}</Field>

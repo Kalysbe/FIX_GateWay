@@ -22,10 +22,7 @@
 .monitor-grid>.monitor-wide { grid-column:span 6; }
 .monitor-grid>.monitor-resource { grid-column:span 4; display:flex; flex-direction:column; }
 .monitor-resource .monitor-chart { margin-top:auto; }
-.monitor-chart svg { display:block; width:100%; height:145px; }
-.monitor-wide .monitor-chart svg { height:172px; }
-.monitor-chart-empty { height:145px; display:grid; place-items:center; color:var(--muted-foreground); font-size:11px; background:repeating-linear-gradient(0deg,transparent,transparent 35px,var(--border-soft) 36px); border-radius:4px; }
-.monitor-wide .monitor-chart-empty { height:172px; }
+.monitor-chart-empty { height:160px; display:grid; place-items:center; color:var(--muted-foreground); font-size:11px; background:repeating-linear-gradient(0deg,transparent,transparent 35px,var(--border-soft) 36px); border-radius:4px; }
 .monitor-legend { display:flex; flex-wrap:wrap; gap:12px; margin-top:7px; font-size:10px; color:var(--muted-foreground); }
 .monitor-legend span { display:flex; gap:5px; align-items:center; }
 .monitor-legend i { width:8px; height:3px; border-radius:3px; }

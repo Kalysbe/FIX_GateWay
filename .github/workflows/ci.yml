@@ -72,6 +72,18 @@ jobs:
       - run: npm audit --audit-level=moderate
       - run: npm test --if-present
       - run: npm run build
+      - name: Administrator scenarios (Playwright, mocked API)
+        run: |
+          npx playwright install --with-deps chromium
+          npm run test:e2e
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report
+          path: |
+            frontend/playwright-report/
+            frontend/test-results/
+          retention-days: 7
 
   trade-integrity:
     runs-on: ubuntu-latest

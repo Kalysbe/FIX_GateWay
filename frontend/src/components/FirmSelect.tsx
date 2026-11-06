@@ -13,7 +13,7 @@ export function FirmSelect({ value, onChange, label = "Код фирмы QUIK (F
   const ids = Array.from(new Set((firms.data ?? []).map(f => dbValue(f.FirmId).trim()).filter(id => id && id !== "null")));
   const names = new Map((firms.data ?? []).map(f => [dbValue(f.FirmId).trim(), f.FirmName == null ? "" : dbValue(f.FirmName).trim()]));
   return <label className="mb-3 block space-y-1 text-sm">
-    <span className="text-slate-500">{label}</span>
+    <span className="text-muted">{label}</span>
     <select className="input font-mono" aria-label={label} value={value} onChange={e => onChange(e.target.value)} disabled={firms.isLoading || !!firms.error} required>
       <option value="">{firms.isLoading ? "Загрузка фирм QUIK…" : emptyLabel}</option>
       {value && !ids.includes(value) && <option value={value}>{value} (нет в QUIK Firms)</option>}

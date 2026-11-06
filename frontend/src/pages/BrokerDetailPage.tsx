@@ -1,7 +1,7 @@
 import { RowActions } from "../components/RowActions";
 import { DataTable } from "../components/DataTable";
 import { dateValue } from "../lib/table";
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, apiWithHeaders } from "../api";
@@ -28,6 +28,8 @@ import {
   pctDelta,
   type BrokerAPIStats,
 } from "./broker/widgets";
+import { BrokerEditForm, IPEntryForm } from "./broker/forms";
+import type { IPEntryValues } from "../lib/schemas";
 
 const READ_ONLY = READ_ONLY_PERMS;
 
@@ -136,12 +138,10 @@ export default function BrokerDetailPage() {
   const [editFirm, setEditFirm] = useState<APIToken | null>(null);
   const [editFirmValue, setEditFirmValue] = useState("");
   const [editFirmError, setEditFirmError] = useState("");
-  const [newIP, setNewIP] = useState("");
-  const [newIPNote, setNewIPNote] = useState("");
+
   const [manageIP, setManageIP] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
-  const [editName, setEditName] = useState("");
-  const [editDesc, setEditDesc] = useState("");
+
 
   const b = broker.data?.broker;
   const st = security.data?.security;
@@ -241,14 +241,11 @@ export default function BrokerDetailPage() {
     qc.invalidateQueries({ queryKey: ["security", id] });
   }
 
-  async function addIP(e: FormEvent) {
-    e.preventDefault();
+  async function addIP({ ip, note }: IPEntryValues) {
     await api(`/api/v1/admin/brokers/${id}/ip-whitelist`, {
       method: "POST",
-      body: JSON.stringify({ ip: newIP, note: newIPNote }),
+      body: JSON.stringify({ ip, note }),
     });
-    setNewIP("");
-    setNewIPNote("");
     qc.invalidateQueries({ queryKey: ["ipwl", id] });
     qc.invalidateQueries({ queryKey: ["security", id] });
   }
@@ -264,11 +261,11 @@ export default function BrokerDetailPage() {
   }
 
   function expiresTone(expiresAt?: string) {
-    if (!expiresAt) return "text-slate-600";
+    if (!expiresAt) return "text-muted";
     const days = (new Date(expiresAt).getTime() - Date.now()) / 86400000;
     if (days < 0) return "text-danger font-medium";
     if (days < 30) return "text-warn font-medium";
-    return "text-slate-600";
+    return "text-muted";
   }
 
   if (broker.isLoading) return <PageSpinner />;
@@ -285,7 +282,7 @@ export default function BrokerDetailPage() {
             <h1 className="text-2xl font-semibold tracking-tight">{b?.name}</h1>
             <StatusBadge status={b?.status} />
           </div>
-          <p className="mt-1 text-sm text-slate-500">
+          <p className="mt-1 text-sm text-muted">
             ID: {b?.id} · Создан: {formatDateTime(b?.created_at)}
           </p>
         </div>
@@ -297,8 +294,7 @@ export default function BrokerDetailPage() {
             type="button"
             className="btn gap-1.5"
             onClick={() => {
-              setEditName(b?.name || "");
-              setEditDesc(b?.description || "");
+
               setEditOpen(true);
             }}
           >
@@ -309,7 +305,7 @@ export default function BrokerDetailPage() {
       </div>
 
       {/* Tabs */}
-      <div className="border-b border-slate-200">
+      <div className="border-b border-line">
         <div className="flex gap-1 overflow-x-auto">
           {TABS.map((t) => (
             <button
@@ -319,7 +315,7 @@ export default function BrokerDetailPage() {
               className={`whitespace-nowrap border-b-2 px-3 py-2.5 text-sm font-medium transition-colors ${
                 tab === t.id
                   ? "border-accent text-accent"
-                  : "border-transparent text-slate-500 hover:text-ink"
+                  : "border-transparent text-muted hover:text-ink"
               }`}
             >
               {t.label}
@@ -332,10 +328,10 @@ export default function BrokerDetailPage() {
         <div className="space-y-4">
           {(tab === "tokens" || tab === "overview") && (
             <section className="card !p-0 overflow-hidden">
-              <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-4 py-3">
+              <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line px-4 py-3">
                 <div>
                   <h2 className="font-semibold">Токены</h2>
-                  <p className="text-xs text-slate-500">Управление API-токенами брокера</p>
+                  <p className="text-xs text-muted">Управление API-токенами брокера</p>
                 </div>
                 <button type="button" className="btn gap-1.5" onClick={openCreate}>
                   <Icons.plus size={16} />
@@ -352,17 +348,17 @@ export default function BrokerDetailPage() {
                       <tr key={t.id} className="align-middle">
                         <td>
                           <div className="font-medium">{t.name}</div>
-                          <div className="font-mono text-[11px] text-slate-400">{t.token_prefix}…</div>
+                          <div className="font-mono text-[11px] text-faint">{t.token_prefix}…</div>
                         </td>
                         <td>
                           <StatusBadge status={t.status} />
                         </td>
                         <td>
-                          <div className="flex items-center gap-1 text-slate-500">
+                          <div className="flex items-center gap-1 text-muted">
                             {(t.permissions || []).slice(0, 6).map((p) => {
                               const Icon = PERM_ICON[p] || Icons.lock;
                               return (
-                                <span key={p} title={p} className="rounded bg-slate-50 p-1 text-slate-500">
+                                <span key={p} title={p} className="rounded bg-subtle p-1 text-muted">
                                   <Icon size={13} />
                                 </span>
                               );
@@ -374,7 +370,7 @@ export default function BrokerDetailPage() {
                         </td>
                         <td>
                           <div className="text-sm">{t.last_used_at ? formatDateTime(t.last_used_at) : "—"}</div>
-                          {t.last_used_ip && <div className="font-mono text-[11px] text-slate-400">{t.last_used_ip}</div>}
+                          {t.last_used_ip && <div className="font-mono text-[11px] text-faint">{t.last_used_ip}</div>}
                         </td>
                         <td className="relative">
                           {t.status === "ACTIVE" && (
@@ -388,8 +384,8 @@ export default function BrokerDetailPage() {
                       </tr>
                     )} emptyTitle="Записей пока нет" />
               </div>
-              <div className="m-4 flex gap-2 rounded-lg border border-sky-100 bg-sky-50 px-3 py-2.5 text-sm text-sky-900">
-                <Icons.info size={18} className="mt-0.5 shrink-0 text-sky-600" />
+              <div className="m-4 flex gap-2 rounded-lg border border-info/20 bg-info-soft px-3 py-2.5 text-sm text-info">
+                <Icons.info size={18} className="mt-0.5 shrink-0 text-info" />
                 <p>
                   Полное значение токена показывается только при создании или ротации. Храните секреты в безопасном
                   хранилище — повторно получить значение нельзя.
@@ -400,9 +396,9 @@ export default function BrokerDetailPage() {
 
           {tab === "accounts" && (
             <section className="card !p-0 overflow-hidden">
-              <div className="border-b border-slate-100 px-4 py-3">
+              <div className="border-b border-line px-4 py-3">
                 <h2 className="font-semibold">Торговые счета QUIK</h2>
-                <p className="text-xs text-slate-500">
+                <p className="text-xs text-muted">
                   Строки таблицы QUIK Trdaccs фирм, указанных в активных токенах брокера
                   {accounts.data?.firms.length ? <> (<span className="font-mono">{accounts.data.firms.join(", ")}</span>)</> : null}.
                   В заявке брокер передаёт <span className="font-mono">account_id</span> — он должен совпасть с{" "}
@@ -422,7 +418,7 @@ export default function BrokerDetailPage() {
           {(tab === "ip" || tab === "tokens" || tab === "overview") && (
             <div className={`grid gap-4 ${tab === "ip" ? "" : "lg:grid-cols-2"}`}>
               <section className="card !p-0 overflow-hidden">
-                <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 px-4 py-3">
+                <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line px-4 py-3">
                   <div className="flex items-center gap-2">
                     <h2 className="font-semibold">IP Whitelist</h2>
                     <span className={wlEnabled ? "badge-success" : "badge-muted"}>
@@ -437,7 +433,7 @@ export default function BrokerDetailPage() {
 { id: "c1", header: "Описание", value: (e) => e.note }]} rowKey={row => row.id} renderRow={(e) => (
                       <tr key={e.id}>
                         <td className="font-mono text-sm">{e.ip_cidr}</td>
-                        <td className="text-slate-500">{e.note || "—"}</td>
+                        <td className="text-muted">{e.note || "—"}</td>
                       </tr>
                     )} emptyTitle="Записей пока нет" />
               </section>
@@ -457,7 +453,7 @@ export default function BrokerDetailPage() {
                     </select>
                   </div>
                   <RequestChart series={brokerStats.data?.stats?.series || []} />
-                  <div className="grid grid-cols-3 gap-3 border-t border-slate-100 pt-3">
+                  <div className="grid grid-cols-3 gap-3 border-t border-line pt-3">
                     <Metric
                       label="Заявки"
                       value={String(brokerStats.data?.stats?.period?.orders ?? 0)}
@@ -491,10 +487,10 @@ export default function BrokerDetailPage() {
           {tab === "rights" && (
             <section className="card space-y-3">
               <h2 className="font-semibold">Права API</h2>
-              <p className="text-sm text-slate-500">Права назначаются на уровне каждого токена при создании.</p>
+              <p className="text-sm text-muted">Права назначаются на уровне каждого токена при создании.</p>
               <div className="grid gap-2 sm:grid-cols-2">
                 {ALL_PERMS.map((p) => (
-                  <div key={p} className="flex items-center gap-2 rounded-lg border border-slate-100 bg-slate-50 px-3 py-2 text-sm">
+                  <div key={p} className="flex items-center gap-2 rounded-lg border border-line bg-subtle px-3 py-2 text-sm">
                     {(PERM_ICON[p] || Icons.lock)({ size: 14 })}
                     <span className="font-mono">{p}</span>
                   </div>
@@ -573,13 +569,13 @@ export default function BrokerDetailPage() {
           <section className="card space-y-3">
             <h2 className="font-semibold">Последние ошибки</h2>
             {(brokerErrors.data?.logs || []).length === 0 ? (
-              <p className="text-sm text-slate-400">Ошибок за выбранный период не обнаружено.</p>
+              <p className="text-sm text-faint">Ошибок за выбранный период не обнаружено.</p>
             ) : (
               <ul className="space-y-2">
                 {(brokerErrors.data?.logs || []).slice(0, 4).map((e) => (
                   <li key={e.id} className="text-sm">
                     <div className="font-medium text-danger">{e.error_code || e.subtype}</div>
-                    <div className="text-[11px] text-slate-400">{formatTime(e.timestamp)}</div>
+                    <div className="text-[11px] text-faint">{formatTime(e.timestamp)}</div>
                   </li>
                 ))}
               </ul>
@@ -598,24 +594,7 @@ export default function BrokerDetailPage() {
             <input type="checkbox" checked={wlEnabled} onChange={(e) => toggleWhitelist(e.target.checked)} />
             Включить whitelist
           </label>
-          <form onSubmit={addIP} className="mb-3 grid gap-2 sm:grid-cols-[1fr_1fr_auto]">
-            <input
-              className="input"
-              placeholder="185.10.10.10 или CIDR"
-              value={newIP}
-              onChange={(e) => setNewIP(e.target.value)}
-              required
-            />
-            <input
-              className="input"
-              placeholder="Описание"
-              value={newIPNote}
-              onChange={(e) => setNewIPNote(e.target.value)}
-            />
-            <button className="btn" type="submit">
-              Добавить
-            </button>
-          </form>
+          <IPEntryForm onAdd={addIP} />
           <DataTable<IPWhitelistEntry> title="Адреса доступа" rows={ipEntries} columns={[{ id: "c0", header: "IP / CIDR", value: (e) => e.ip_cidr },
 { id: "c1", header: "Описание", value: (e) => e.note },
 { id: "actions", header: "Действия", value: () => "", sortable: false }]} rowKey={row => row.id} renderRow={(e) => (
@@ -635,12 +614,12 @@ export default function BrokerDetailPage() {
       {showCreate && (
         <Modal title="Создать API-токен" onClose={() => setShowCreate(false)}>
           <label className="mb-3 block space-y-1 text-sm">
-            <span className="text-slate-500">Название токена</span>
+            <span className="text-muted">Название токена</span>
             <input className="input" value={tokenName} onChange={(e) => setTokenName(e.target.value)} />
           </label>
           <FirmSelect value={quikFirm} onChange={setQuikFirm} />
           <label className="mb-3 block space-y-1 text-sm">
-            <span className="text-slate-500">Срок действия</span>
+            <span className="text-muted">Срок действия</span>
             <select className="input" value={expiresIn} onChange={(e) => setExpiresIn(Number(e.target.value))}>
               <option value={30}>30 дней</option>
               <option value={90}>90 дней</option>
@@ -686,7 +665,7 @@ export default function BrokerDetailPage() {
 
       {editFirm && (
         <Modal title="Код фирмы (FIX 5018)" onClose={() => setEditFirm(null)}>
-          <p className="mb-3 text-sm text-slate-600">
+          <p className="mb-3 text-sm text-muted">
             Токен <span className="font-medium">{editFirm.name}</span>. Значение уходит в NewOrderSingle tag 5018.
           </p>
           <FirmSelect value={editFirmValue} onChange={setEditFirmValue} />
@@ -704,8 +683,8 @@ export default function BrokerDetailPage() {
 
       {revealedToken && (
         <Modal title={revealTitle} onClose={() => setRevealedToken(null)}>
-          <p className="mb-3 text-sm text-slate-600">{revealNote}</p>
-          <div className="mb-4 break-all rounded-lg border border-slate-200 bg-surface p-4 font-mono text-sm">
+          <p className="mb-3 text-sm text-muted">{revealNote}</p>
+          <div className="mb-4 break-all rounded-lg border border-line bg-surface p-4 font-mono text-sm">
             {revealedToken}
           </div>
           <div className="flex justify-end gap-2">
@@ -721,7 +700,7 @@ export default function BrokerDetailPage() {
 
       {confirmRevoke && (
         <Modal title="Отозвать токен?" onClose={() => setConfirmRevoke(null)}>
-          <p className="mb-4 text-sm text-slate-600">
+          <p className="mb-4 text-sm text-muted">
             <span className="font-medium">{confirmRevoke.name}</span> перестанет работать сразу. Любой запрос с этим
             токеном получит HTTP 401.
           </p>
@@ -738,36 +717,16 @@ export default function BrokerDetailPage() {
 
       {editOpen && (
         <Modal title="Редактировать брокера" onClose={() => setEditOpen(false)}>
-          <form
-            className="space-y-3"
-            onSubmit={async (e) => {
-              e.preventDefault();
-              await api(`/api/v1/admin/brokers/${id}`, {
-                method: "PATCH",
-                body: JSON.stringify({ name: editName.trim(), description: editDesc.trim() }),
-              });
+          <BrokerEditForm
+            initial={{ name: b?.name || "", description: b?.description || "" }}
+            onCancel={() => setEditOpen(false)}
+            onSave={async (values) => {
+              await api(`/api/v1/admin/brokers/${id}`, { method: "PATCH", body: JSON.stringify(values) });
               setEditOpen(false);
               qc.invalidateQueries({ queryKey: ["broker", id] });
               qc.invalidateQueries({ queryKey: ["brokers"] });
             }}
-          >
-            <label className="block space-y-1 text-sm">
-              <span className="text-slate-500">Название</span>
-              <input className="input" value={editName} onChange={(e) => setEditName(e.target.value)} required />
-            </label>
-            <label className="block space-y-1 text-sm">
-              <span className="text-slate-500">Описание</span>
-              <textarea className="input min-h-[80px]" value={editDesc} onChange={(e) => setEditDesc(e.target.value)} />
-            </label>
-            <div className="flex justify-end gap-2">
-              <button type="button" className="btn-muted" onClick={() => setEditOpen(false)}>
-                Отмена
-              </button>
-              <button type="submit" className="btn">
-                Сохранить
-              </button>
-            </div>
-          </form>
+          />
         </Modal>
       )}
     </div>

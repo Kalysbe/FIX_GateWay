@@ -2,6 +2,7 @@ import type { ReactElement, ReactNode } from "react";
 import { formatDateTime, formatMs, formatNumber, formatPct, formatTime } from "../../labels";
 import { Icons } from "../../components/icons";
 import { PageSpinner } from "../../components/feedback";
+import { CategoryChart, CHART_COLORS, CHART_DANGER } from "../../components/charts";
 import type { AuditRow, ObsLog } from "../../types/admin";
 
 export type BrokerAPIStats = {
@@ -25,7 +26,7 @@ export const PERM_ICON: Record<string, (p: { size?: number; className?: string }
 export function SummaryChip({ label, value }: { label: string; value: string }) {
   return (
     <div className="min-w-[110px] rounded-lg border border-line bg-panel px-3 py-2">
-      <div className="text-[11px] text-slate-500">{label}</div>
+      <div className="text-[11px] text-muted">{label}</div>
       <div className="text-sm font-semibold">{value}</div>
     </div>
   );
@@ -34,7 +35,7 @@ export function SummaryChip({ label, value }: { label: string; value: string }) 
 export function DetailRow({ label, value }: { label: string; value: ReactNode }) {
   return (
     <div className="flex items-start justify-between gap-3">
-      <dt className="text-slate-500">{label}</dt>
+      <dt className="text-muted">{label}</dt>
       <dd className="text-right font-medium text-ink">{value ?? "—"}</dd>
     </div>
   );
@@ -60,66 +61,57 @@ export function Metric({
   value: string;
   delta: { text: string; up: boolean | null };
 }) {
-  const tone = delta.up === true ? "text-emerald-600" : delta.up === false ? "text-danger" : "text-slate-400";
+  const tone = delta.up === true ? "text-success" : delta.up === false ? "text-danger" : "text-faint";
   return (
     <div>
-      <div className="text-[11px] text-slate-500">{label}</div>
+      <div className="text-[11px] text-muted">{label}</div>
       <div className="text-base font-semibold">{value}</div>
       <div className={`text-xs font-medium ${tone}`}>{delta.text} к пред. периоду</div>
     </div>
   );
 }
 
+// Buckets come as dates or timestamps; the axis shows them short.
+function shortBucket(value: string) {
+  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return `${value.slice(8, 10)}.${value.slice(5, 7)}`;
+  const t = Date.parse(value);
+  return Number.isFinite(t) ? new Date(t).toLocaleString("ru-RU", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) : value;
+}
+
 export function RequestChart({ series }: { series: Array<{ date: string; orders: number }> }) {
-  const points = series.length ? series.map((s) => Number(s.orders) || 0) : [0];
-  const w = 320;
-  const h = 120;
-  const max = Math.max(...points, 1);
-  const step = points.length > 1 ? w / (points.length - 1) : w;
-  const coords = points.map((p, i) => `${i * step},${h - (p / max) * (h - 16) - 8}`).join(" ");
-  const area = `0,${h} ${coords} ${points.length > 1 ? w : 0},${h}`;
-  const empty = points.every((p) => p === 0);
+  const data = series.map(s => ({ date: s.date, orders: Number(s.orders) || 0 }));
+  const empty = data.every(p => p.orders === 0);
   return (
     <div className="relative">
-      <svg viewBox={`0 0 ${w} ${h}`} className="h-32 w-full" preserveAspectRatio="none">
-        <defs>
-          <linearGradient id="reqFill" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="#57b6c0" stopOpacity="0.35" />
-            <stop offset="100%" stopColor="#57b6c0" stopOpacity="0.02" />
-          </linearGradient>
-        </defs>
-        <polygon points={area} fill="url(#reqFill)" />
-        <polyline points={coords} fill="none" stroke="#57b6c0" strokeWidth="2.5" strokeLinejoin="round" />
-      </svg>
+      <CategoryChart label="Заявки за период" data={data.length ? data : [{ date: "", orders: 0 }]} xKey="date" formatX={shortBucket} format={formatNumber} series={[{ key: "orders", label: "Заявки", color: CHART_COLORS[0], area: true }]} />
       {empty && (
-        <div className="pointer-events-none absolute inset-0 flex items-center justify-center text-xs text-slate-400">
+        <div className="pointer-events-none absolute inset-0 flex items-center justify-center text-xs text-faint">
           Нет заявок за период
         </div>
       )}
     </div>
   );
 }
-
 function activityMeta(action: string, result?: string | null, error?: string | null) {
   const a = (action || "").toUpperCase();
   const failed = !!(error || (result && /fail|error|deny|reject/i.test(result)));
   if (failed || a.includes("FAIL") || a.includes("AUTH_FAIL")) {
-    return { label: "Ошибка аутентификации", tone: "bg-rose-50 text-danger", Icon: Icons.x };
+    return { label: "Ошибка аутентификации", tone: "bg-danger-soft text-danger", Icon: Icons.x };
   }
   if (a.includes("ORDER") || a.includes("CREATE")) {
-    return { label: "Заявка создана", tone: "bg-sky-50 text-sky-600", Icon: Icons.plus };
+    return { label: "Заявка создана", tone: "bg-info-soft text-info", Icon: Icons.plus };
   }
   if (a.includes("TRADE") || a.includes("FILL") || a.includes("EXEC")) {
-    return { label: "Сделка получена", tone: "bg-sky-50 text-sky-600", Icon: Icons.trades };
+    return { label: "Сделка получена", tone: "bg-info-soft text-info", Icon: Icons.trades };
   }
   if (a.includes("AUTH") || a.includes("LOGIN") || a.includes("TOKEN")) {
-    return { label: "Успешная аутентификация", tone: "bg-emerald-50 text-emerald-600", Icon: Icons.check };
+    return { label: "Успешная аутентификация", tone: "bg-success-soft text-success", Icon: Icons.check };
   }
-  return { label: action || "Событие", tone: "bg-slate-100 text-slate-600", Icon: Icons.info };
+  return { label: action || "Событие", tone: "bg-subtle text-muted", Icon: Icons.info };
 }
 
 export function ActivityList({ items, empty }: { items: AuditRow[]; empty: string }) {
-  if (!items.length) return <p className="text-sm text-slate-400">{empty}</p>;
+  if (!items.length) return <p className="text-sm text-faint">{empty}</p>;
   return (
     <ul className="space-y-3">
       {items.map((item) => {
@@ -131,7 +123,7 @@ export function ActivityList({ items, empty }: { items: AuditRow[]; empty: strin
             </span>
             <div className="min-w-0 flex-1">
               <div className="text-sm font-medium">{meta.label}</div>
-              <div className="text-[11px] text-slate-400">
+              <div className="text-[11px] text-faint">
                 {formatTime(item.created_at)}
                 {item.ip ? ` · ${item.ip}` : ""}
               </div>
@@ -197,22 +189,22 @@ export function BrokerActivity({
         </div>
         <div className="space-y-1 text-sm">
           {(st?.top_errors || []).map((e) => (
-            <div key={e.error} className="flex justify-between rounded-lg bg-slate-50 px-3 py-2">
+            <div key={e.error} className="flex justify-between rounded-lg bg-subtle px-3 py-2">
               <span className="font-mono text-xs">{e.error}</span>
               <span>{e.count}</span>
             </div>
           ))}
         </div>
         {errors.length === 0 ? (
-          <p className="text-sm text-slate-400">Ошибок за выбранный период не обнаружено.</p>
+          <p className="text-sm text-faint">Ошибок за выбранный период не обнаружено.</p>
         ) : (
           <ul className="space-y-2">
             {errors.map((e) => (
-              <li key={e.id} className="rounded-lg border border-rose-100 bg-rose-50 px-3 py-2 text-sm">
+              <li key={e.id} className="rounded-lg border border-danger/20 bg-danger-soft px-3 py-2 text-sm">
                 <div className="font-medium text-danger">
                   {e.severity} · {e.error_code || e.subtype}
                 </div>
-                <div className="text-xs text-slate-500">{formatDateTime(e.timestamp)}</div>
+                <div className="text-xs text-muted">{formatDateTime(e.timestamp)}</div>
               </li>
             ))}
           </ul>
@@ -223,17 +215,12 @@ export function BrokerActivity({
 }
 
 function MiniSeries({ series }: { series: Array<{ bucket: string; requests: number; successful: number; errors: number }> }) {
-  const points = series.length ? series.map((s) => Number(s.requests) || 0) : [0];
-  const err = series.length ? series.map((s) => Number(s.errors) || 0) : [0];
-  const w = 480;
-  const h = 120;
-  const max = Math.max(...points, ...err, 1);
-  const step = points.length > 1 ? w / (points.length - 1) : w;
-  const line = (arr: number[]) => arr.map((p, i) => `${i * step},${h - (p / max) * (h - 16) - 8}`).join(" ");
+  const data = series.map(s => ({ bucket: s.bucket, requests: Number(s.requests) || 0, errors: Number(s.errors) || 0 }));
+  if (!data.length) return <div className="flex h-32 items-center justify-center text-xs text-faint">Нет запросов за период</div>;
   return (
-    <svg viewBox={`0 0 ${w} ${h}`} className="h-32 w-full" preserveAspectRatio="none">
-      <polyline points={line(points)} fill="none" stroke="#57b6c0" strokeWidth="2" />
-      <polyline points={line(err)} fill="none" stroke="#d6455d" strokeWidth="2" />
-    </svg>
+    <>
+      <CategoryChart label="Запросы и ошибки за период" data={data} xKey="bucket" formatX={shortBucket} format={formatNumber} series={[{ key: "requests", label: "Запросы", color: CHART_COLORS[0], area: true }, { key: "errors", label: "Ошибки", color: CHART_DANGER }]} />
+      <div className="flex gap-4 text-[11px] text-muted"><span className="flex items-center gap-1.5"><i className="h-[3px] w-2 rounded" style={{ background: CHART_COLORS[0] }} />Запросы</span><span className="flex items-center gap-1.5"><i className="h-[3px] w-2 rounded" style={{ background: CHART_DANGER }} />Ошибки</span></div>
+    </>
   );
 }

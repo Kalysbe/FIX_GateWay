@@ -30,14 +30,14 @@ export function ReconciliationQueue({ orderId }: { orderId?: string }) {
   if (!q.isLoading && !q.error && cases.length === 0) return <div className="reconciliation-clear" role="status"><span aria-hidden="true">✓</span>Случаев для сверки нет</div>;
   return <section className="card space-y-3">
     <h2 className="font-medium">Сверка неопределённых отправок</h2>
-    <p className="text-xs text-slate-500">Случаи закрываются по FIX-подтверждению. Для отмены требуется конечный статус заявки. Комментарий оператора и история решения сохраняются.</p>
+    <p className="text-xs text-muted">Случаи закрываются по FIX-подтверждению. Для отмены требуется конечный статус заявки. Комментарий оператора и история решения сохраняются.</p>
     {q.error && <ErrorBanner error={q.error} onRetry={() => q.refetch()} />}
     {resolve.error && <ErrorBanner error={resolve.error} onRetry={() => resolve.reset()} />}
     {q.isLoading && <p className="text-sm">Загрузка…</p>}
-    {!q.isLoading && !q.error && cases.length === 0 && <p className="text-sm text-slate-500">Случаев для сверки нет.</p>}
-    {cases.map(c => <div key={c.event_id} className="rounded-lg border border-slate-200 p-3 space-y-2 text-sm">
-      <div><Link className="text-blue-600" to={`/orders/${c.order_id}`}>{c.client_order_id}</Link> · {c.event_type === "ORDER_CANCEL" ? "Отмена" : "Отправка"} · {c.order_status}</div>
-      <p className="break-words text-slate-500">{c.last_error}</p>
+    {!q.isLoading && !q.error && cases.length === 0 && <p className="text-sm text-muted">Случаев для сверки нет.</p>}
+    {cases.map(c => <div key={c.event_id} className="rounded-lg border border-line p-3 space-y-2 text-sm">
+      <div><Link className="text-info" to={`/orders/${c.order_id}`}>{c.client_order_id}</Link> · {c.event_type === "ORDER_CANCEL" ? "Отмена" : "Отправка"} · {c.order_status}</div>
+      <p className="break-words text-muted">{c.last_error}</p>
       {c.resolved_at ? <p>Закрыто {formatDateTime(c.resolved_at)} · {c.actor_id === "system:fix-reconciliation" ? "Автоматическая сверка FIX" : c.actor_id} · {c.actor_id === "system:fix-reconciliation" ? "По сохранённому подтверждению торгового контура" : c.note}</p> : <>
         <p>{c.evidence_event_id ? `Есть FIX-подтверждение: событие №${c.evidence_event_id}` : "Подтверждение отсутствует. Требуется сверка с торговым контуром."}</p>
         {canResolve && c.evidence_event_id && <div className="flex flex-wrap gap-2">
@@ -46,6 +46,6 @@ export function ReconciliationQueue({ orderId }: { orderId?: string }) {
         </div>}
       </>}
     </div>)}
-    {cases.length === 100 && <p className="text-sm text-slate-500">Показаны первые 100 случаев. Историю конкретной заявки можно открыть в её карточке.</p>}
+    {cases.length === 100 && <p className="text-sm text-muted">Показаны первые 100 случаев. Историю конкретной заявки можно открыть в её карточке.</p>}
   </section>;
 }

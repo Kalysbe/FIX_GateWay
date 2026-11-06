@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { FormEvent, useState } from "react";
+import { useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api";
 import { formatDateTime, formatRelative } from "../labels";
@@ -14,6 +14,8 @@ import { DataTable, type TableColumn } from "../components/DataTable";
 import { dateValue } from "../lib/table";
 import { Modal } from "../components/Modal";
 import type { Broker } from "../types/admin";
+import type { BrokerCreateValues } from "../lib/schemas";
+import { BrokerCreateForm } from "./broker/forms";
 
 export default function BrokersPage() {
   const qc = useQueryClient();
@@ -24,18 +26,13 @@ export default function BrokersPage() {
     queryFn: ({ signal }) => api<{ brokers: Broker[] }>("/api/v1/admin/brokers", { signal }),
     refetchInterval: liveRefetchInterval(connected, 5000),
   });
-  const [code, setCode] = useState("");
-  const [name, setName] = useState("");
   const [showCreate, setShowCreate] = useState(false);
   const create = useMutation({
-    mutationFn: () => api("/api/v1/admin/brokers", { method: "POST", body: JSON.stringify({ code, name, description: "" }) }),
+    mutationFn: ({ code, name }: BrokerCreateValues) => api("/api/v1/admin/brokers", { method: "POST", body: JSON.stringify({ code, name, description: "" }) }),
     onSuccess: () => {
-      setCode("");
-      setName("");
       setShowCreate(false);
       qc.invalidateQueries({ queryKey: ["brokers"] });
     },
-    onError: (err) => toast.push(err instanceof Error ? err.message : "Не удалось создать брокера"),
   });
 
   async function setStatus(id: number, status: string) {
@@ -47,10 +44,6 @@ export default function BrokersPage() {
     }
   }
 
-  function onCreate(e: FormEvent) {
-    e.preventDefault();
-    create.mutate();
-  }
 
   const columns: TableColumn<Broker>[] = [
     { id: "id", header: "ID", value: b => b.id, numeric: true },
@@ -79,18 +72,7 @@ export default function BrokersPage() {
 
       {showCreate && (
         <Modal title="Создать брокера" onClose={() => setShowCreate(false)}>
-          <form onSubmit={onCreate} className="space-y-3">
-            <input className="input" placeholder="Код" value={code} onChange={(e) => setCode(e.target.value)} required />
-            <input className="input" placeholder="Название" value={name} onChange={(e) => setName(e.target.value)} required />
-            <div className="flex justify-end gap-2">
-              <button type="button" className="btn-muted" onClick={() => setShowCreate(false)}>
-                Отмена
-              </button>
-              <button className="btn" type="submit" disabled={create.isPending}>
-                Создать
-              </button>
-            </div>
-          </form>
+          <BrokerCreateForm onCreate={values => create.mutateAsync(values)} onCancel={() => setShowCreate(false)} />
         </Modal>
       )}
     </div>

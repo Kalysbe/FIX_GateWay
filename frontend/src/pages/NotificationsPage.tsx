@@ -39,11 +39,11 @@ const PAGE_SIZE = 20;
 function tone(sev: string) {
   switch (sev) {
     case "CRITICAL":
-      return "border-rose-300 bg-rose-50";
+      return "border-danger/40 bg-danger-soft";
     case "ERROR":
-      return "border-rose-100 bg-rose-50/60";
+      return "border-danger/20 bg-danger-soft/60";
     case "WARNING":
-      return "border-amber-100 bg-amber-50";
+      return "border-warning/20 bg-warning-soft";
     default:
       return "border-line bg-panel";
   }
@@ -110,7 +110,7 @@ export default function NotificationsPage() {
                   <span className="font-medium">{n.title}</span>{!n.read_at && <span className="notification-new">Новое</span>}
                   {n.count > 1 && <span className="badge-muted">×{n.count}</span>}
                 </div>
-                <p className="mt-1 text-sm text-slate-600">{n.message || n.subtype}</p>
+                <p className="mt-1 text-sm text-muted">{n.message || n.subtype}</p>
                 <p className="mt-1 text-xs text-muted">
                   {formatDateTime(n.last_seen_at)}
                   {n.broker_name ? ` · ${n.broker_name}` : ""}
@@ -132,12 +132,12 @@ export default function NotificationsPage() {
         {items.length === 0 && !q.error && <div className="card text-sm text-muted">{q.isLoading ? "Загрузка…" : unreadOnly ? "Все уведомления прочитаны" : "Нет уведомлений"}</div>}
       </div>
       <div className="flex flex-wrap items-center justify-between gap-3 text-sm">
-        <div className="text-slate-500">
+        <div className="text-muted">
           Показано <span className="font-mono text-ink">{from}–{to}</span> из{" "}
           <span className="font-mono text-ink">{formatNumber(total)}</span>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <label className="flex items-center gap-2 text-slate-500">
+          <label className="flex items-center gap-2 text-muted">
             На странице
             <select
               className="input w-auto py-1"
@@ -160,7 +160,7 @@ export default function NotificationsPage() {
           <button type="button" className="btn-muted px-2 py-1" disabled={page <= 1} onClick={() => setPage((p) => Math.max(1, p - 1))}>
             Назад
           </button>
-          <span className="tabular-nums text-slate-500">
+          <span className="tabular-nums text-muted">
             {page} / {pages}
           </span>
           <button

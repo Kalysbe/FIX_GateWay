@@ -49,6 +49,15 @@
   --chart-grid: #e6ecf0;
   --chart-text: #64748b;
   --chart-label: #334155;
+  --chart-axis: #cbd5e1;
+  --chart-1: #2f9aa6;
+  --chart-2: #1f8a78;
+  --chart-3: #c47a00;
+  --chart-4: #6f63c9;
+  --chart-5: #8393ad;
+  --chart-danger: #d6455d;
+  --chart-in: #0284c7;
+  --chart-out: #059669;
 }
 
 .dark {
@@ -89,38 +98,15 @@
   --chart-grid: #24313b;
   --chart-text: #8796a3;
   --chart-label: #c3cdd5;
-
-  /* Tailwind palette steps used directly in page markup, re-tuned for dark. */
-  --color-slate-50: #172028;
-  --color-slate-100: #1c262e;
-  --color-slate-200: #283540;
-  --color-slate-300: #3a4955;
-  --color-slate-400: #6f7f8c;
-  --color-slate-500: #92a1ae;
-  --color-slate-600: #aab6c0;
-  --color-slate-700: #c3cdd5;
-  --color-rose-50: var(--danger-soft);
-  --color-rose-100: #46202a;
-  --color-rose-200: #5a2834;
-  --color-rose-300: #7a3444;
-  --color-emerald-50: var(--success-soft);
-  --color-emerald-100: #143a30;
-  --color-emerald-200: #1b4a3d;
-  --color-emerald-600: #3ec79d;
-  --color-emerald-700: #4fd1a8;
-  --color-emerald-800: #6fdcb9;
-  --color-amber-50: var(--warning-soft);
-  --color-amber-100: #44330f;
-  --color-amber-200: #574113;
-  --color-amber-700: #e4a944;
-  --color-amber-800: #ecb85d;
-  --color-amber-900: #f1c779;
-  --color-sky-50: var(--info-soft);
-  --color-sky-100: #173651;
-  --color-sky-600: #63b3ea;
-  --color-sky-800: #86c4ef;
-  --color-sky-900: #a3d3f3;
-  --color-blue-600: #6aa8f0;
+  --chart-axis: #3a4955;
+  --chart-1: #4cbcc6;
+  --chart-2: #3ec79d;
+  --chart-3: #e4a944;
+  --chart-4: #a59af0;
+  --chart-5: #9aa9bd;
+  --chart-danger: #f2738a;
+  --chart-in: #63b3ea;
+  --chart-out: #3ec79d;
 }
 
 @theme inline {
@@ -236,6 +222,9 @@ body {
     @apply w-full rounded-md border border-input bg-panel px-3 py-2 text-ink shadow-xs outline-none placeholder:text-muted/70 focus:border-ring focus:ring-[3px] focus:ring-ring/20 disabled:cursor-not-allowed;
     font-size: 12px;
     min-height: 36px;
+  }
+  .input[aria-invalid="true"] {
+    @apply border-danger focus:border-danger focus:ring-danger/20;
   }
 
   .table {
@@ -393,6 +382,8 @@ a:focus-visible, summary:focus-visible { outline: 2px solid var(--ring); outline
 .table-pagination { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 12px; border-top: 1px solid var(--border); font-size: 12px; }
 .table-page-size { display: flex; gap: 6px; align-items: center; color: var(--muted-foreground); font-size: 11px; }
 .table-page-size select { height: 32px; border: 1px solid var(--border); border-radius: 7px; padding: 0 6px; }
+.table-server-page { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-left: auto; color: var(--muted-foreground); }
+.table-server-page .btn-muted { height: 32px; gap: 4px; padding: 0 10px; font-size: 12px; }
 .table-page-number { min-width: 48px; text-align: center; font-variant-numeric: tabular-nums; color: var(--muted-foreground); }
 .data-table-comfortable .table td { padding-top: 14px; padding-bottom: 14px; }
 .table-columns { position: relative; }
@@ -467,9 +458,6 @@ a:focus-visible, summary:focus-visible { outline: 2px solid var(--ring); outline
 .adapter-card { padding: 18px; }.adapter-card-header { display: flex; justify-content: space-between; gap: 10px; align-items: flex-start; }.adapter-card-header h2 { font-size: 14px; font-weight: 600; }.adapter-address { font-family: "JetBrains Mono", monospace; font-size: 11px; color: var(--muted-foreground); margin-top: 5px; }.adapter-metrics { display: grid; grid-template-columns: repeat(3, 1fr); border-top: 1px solid var(--border); padding-top: 14px; margin-top: 16px; gap: 12px; }.adapter-metrics span { display: block; font-size: 11px; color: var(--muted-foreground); }.adapter-metrics strong { display: block; margin-top: 4px; font-family: "JetBrains Mono", monospace; font-size: 18px; font-weight: 500; }
 
 /* SVG charts draw with fixed light-theme colours; follow the theme instead. */
-.dark svg [stroke="#e2e8f0"], .dark svg [stroke="#e8eef1"], .dark svg [stroke="#edf2f4"], .dark svg [stroke="#cbd5e1"] { stroke: var(--chart-grid); }
-.dark svg [fill="#64748b"] { fill: var(--chart-text); }
-.dark svg [fill="#334155"] { fill: var(--chart-label); }
 
 /* Motion for occasional surfaces; trading data and navigation stay immediate. */
 :root {

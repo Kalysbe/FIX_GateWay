@@ -99,6 +99,8 @@
 .login-input:hover { border-color: var(--faint); }
 .login-input:focus { border-color: var(--ring); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ring) 22%, transparent); }
 .login-input[readonly] { color: var(--muted-foreground); background: var(--subtle); }
+.login-input[aria-invalid="true"] { border-color: var(--danger); }
+.login-field-error { margin: 0; color: var(--danger); font-size: 11px; }
 .login-password { position: relative; }
 .login-password .login-input { padding-right: 50px; }
 .login-password-toggle { position: absolute; top: 2px; right: 2px; display: grid; place-items: center; width: 42px; height: 42px; border-radius: 7px; color: var(--muted-foreground); background: transparent; }

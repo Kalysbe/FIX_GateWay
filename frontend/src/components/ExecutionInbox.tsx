@@ -63,21 +63,21 @@ export function ExecutionInbox() {
     {q.isLoading && <p className="text-sm">Загрузка…</p>}
     {s && <section className="card space-y-1 text-sm" role="status">
       <h2 className="font-medium">{s.healthy ? "Входящие FIX-отчёты обрабатываются" : "Обработка входящих FIX-отчётов остановлена"}</h2>
-      <p className="text-slate-500">В очереди: {s.pending} · старейший: {Math.round(s.oldest_age_seconds)} с{s.healthy ? "" : " · новые заявки и отправка приостановлены"}</p>
+      <p className="text-muted">В очереди: {s.pending} · старейший: {Math.round(s.oldest_age_seconds)} с{s.healthy ? "" : " · новые заявки и отправка приостановлены"}</p>
     </section>}
     {b && <section className="card space-y-3 text-sm">
       <h2 className="font-medium">Блокирующий отчёт</h2>
       <dl className="grid gap-x-4 gap-y-1 sm:grid-cols-[max-content_1fr]">
-        <dt className="text-slate-500">Тип</dt><dd>{kind(b.report)}</dd>
-        {b.report && <><dt className="text-slate-500">Адаптер</dt><dd>{b.report.adapter_id || "—"}</dd>
-          <dt className="text-slate-500">ClOrdID / ExecID</dt><dd className="break-all">{b.report.cl_ord_id || "—"} / {b.report.exec_id || "—"}</dd>
-          {b.report.text && <><dt className="text-slate-500">Текст (58)</dt><dd className="break-words">{b.report.text}</dd></>}</>}
-        <dt className="text-slate-500">Получен</dt><dd>{b.received_at ? formatDateTime(b.received_at) : "—"}</dd>
-        <dt className="text-slate-500">Ошибка</dt><dd className="break-words">{b.error}</dd>
-        <dt className="text-slate-500">Попыток</dt><dd>{b.attempts} · с {formatDateTime(b.failed_at)}</dd>
+        <dt className="text-muted">Тип</dt><dd>{kind(b.report)}</dd>
+        {b.report && <><dt className="text-muted">Адаптер</dt><dd>{b.report.adapter_id || "—"}</dd>
+          <dt className="text-muted">ClOrdID / ExecID</dt><dd className="break-all">{b.report.cl_ord_id || "—"} / {b.report.exec_id || "—"}</dd>
+          {b.report.text && <><dt className="text-muted">Текст (58)</dt><dd className="break-words">{b.report.text}</dd></>}</>}
+        <dt className="text-muted">Получен</dt><dd>{b.received_at ? formatDateTime(b.received_at) : "—"}</dd>
+        <dt className="text-muted">Ошибка</dt><dd className="break-words">{b.error}</dd>
+        <dt className="text-muted">Попыток</dt><dd>{b.attempts} · с {formatDateTime(b.failed_at)}</dd>
       </dl>
-      {b.report?.raw_fix && <pre className="overflow-x-auto whitespace-pre-wrap break-all rounded bg-slate-50 p-2 text-xs">{b.report.raw_fix}</pre>}
-      <p className="text-xs text-slate-500">Если ошибка временная (например, недоступна БД), дождитесь повторной попытки. Карантин не применяет отчёт к заявкам и сделкам: он откладывается как случай ручной сверки, а следующие отчёты обрабатываются. Файл сохраняется в каталоге quarantine.</p>
+      {b.report?.raw_fix && <pre className="overflow-x-auto whitespace-pre-wrap break-all rounded bg-subtle p-2 text-xs">{b.report.raw_fix}</pre>}
+      <p className="text-xs text-muted">Если ошибка временная (например, недоступна БД), дождитесь повторной попытки. Карантин не применяет отчёт к заявкам и сделкам: он откладывается как случай ручной сверки, а следующие отчёты обрабатываются. Файл сохраняется в каталоге quarantine.</p>
       {quarantine.error && <ErrorBanner error={quarantine.error} onRetry={() => quarantine.reset()} />}
       {canAct && <form className="flex flex-wrap gap-2" onSubmit={e => { e.preventDefault(); quarantine.mutate({ id: b.entry_id, reason: reason.trim() }); }}>
         <input className="input flex-1" aria-label="Причина карантина" placeholder="Причина и план сверки" maxLength={2000} value={reason} onChange={e => setReason(e.target.value)} />
@@ -87,10 +87,10 @@ export function ExecutionInbox() {
     <section className="card space-y-3 text-sm">
       <h2 className="font-medium">Случаи карантина</h2>
       {resolve.error && <ErrorBanner error={resolve.error} onRetry={() => resolve.reset()} />}
-      {!q.isLoading && cases.length === 0 && <p className="text-slate-500">Отложенных отчётов нет.</p>}
-      {cases.map(c => <div key={c.entry_id} className="rounded-lg border border-slate-200 p-3 space-y-1">
+      {!q.isLoading && cases.length === 0 && <p className="text-muted">Отложенных отчётов нет.</p>}
+      {cases.map(c => <div key={c.entry_id} className="rounded-lg border border-line p-3 space-y-1">
         <div>{c.adapter_id || "—"} · {c.cl_ord_id || "без ClOrdID"}{c.exec_type ? ` · 150=${c.exec_type}` : ""}{c.order_id ? ` · заявка ${c.order_id}` : ""}</div>
-        <p className="break-words text-slate-500">{c.apply_error}</p>
+        <p className="break-words text-muted">{c.apply_error}</p>
         <p>Отложен {formatDateTime(c.quarantined_at)} · {c.quarantined_by} · {c.reason}</p>
         {c.resolved_at ? <p>Закрыт {formatDateTime(c.resolved_at)} · {c.resolved_by} · {c.resolution_note}</p> : canAct && <div className="flex flex-wrap gap-2">
           <input className="input flex-1" aria-label={`Итог сверки ${c.entry_id}`} placeholder="Итог ручной сверки" maxLength={2000} value={notes[c.entry_id] || ""} onChange={e => setNotes({ ...notes, [c.entry_id]: e.target.value })} />

@@ -57,18 +57,14 @@ export default function OrdersPage() {
   const orders = q.data?.rows ?? [];
   const columns = useMemo(() => quikColumns(orders, ORDER_COLUMNS), [orders]);
   const changeBroker = (value: string) => { setBrokerId(value); setOffsets([0]); };
-  const first = offset + 1, last = offset + orders.length;
+  const serverPage = { start: offset + 1, end: offset + orders.length, size: ORDER_PAGE_SIZE, hasPrevious: offsets.length > 1, hasNext: q.data?.next != null, busy: q.isFetching,
+    onPrevious: () => setOffsets(o => o.slice(0, -1)), onNext: () => { const next = q.data?.next; if (next != null) setOffsets(o => [...o, next]); } };
   return <div className="raw-orders space-y-4">
     <PageHeader title="Заявки" subtitle="Активные заявки QUIK за сегодняшний торговый день" />
     {q.error && <ErrorBanner error={q.error} onRetry={() => q.refetch()} />}
     <DataTable title="Заявки" rows={q.error ? [] : orders} columns={columns} rowKey={orderRowKey} getSearchText={rawSearchText(orders)} loading={q.isLoading} resetKey={`${brokerId}:${offset}`} exportName="orders" showTotals={false} onRefresh={() => void q.refetch()} refreshing={q.isFetching} searchPlaceholder="Поиск по загруженной странице…" emptyTitle={q.error ? "Заявки временно недоступны" : "Активных заявок за сегодня нет"} filters={<>
       <select className="input w-auto" aria-label="Брокер" value={brokerId} onChange={e => changeBroker(e.target.value)}><option value="">Все брокеры</option>{(brokers.data?.brokers ?? []).map(b => <option key={b.id} value={b.id}>{b.name}</option>)}</select>
       {brokerId && <button className="btn-muted" onClick={() => changeBroker("")}>Сбросить</button>}
-    </>} />
-    <div className="flex items-center justify-end gap-2 text-xs text-muted">
-      <span aria-live="polite">Строки БД {orders.length ? `${first}–${last}` : "—"}</span>
-      <button type="button" className="btn-muted" disabled={offsets.length < 2 || q.isFetching} onClick={() => setOffsets(o => o.slice(0, -1))}>← Предыдущие {ORDER_PAGE_SIZE}</button>
-      <button type="button" className="btn-muted" disabled={q.data?.next == null || q.isFetching} onClick={() => { const next = q.data?.next; if (next != null) setOffsets(o => [...o, next]); }}>Следующие {ORDER_PAGE_SIZE} →</button>
-    </div>
+    </>} serverPage={serverPage} />
   </div>;
 }
