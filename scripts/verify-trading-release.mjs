@@ -44,6 +44,9 @@ await until(async()=>{const value=await call(`/api/v1/admin/reconciliation?order
 assert.equal(sql(`SELECT count(*) FROM outbox_reconciliations WHERE order_id='${order.id}'`),'1');
 assert.equal(sql(`SELECT attempts FROM outbox_events WHERE aggregate_id='${order.id}' AND event_type='ORDER_SEND'`),'1');
 assert.equal(sql(`SELECT fix_send_attempted_at IS NOT NULL FROM orders WHERE id='${order.id}'`),'t');
+// The restart dropped the FIX sessions. An order sent before they log on again is
+// rightly requeued ("no healthy adapters"), which would add an attempt below.
+await until(async()=>{const {adapters}=await call('/api/v1/admin/adapters',admin);const enabled=adapters.filter(a=>a.enabled);return enabled.length>0&&enabled.every(a=>a.status==='ONLINE');});
 // Real socket fault: simulator accepts D, drops the connection before ACK and
 // emits the retained ACK after reconnect. Durable crash-window state is injected
 // separately so both the unconfirmed and confirmed reconciliation paths run.
