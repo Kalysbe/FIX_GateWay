@@ -59,6 +59,12 @@
   --chart-danger: #d6455d;
   --chart-in: #0284c7;
   --chart-out: #059669;
+  /* Section hues: icon/accent (3:1 on card), soft background, ink text (4.5:1 on soft). */
+  --hue-overview: #2f9aa6; --hue-overview-soft: #e3f4f5; --hue-overview-ink: #17636c;
+  --hue-trading: #2f6fe0; --hue-trading-soft: #e8effd; --hue-trading-ink: #1f4fae;
+  --hue-admin: #7a5af0; --hue-admin-soft: #efeafe; --hue-admin-ink: #5b3fc4;
+  --hue-infra: #c27100; --hue-infra-soft: #fdf1df; --hue-infra-ink: #8a5300;
+  --app-glow: 9%;
 }
 
 .dark {
@@ -108,7 +114,11 @@
   --chart-danger: #f2738a;
   --chart-in: #63b3ea;
   --chart-out: #3ec79d;
-}
+  --hue-overview: #4cbcc6; --hue-overview-soft: #12313a; --hue-overview-ink: #7fd6de;
+  --hue-trading: #6b9bff; --hue-trading-soft: #172540; --hue-trading-ink: #a7c3ff;
+  --hue-admin: #a48bff; --hue-admin-soft: #231c40; --hue-admin-ink: #c9b9ff;
+  --hue-infra: #f0a83c; --hue-infra-soft: #33250f; --hue-infra-ink: #f6c67a;
+  --app-glow: 7%;}
 
 @theme inline {
   --font-sans: Onest, "Segoe UI", sans-serif;
@@ -526,3 +536,51 @@ a:focus-visible, summary:focus-visible { outline: 2px solid var(--ring); outline
 .data-table .table tr.notification-row-critical > td:first-child, .data-table .table tr.notification-row-error > td:first-child { box-shadow: inset 3px 0 0 var(--danger); }
 .data-table .table tr.notification-row-warning > td:first-child { box-shadow: inset 3px 0 0 var(--warning); }
 .data-table .table tr.notification-row-unread > td { font-weight: 450; }
+
+/* ---------------------------------------------------------------------------
+   Colour by section. An element with data-section gets --section, --section-soft
+   and --section-ink; the menu, page headings and dashboard tiles use them.
+   ------------------------------------------------------------------------- */
+:root { --section: var(--brand); --section-soft: var(--brand-soft); --section-ink: var(--brand-ink); }
+[data-section="overview"] { --section: var(--hue-overview); --section-soft: var(--hue-overview-soft); --section-ink: var(--hue-overview-ink); }
+[data-section="trading"] { --section: var(--hue-trading); --section-soft: var(--hue-trading-soft); --section-ink: var(--hue-trading-ink); }
+[data-section="admin"] { --section: var(--hue-admin); --section-soft: var(--hue-admin-soft); --section-ink: var(--hue-admin-ink); }
+[data-section="infra"] { --section: var(--hue-infra); --section-soft: var(--hue-infra-soft); --section-ink: var(--hue-infra-ink); }
+[data-section="success"] { --section: var(--success); --section-soft: var(--success-soft); --section-ink: var(--success); }
+[data-section="danger"] { --section: var(--danger); --section-soft: var(--danger-soft); --section-ink: var(--danger); }
+
+/* Menu: icons in their section's hue, the active item tinted with it. */
+.nav-link svg { color: var(--section); opacity: .85; }
+.nav-link:hover { background: color-mix(in srgb, var(--section) 9%, transparent); }
+.nav-link:hover svg { color: var(--section); opacity: 1; }
+.nav-active, .nav-active:hover { background: var(--section-soft); color: var(--section-ink); }
+.nav-active svg, .nav-active:hover svg { color: var(--section); opacity: 1; }
+.nav-active::before { background: var(--section); }
+.nav-sub a[aria-current="page"] { color: var(--section-ink); }
+.nav-group-label { display: flex; align-items: center; gap: 7px; }
+.nav-group-label::before { content: ""; width: 6px; height: 6px; border-radius: 2px; background: var(--section); flex-shrink: 0; }
+
+/* Page heading: the section's icon on its soft colour. */
+.page-heading-icon { display: inline-flex; width: 42px; height: 42px; flex-shrink: 0; align-items: center; justify-content: center; border-radius: 12px; color: var(--section); background: var(--section-soft); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--section) 22%, transparent); }
+
+/* A soft glow of the brand hues behind the content. */
+.app-main { background:
+  radial-gradient(900px 340px at 0% 0%, color-mix(in srgb, var(--hue-overview) var(--app-glow), transparent), transparent 70%),
+  radial-gradient(800px 320px at 100% 0%, color-mix(in srgb, var(--hue-admin) var(--app-glow), transparent), transparent 70%);
+  background-repeat: no-repeat; }
+.brand-mark { background: linear-gradient(140deg, var(--hue-overview), var(--hue-trading)); box-shadow: 0 4px 12px -3px color-mix(in srgb, var(--hue-trading) 55%, transparent); }
+.user-avatar { background: linear-gradient(140deg, var(--hue-admin-soft), var(--hue-trading-soft)); color: var(--hue-admin-ink); border-color: color-mix(in srgb, var(--hue-admin) 25%, transparent); }
+
+/* Dashboard tiles: a hue stripe on top and an icon chip. */
+.metric-card { border-top: 0; }
+.metric-card::before { left: 0; right: 0; top: 0; bottom: auto; width: auto; height: 3px; border-radius: 0; background: linear-gradient(90deg, var(--section), color-mix(in srgb, var(--section) 35%, transparent)); opacity: 1; }
+.metric-card-icon { display: inline-flex; width: 30px; height: 30px; align-items: center; justify-content: center; border-radius: 9px; color: var(--section); background: var(--section-soft); }
+.overview-hero { background: linear-gradient(110deg, var(--hue-overview-soft), var(--hue-trading-soft) 55%, var(--hue-admin-soft)); border-color: color-mix(in srgb, var(--hue-trading) 18%, var(--border)); }
+.health-card { position: relative; overflow: hidden; }
+.health-card::after { content: ""; position: absolute; inset: auto 0 0 0; height: 2px; background: var(--section); opacity: .8; }
+
+/* Primary buttons: a light sheen; table headings a trace of the brand. */
+.btn { background-image: linear-gradient(180deg, color-mix(in srgb, white 12%, transparent), transparent); }
+.btn-danger { background-image: none; }
+.table th { background: color-mix(in srgb, var(--brand) 5%, var(--table-head)); }
+.status-badge { box-shadow: inset 0 0 0 1px color-mix(in srgb, currentColor 22%, transparent); }

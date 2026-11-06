@@ -16,49 +16,7 @@ import { Sheet, SheetContent, SheetTitle } from "./ui/sheet";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "./ui/tooltip";
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuLabel, DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuTrigger } from "./ui/dropdown-menu";
-
-type NavItem = {
-  group?: string;
-  to?: string;
-  href?: string;
-  label: string;
-  icon: (p: { size?: number; className?: string }) => ReactElement;
-  match?: (path: string) => boolean;
-  children?: Array<{ to: string; label: string }>;
-};
-
-const LOG_CHILDREN = [
-  { to: "/logs", label: "Все" },
-  { to: "/logs/api", label: "API" },
-  { to: "/logs/orders", label: "Заявки" },
-  { to: "/logs/errors", label: "Ошибки" },
-  { to: "/logs/auth", label: "Авторизация" },
-  { to: "/logs/fix", label: "FIX / Adapters" },
-  { to: "/logs/system", label: "Система" },
-  { to: "/logs/audit", label: "Аудит" },
-];
-
-const MAIN_NAV: NavItem[] = [
-  { group: "Обзор", to: "/", label: "Дашборд", icon: Icons.dashboard, match: (p) => p === "/" },
-  { group: "Обзор", to: "/monitoring", label: "Мониторинг", icon: Icons.monitoring, match: (p) => p === "/monitoring" },
-  { group: "Торговые операции", to: "/orders", label: "Заявки", icon: Icons.orders, match: (p) => p.startsWith("/orders") },
-  { group: "Торговые операции", to: "/trades", label: "Сделки", icon: Icons.trades, match: (p) => p.startsWith("/trades") },
-  { group: "Торговые операции", to: "/market-data", label: "Текущие торги", icon: Icons.quotes, match: (p) => p.startsWith("/market-data") },
-  { group: "Торговые операции", to: "/quotes", label: "Котировки", icon: Icons.chart, match: (p) => p.startsWith("/quotes") },
-  { group: "Торговые операции", to: "/positions", label: "Позиции", icon: Icons.accounts, match: (p) => p.startsWith("/positions") },
-  { group: "Торговые операции", to: "/reference", label: "Инструменты", icon: Icons.instruments, match: (p) => p.startsWith("/reference") },
-  { group: "Управление", to: "/brokers", label: "Брокеры", icon: Icons.brokers, match: (p) => p.startsWith("/brokers") },
-  { group: "Управление", to: "/tokens", label: "Токены", icon: Icons.tokens, match: (p) => p.startsWith("/tokens") },
-  { group: "Управление", to: "/classes", label: "Классы QUIK", icon: Icons.settings, match: (p) => p === "/classes" },
-  { group: "Управление", to: "/rate-limits", label: "Rate Limits", icon: Icons.roles, match: (p) => p === "/rate-limits" },
-  { group: "Инфраструктура", to: "/adapters", label: "Подключения FIX", icon: Icons.adapters, match: (p) => p.startsWith("/adapters") },
-  { group: "Инфраструктура", to: "/execution-inbox", label: "Входящие FIX", icon: Icons.inbox, match: (p) => p === "/execution-inbox" },
-  { group: "Инфраструктура", to: "/grpc", label: "gRPC · Подписки", icon: Icons.stream, match: (p) => p === "/grpc" },
-  { group: "Инфраструктура", to: "/logs", label: "Логи и аудит", icon: Icons.audit, match: (p) => p.startsWith("/logs"), children: LOG_CHILDREN },
-  { group: "Инфраструктура", to: "/notifications", label: "Уведомления", icon: Icons.bell, match: (p) => p.startsWith("/notifications") },
-];
-
-const BOTTOM_NAV: NavItem[] = import.meta.env.VITE_DOCS_PUBLIC === "false" ? [] : [{ href: "/broker-swagger", label: "API-документация", icon: Icons.docs }];
+import { BOTTOM_NAV, MAIN_NAV, type NavItem } from "../lib/navigation";
 
 const COLLAPSE_KEY = "fixgw-sidebar-collapsed";
 
@@ -91,7 +49,7 @@ function NavLink({ item, active, path, collapsed, onNavigate }: { item: NavItem;
   );
 
   return (
-    <div>
+    <div data-section={item.section}>
       {collapsed ? (
         <Tooltip>
           <TooltipTrigger asChild>{link}</TooltipTrigger>
@@ -139,7 +97,7 @@ function SidebarContent({ path, collapsed, onNavigate }: { path: string; collaps
           const groupStart = MAIN_NAV[index - 1]?.group !== item.group;
           return (
             <div key={item.label}>
-              {groupStart && (collapsed ? <div className="mx-2 my-3 h-px bg-sidebar-border" aria-hidden /> : <div className="nav-group-label">{item.group}</div>)}
+              {groupStart && (collapsed ? <div className="mx-2 my-3 h-px bg-sidebar-border" aria-hidden /> : <div className="nav-group-label" data-section={item.section}>{item.group}</div>)}
               <NavLink item={item} active={active} path={path} collapsed={collapsed} onNavigate={onNavigate} />
             </div>
           );
