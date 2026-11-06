@@ -11,12 +11,16 @@ import (
 )
 
 type dictionaryAdapter struct {
-	mdTestAdapter
+	Adapter
+	id       string
+	status   domain.AdapterStatus
 	priority int
 	board    string
 	fail     bool
 }
 
+func (a *dictionaryAdapter) ID() string                   { return a.id }
+func (a *dictionaryAdapter) Status() domain.AdapterStatus { return a.status }
 func (a *dictionaryAdapter) Meta() domain.Adapter {
 	return domain.Adapter{ID: a.id, Priority: a.priority}
 }
@@ -27,24 +31,19 @@ func (a *dictionaryAdapter) FetchSecurities(context.Context) ([]domain.SecurityR
 	return []domain.SecurityRef{{SecurityID: "AAA", Board: a.board}}, nil
 }
 
-func TestDictionaryStaysWithMarketDataOwnerAndFallsBackOnFailure(t *testing.T) {
-	a := &dictionaryAdapter{mdTestAdapter: mdTestAdapter{id: "a1", status: domain.AdapterOnline}, priority: 200, board: "LEGACY"}
-	b := &dictionaryAdapter{mdTestAdapter: mdTestAdapter{id: "a2", status: domain.AdapterOnline}, priority: 150, board: "CURRENT"}
-	m := &Manager{adapters: map[string]Adapter{"a1": a, "a2": b}}
+// The dictionary comes from the adapter with the best priority and falls back
+// to the next one when it fails.
+func TestDictionaryFollowsPriorityAndFallsBackOnFailure(t *testing.T) {
+	a := &dictionaryAdapter{id: "a1", status: domain.AdapterOnline, priority: 100, board: "FIRST"}
+	b := &dictionaryAdapter{id: "a2", status: domain.AdapterOnline, priority: 150, board: "SECOND"}
+	m := &Manager{adapters: map[string]Adapter{"a1": a, "a2": b}, log: slog.New(slog.NewTextHandler(io.Discard, nil))}
 	id, rows, err := m.FetchSecurities(context.Background())
-	if err != nil || id != "a2" || rows[0].Board != "CURRENT" {
-		t.Fatal(id, rows, err)
-	}
-	m.setMarketDataOwner("a1")
-	id, rows, err = m.FetchSecurities(context.Background())
-	if err != nil || id != "a1" || rows[0].Board != "LEGACY" {
+	if err != nil || id != "a1" || rows[0].Board != "FIRST" {
 		t.Fatal(id, rows, err)
 	}
 	a.fail = true
-	// Failure logging is exercised by the manager; use the test's quiet logger.
-	m.log = slog.New(slog.NewTextHandler(io.Discard, nil))
 	id, rows, err = m.FetchSecurities(context.Background())
-	if err != nil || id != "a2" || rows[0].Board != "CURRENT" {
+	if err != nil || id != "a2" || rows[0].Board != "SECOND" {
 		t.Fatal(id, rows, err)
 	}
 }

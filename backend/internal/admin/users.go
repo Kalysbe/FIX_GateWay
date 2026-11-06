@@ -5,6 +5,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/fix-gateway/backend/internal/audit"
 	"github.com/fix-gateway/backend/internal/auth"
 	"github.com/fix-gateway/backend/internal/domain"
 	"github.com/google/uuid"
@@ -43,7 +44,7 @@ func (s *UserStore) EnsureAdmin(ctx context.Context, email, password string) err
 
 // RotatePassword is an explicit operator action. EnsureAdmin deliberately never
 // changes an existing account just because a bootstrap environment value changed.
-func (s *UserStore) RotatePassword(ctx context.Context, email, password string) error {
+func (s *UserStore) RotatePassword(ctx context.Context, auditLog *audit.Store, email, password string) error {
 	if len(password) < 12 || len(password) > 72 || password == "admin123" {
 		return errors.New("new password must contain 12 to 72 bytes")
 	}
@@ -63,7 +64,11 @@ func (s *UserStore) RotatePassword(ctx context.Context, email, password string) 
 		}
 		return err
 	}
-	if _, err := tx.Exec(ctx, `INSERT INTO audit_logs(actor_type,actor_id,action,entity_type,entity_id,result) VALUES('system','operator:admin-password-cli','ADMIN_PASSWORD_ROTATED','USER',$1,'SUCCESS')`, id.String()); err != nil {
+	// The rotation is committed only once its audit line is in the log file.
+	if err := auditLog.Write(ctx, audit.Entry{
+		ActorType: "system", ActorID: "operator:admin-password-cli", Action: "ADMIN_PASSWORD_ROTATED",
+		EntityType: "USER", EntityID: id.String(), Result: "SUCCESS",
+	}); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)

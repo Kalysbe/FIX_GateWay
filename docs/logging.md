@@ -14,7 +14,7 @@ and error rates) now cover these recorded methods only. Process HTTP metrics
 continue counting all methods. Routine token authentication successes and
 generic outgoing FIX diagnostic events remain excluded.
 
-Routine FIX market-data, position, and instrument synchronization details use
+Routine FIX market-data synchronization details use
 DEBUG in the process logger and are hidden at the default INFO level. Warnings,
 errors, session connections, and gateway startup/shutdown remain visible.
 

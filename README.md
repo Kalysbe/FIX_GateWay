@@ -25,7 +25,7 @@ environment with a separate database and the admin interface, use
 [Local testing](docs/local-testing.md).
 
 - Admin UI: http://localhost:5173 (`admin@localhost` / `admin123`)
-- API + Swagger: http://localhost:8080/swagger
+- API + Swagger: http://localhost:8080/broker-swagger
 - Prometheus: http://localhost:9090
 - Two FIX simulator acceptors: `:5001`, `:5002`
 
@@ -36,6 +36,8 @@ environment with a separate database and the admin interface, use
 - [Archify: интерактивные схемы проекта](docs/archify.md)
 - [Сверка неопределённых отправок](docs/reconciliation.md)
 - [Текущие заявки из БД QUIK](docs/orders.md)
+- [Текущие торги из БД QUIK (Params)](docs/market-data.md)
+- [Торговые счета и фирмы из БД QUIK](docs/accounts.md)
 - [Торговые ограничения](docs/trading-limits.md)
 - [Проверка торгового релиза](docs/release-verification.md)
 - [Deployment](docs/deployment.md)

@@ -73,17 +73,21 @@ export default function LogsPage() {
   const kind = kindParam || params.get("kind") || "all";
   const brokerId = params.get("broker_id") || "";
 
-  const [from, setFrom] = useState(isoDayStart());
-  const [to, setTo] = useState("");
-  const [severity, setSeverity] = useState("");
-  const [ip, setIp] = useState("");
-  const [requestId, setRequestId] = useState("");
-  const [orderId, setOrderId] = useState("");
-  const [clientOrderId, setClientOrderId] = useState("");
-  const [endpoint, setEndpoint] = useState("");
-  const [method, setMethod] = useState("");
-  const [adapter, setAdapter] = useState("");
-  const [errorCode, setErrorCode] = useState(params.get("error_code") || "");
+  // Every filter starts from the URL, so a reload, Back or a shared link keeps it.
+  const initial = (key: string) => params.get(key) || "";
+  const [dayStart] = useState(isoDayStart);
+  // "-" in the URL keeps a cleared start date cleared.
+  const [from, setFrom] = useState(() => { const v = params.get("from"); return v === "-" ? "" : v ?? dayStart; });
+  const [to, setTo] = useState(() => initial("to"));
+  const [severity, setSeverity] = useState(() => initial("severity"));
+  const [ip, setIp] = useState(() => initial("ip"));
+  const [requestId, setRequestId] = useState(() => initial("request_id"));
+  const [orderId, setOrderId] = useState(() => initial("order_id"));
+  const [clientOrderId, setClientOrderId] = useState(() => initial("client_order_id"));
+  const [endpoint, setEndpoint] = useState(() => initial("endpoint"));
+  const [method, setMethod] = useState(() => initial("http_method"));
+  const [adapter, setAdapter] = useState(() => initial("adapter_id"));
+  const [errorCode, setErrorCode] = useState(() => initial("error_code"));
   const [selected, setSelected] = useState<LogRow | null>(null);
   const qc = useQueryClient();
 
@@ -97,6 +101,18 @@ export default function LogsPage() {
   const dAdapter = useDebounced(adapter, 350);
 
   useBreadcrumbs([{ label: "Логи" }, { label: KINDS.find((k) => k.id === kind)?.label || "Все" }]);
+
+  // The filters, once settled, go back into the URL (today's start is the default and stays out).
+  useEffect(() => {
+    setParams(prev => {
+      const out = new URLSearchParams(prev);
+      const put = (key: string, value: string) => { if (value) out.set(key, value); else out.delete(key); };
+      put("from", dFrom === dayStart ? "" : dFrom || "-");
+      put("to", dTo); put("severity", severity); put("ip", dIp); put("request_id", dRequestId); put("order_id", dOrderId);
+      put("client_order_id", dClientOrderId); put("endpoint", dEndpoint); put("http_method", method); put("adapter_id", dAdapter); put("error_code", errorCode);
+      return out.toString() === prev.toString() ? prev : out;
+    }, { replace: true });
+  }, [dFrom, dTo, severity, dIp, dRequestId, dOrderId, dClientOrderId, dEndpoint, method, dAdapter, errorCode, dayStart, setParams]);
 
   const qs = useMemo(() => {
     const q = new URLSearchParams();
@@ -191,7 +207,7 @@ export default function LogsPage() {
         {KINDS.map((k) => (
           <Link
             key={k.id}
-            to={k.id === "all" ? "/logs" : `/logs/${k.id}`}
+            to={{ pathname: k.id === "all" ? "/logs" : `/logs/${k.id}`, search: params.toString() }}
             className={kind === k.id ? "btn" : "btn-muted"}
           >
             {k.label}
@@ -222,19 +238,19 @@ export default function LogsPage() {
             <option key={s}>{s}</option>
           ))}
         </select>
-        <input className="input min-w-[140px] flex-1" placeholder="IP" value={ip} onChange={(e) => setIp(e.target.value)} />
-        <input className="input min-w-[160px] flex-1" placeholder="Request ID" value={requestId} onChange={(e) => setRequestId(e.target.value)} />
-        <input className="input min-w-[140px]" placeholder="Order ID" value={orderId} onChange={(e) => setOrderId(e.target.value)} />
-        <input className="input min-w-[140px]" placeholder="Client Order ID" value={clientOrderId} onChange={(e) => setClientOrderId(e.target.value)} />
-        <input className="input min-w-[140px]" placeholder="Endpoint" value={endpoint} onChange={(e) => setEndpoint(e.target.value)} />
-        <input className="input min-w-[120px]" placeholder="Adapter" value={adapter} onChange={(e) => setAdapter(e.target.value)} />
-        <input className="input min-w-[140px]" placeholder="Код ошибки" value={errorCode} onChange={(e) => setErrorCode(e.target.value)} />
+        <input className="input min-w-[140px] flex-1" aria-label="IP-адрес" placeholder="IP" value={ip} onChange={(e) => setIp(e.target.value)} />
+        <input className="input min-w-[160px] flex-1" aria-label="Request ID" placeholder="Request ID" value={requestId} onChange={(e) => setRequestId(e.target.value)} />
+        <input className="input min-w-[140px]" aria-label="Order ID" placeholder="Order ID" value={orderId} onChange={(e) => setOrderId(e.target.value)} />
+        <input className="input min-w-[140px]" aria-label="Client Order ID" placeholder="Client Order ID" value={clientOrderId} onChange={(e) => setClientOrderId(e.target.value)} />
+        <input className="input min-w-[140px]" aria-label="Endpoint" placeholder="Endpoint" value={endpoint} onChange={(e) => setEndpoint(e.target.value)} />
+        <input className="input min-w-[120px]" aria-label="Адаптер" placeholder="Adapter" value={adapter} onChange={(e) => setAdapter(e.target.value)} />
+        <input className="input min-w-[140px]" aria-label="Код ошибки" placeholder="Код ошибки" value={errorCode} onChange={(e) => setErrorCode(e.target.value)} />
       </div>
 
       {q.error && <ErrorBanner error={q.error} onRetry={() => q.refetch()} />}
-      <div className={q.isPlaceholderData ? "opacity-60" : ""}><DataTable title="Журнал событий" rows={rows} columns={columns} rowKey={row => row.id} loading={q.isLoading} resetKey={qs} initialSort={{ id: "time", direction: "desc" }} searchPlaceholder="Поиск в загруженных событиях…" getSearchText={row => Object.values(row).join(" ")} emptyTitle="Нет событий по выбранным фильтрам" summary={list => [{ label: "Событий", value: list.length }, { label: "Ошибок", value: list.filter(row => ["ERROR", "CRITICAL"].includes(row.severity)).length, tone: "danger" }, { label: "Предупреждений", value: list.filter(row => row.severity === "WARNING").length, tone: "warn" }]} /></div>
+      <div className={q.isPlaceholderData ? "opacity-60" : ""}><DataTable urlState="t" title="Журнал событий" rows={rows} columns={columns} rowKey={row => row.id} loading={q.isLoading} resetKey={qs} initialSort={{ id: "time", direction: "desc" }} searchPlaceholder="Поиск в загруженных событиях…" getSearchText={row => Object.values(row).join(" ")} emptyTitle="Нет событий по выбранным фильтрам" summary={list => [{ label: "Событий", value: list.length }, { label: "Ошибок", value: list.filter(row => ["ERROR", "CRITICAL"].includes(row.severity)).length, tone: "danger" }, { label: "Предупреждений", value: list.filter(row => row.severity === "WARNING").length, tone: "warn" }]} /></div>
       <div className="flex flex-wrap items-center justify-between gap-3 text-sm">
-        <div className="text-slate-500">
+        <div className="text-muted">
           Загружено <span className="font-mono text-ink">{formatNumber(loaded)}</span>
           {q.hasNextPage ? " · есть ещё" : loaded > 0 ? " · это всё по фильтру" : ""}
         </div>
@@ -309,8 +325,8 @@ function LogDetails({ row, onClose }: { row: LogRow; onClose: () => void }) {
 
 function Row({ k, v, mono }: { k: string; v?: string | null; mono?: boolean }) {
   return (
-    <div className="flex justify-between gap-3 border-b border-slate-50 py-1.5">
-      <dt className="text-slate-500">{k}</dt>
+    <div className="flex justify-between gap-3 border-b border-line py-1.5">
+      <dt className="text-muted">{k}</dt>
       <dd className={`text-right ${mono ? "font-mono text-xs" : ""}`}>{v || "—"}</dd>
     </div>
   );

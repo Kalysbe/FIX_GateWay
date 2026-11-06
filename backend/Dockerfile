@@ -1,21 +1,20 @@
-FROM golang:1.26.9-alpine@sha256:3082400e369fa24d5fc60bca20edab3f6d604e0c5a690ec66b295eff4dd87ade AS builder
+FROM golang:1.26.10-alpine@sha256:87c65a688975c0b1d4585d204874c45ca78354670e3a5f11368c5a492303d696 AS builder
 WORKDIR /src
 RUN apk add --no-cache git ca-certificates
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /out/gateway ./cmd/gateway
-RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /out/trade-reconcile ./cmd/trade-reconcile
-RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /out/fixsimulator ./cmd/fixsimulator
-RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /out/devcerts ./cmd/devcerts
-RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /out/admin-password ./cmd/admin-password
+# The compiler cache stays outside the layers: otherwise each build keeps a new 424 MB copy.
+RUN --mount=type=cache,target=/root/.cache/go-build CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /out/gateway ./cmd/gateway
+RUN --mount=type=cache,target=/root/.cache/go-build CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /out/fixsimulator ./cmd/fixsimulator
+RUN --mount=type=cache,target=/root/.cache/go-build CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /out/devcerts ./cmd/devcerts
+RUN --mount=type=cache,target=/root/.cache/go-build CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /out/admin-password ./cmd/admin-password
 
 FROM alpine:3.24.2@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6 AS gateway
 RUN apk add --no-cache ca-certificates tzdata wget
 RUN addgroup -g 10001 gateway && adduser -D -H -u 10001 -G gateway gateway && mkdir -p /app/fix-sessions && chown -R gateway:gateway /app
 WORKDIR /app
 COPY --from=builder /out/gateway /app/gateway
-COPY --from=builder /out/trade-reconcile /app/trade-reconcile
 COPY --from=builder /out/admin-password /app/admin-password
 COPY migrations /app/migrations
 COPY docs /app/docs

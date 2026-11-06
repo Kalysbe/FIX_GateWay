@@ -14,6 +14,7 @@ import (
 type Config struct {
 	loadError                error
 	ExportDir                string
+	LogDir                   string // daily log files, one per Bishkek date, kept 7 days
 	BackupStatusFile         string
 	FIXSessionDir            string
 	PrometheusURL            string
@@ -25,6 +26,9 @@ type Config struct {
 	APIReadConcurrency       int
 	APITradeConcurrency      int
 	APIRequestTimeout        time.Duration
+	OrderAnswerTimeout       time.Duration // POST /orders waits this long for the QUIK answer
+	FinishedOrderGrace       time.Duration // an order QUIK closed is deleted after this long
+	HTTPWriteTimeout        time.Duration
 	RateLimitMaxStates       int
 	GRPCAddr                 string
 	GRPCCertFile             string
@@ -37,7 +41,6 @@ type Config struct {
 	GRPCServerName           string
 	DatabaseURL              string
 	QuikExportDatabaseURL    string
-	QuikAPIBaseURL           string
 	JWTSecret                string
 	APITokenPepper           string
 	AdminEmail               string
@@ -56,10 +59,7 @@ type Config struct {
 	DefaultOrderRateLimit    int
 	AuthFailMaxPerMinute     int
 	AppEnv                   string
-	PositionSyncInterval     time.Duration // automatic snapshot fallback; defaults to 30s when unset/longer
-	PositionStreamEnabled    bool
-	MarketDataSyncInterval   time.Duration // automatic subscription supervision; defaults to 5s when unset/longer
-	MarketDataBoards         []string      // QUIK class codes for 35=V (tag 100)
+	FIXSessionHours          string // daily FIX window, HH:MM-HH:MM Bishkek time; empty is always
 	TrustedProxies           string
 	ObsFastMS                int
 	ObsNormalMS              int
@@ -98,6 +98,7 @@ func Load() Config {
 	}
 	c := Config{
 		ExportDir:                getEnv("EXPORT_DIR", filepath.Join(fixSessionDir, "exports")),
+		LogDir:                   getEnv("LOG_DIR", filepath.Join(fixSessionDir, "logs")),
 		BackupStatusFile:         getEnv("BACKUP_STATUS_FILE", ""),
 		FIXSessionDir:            fixSessionDir,
 		PrometheusURL:            getEnv("PROMETHEUS_URL", ""),
@@ -109,6 +110,9 @@ func Load() Config {
 		APIReadConcurrency:       getInt("API_READ_CONCURRENCY", 32),
 		APITradeConcurrency:      getInt("API_TRADE_CONCURRENCY", 16),
 		APIRequestTimeout:        getDuration("API_REQUEST_TIMEOUT", 15*time.Second),
+		OrderAnswerTimeout:       getDuration("ORDER_ANSWER_TIMEOUT", 10*time.Second),
+		FinishedOrderGrace:       getDuration("FINISHED_ORDER_GRACE", 2*time.Minute),
+		HTTPWriteTimeout:         getDuration("HTTP_WRITE_TIMEOUT", 60*time.Second),
 		GRPCAddr:                 getEnv("GRPC_ADDR", ":8443"),
 		GRPCCertFile:             getEnv("GRPC_TLS_CERT", "certs/server.crt"),
 		GRPCKeyFile:              getEnv("GRPC_TLS_KEY", "certs/server.key"),
@@ -120,7 +124,6 @@ func Load() Config {
 		GRPCServerName:           getEnv("GRPC_SERVER_NAME", "localhost"),
 		DatabaseURL:              getEnv("DATABASE_URL", "postgres://postgres:123@localhost:5432/fix_gateway?sslmode=disable"),
 		QuikExportDatabaseURL:    getEnv("QUIK_EXPORT_DATABASE_URL", ""),
-		QuikAPIBaseURL:           getEnv("QUIK_API_BASE_URL", "http://192.168.0.89:5000"),
 		JWTSecret:                getEnv("JWT_SECRET", "dev-jwt-secret-change-me"),
 		APITokenPepper:           getEnv("API_TOKEN_PEPPER", "dev-token-pepper-change-me"),
 		AdminEmail:               getEnv("ADMIN_EMAIL", "admin@localhost"),
@@ -140,10 +143,10 @@ func Load() Config {
 		DefaultOrderRateLimit:    getInt("DEFAULT_ORDER_RATE_LIMIT", 20),
 		AuthFailMaxPerMinute:     getInt("AUTH_FAIL_MAX_PER_MINUTE", 30),
 		AppEnv:                   appEnv,
-		PositionSyncInterval:     getDuration("POSITION_SYNC_INTERVAL", 30*time.Second),
-		PositionStreamEnabled:    getBool("POSITION_STREAM_ENABLED", true),
-		MarketDataSyncInterval:   getDuration("MARKET_DATA_SYNC_INTERVAL", 15*time.Second),
-		MarketDataBoards:         getCSV("MARKET_DATA_BOARDS", "LISTEDSTOCKK,LIST_GBA"),
+		// The QUIK FIX adapters are switched off 04:00-09:05 (поручение
+		// пользователя 05.11.2026); the gateway logs out a minute before.
+		// Set but empty means no schedule (the local simulator).
+		FIXSessionHours: getEnvAllowEmpty("FIX_SESSION_HOURS", "09:05-03:59"),
 		TrustedProxies:           getEnv("TRUSTED_PROXIES", ""),
 		ObsFastMS:                getInt("OBS_FAST_MS", 100),
 		ObsNormalMS:              getInt("OBS_NORMAL_MS", 500),
@@ -281,6 +284,15 @@ func (c Config) Validate() error {
 
 func getEnv(key, def string) string {
 	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return def
+}
+
+// getEnvAllowEmpty is getEnv for settings where an explicit empty value differs
+// from an unset one.
+func getEnvAllowEmpty(key, def string) string {
+	if v, ok := os.LookupEnv(key); ok {
 		return v
 	}
 	return def

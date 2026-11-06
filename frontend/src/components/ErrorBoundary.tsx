@@ -17,9 +17,9 @@ export class ErrorBoundary extends Component<Props, State> {
   render() {
     if (!this.state.error) return this.props.children;
     return (
-      <div className="card m-6 space-y-3 border-rose-100 bg-rose-50">
+      <div className="card m-6 space-y-3 border-danger/20 bg-danger-soft">
         <h2 className="text-lg font-semibold text-danger">Ошибка интерфейса</h2>
-        <p className="text-sm text-slate-600">{this.state.error.message}</p>
+        <p className="text-sm text-muted">{this.state.error.message}</p>
         <button type="button" className="btn-muted" onClick={() => this.setState({ error: null })}>
           Попробовать снова
         </button>

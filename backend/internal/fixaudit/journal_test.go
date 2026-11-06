@@ -151,6 +151,35 @@ func TestJournalWriteFailureStopsCallbackAndCorruptionBlocksRestart(t *testing.T
 	}
 }
 
+// After an adapter stop QuickFIX still reports the socket shutdown; such an
+// event must not kill the gateway, while a FIX message after close stays fatal.
+func TestJournalClosedDropsEventsButNotMessages(t *testing.T) {
+	fatal := false
+	f, err := New(t.TempDir(), 1<<20, func(error) { fatal = true }, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	l, _ := f.Create()
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	l.OnEvent("read tcp 172.19.0.3:40970->172.23.10.84:15101: use of closed network connection")
+	if fatal {
+		t.Fatal("an event after close was fatal")
+	}
+	func() {
+		defer func() {
+			if recover() == nil {
+				t.Error("a FIX message after close was accepted")
+			}
+		}()
+		l.OnIncoming([]byte("35=8\x0134=7\x01"))
+	}()
+	if !fatal {
+		t.Fatal("a FIX message after close must call the fatal handler")
+	}
+}
+
 func TestJournalConcurrentCallbacksRemainWhole(t *testing.T) {
 	dir := t.TempDir()
 	f, err := New(dir, 1<<20, nil, nil)

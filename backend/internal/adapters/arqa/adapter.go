@@ -34,34 +34,19 @@ type Adapter struct {
 	processed atomic.Int64
 	errors    atomic.Int64
 	storeDir  string
-
-	subMu       sync.Mutex
-	mdRequestMu sync.Mutex
-	lastMDQuery domain.MarketDataQuery
-	mdSend      func(*quickfix.Message) error
-	posSend     func(*quickfix.Message) error
 }
 
-func New(meta domain.Adapter, log *slog.Logger, onExec domain.ExecutionHandler, onMD domain.MarketDataHandler, storeDir string) *Adapter {
+func New(meta domain.Adapter, log *slog.Logger, onExec domain.ExecutionHandler, storeDir string) *Adapter {
 	a := &Adapter{meta: meta, log: log, onExec: onExec, storeDir: storeDir}
 	a.status.Store(domain.AdapterUnknown)
 	a.app = newSessionApp(meta.ID, log, onExec)
-	a.app.onMD = onMD
-	a.app.onLogon = func() {
-		a.subMu.Lock()
-		q := a.lastMDQuery
-		a.subMu.Unlock()
-		if q.Symbol == "" && q.Board == "" && len(q.Boards) == 0 && len(q.Instruments) == 0 {
-			return
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-		defer cancel()
-		if _, _, err := a.SubscribeMarketData(ctx, q); err != nil {
-			a.log.Warn("market data resubscribe failed", "adapter_id", a.meta.ID, "error", err)
-		}
-	}
 	return a
 }
+
+// ResetSequenceAtNextLogon makes the next Logon start the numbers again from 1
+// (141=Y). It is used for the first logon of the working day: the QUIK
+// adapter is restarted every morning and starts from 1 itself.
+func (a *Adapter) ResetSequenceAtNextLogon() { a.app.resetNextLogon.Store(true) }
 
 func (a *Adapter) SetFIXHandler(fn func(kind, sessionID, msgType, direction, clOrdID, reason string, seq int)) {
 	if a.app != nil {
@@ -152,8 +137,6 @@ func (a *Adapter) Start(ctx context.Context) error {
 
 func (a *Adapter) Stop(ctx context.Context) error {
 	a.status.Store(domain.AdapterStopping)
-	_ = a.UnsubscribePositions(ctx)
-	_ = a.UnsubscribeMarketData(ctx)
 	if a.initiator != nil {
 		a.initiator.Stop()
 	}
@@ -202,7 +185,7 @@ func (a *Adapter) HealthCheck(ctx context.Context) (domain.HealthDetails, error)
 func (a *Adapter) SendOrder(ctx context.Context, order domain.Order) (string, error) {
 	if !a.app.isLoggedOn() {
 		a.errors.Add(1)
-		return "", fmt.Errorf("adapter %s not logged on", a.meta.ID)
+		return "", fmt.Errorf("adapter %s not logged on: %w", a.meta.ID, domain.ErrFIXNotTransmitted)
 	}
 	clOrdID := ""
 	if order.FixClOrdID != nil {
@@ -325,13 +308,14 @@ func (a *Adapter) buildSettings() (*quickfix.Settings, error) {
 	// SessionQualifier is local-only (not on the wire). Required when two adapters
 	// share the same BeginString/SenderCompID/TargetCompID on different ports
 	// (e.g. QuikFIXAdapterService1 :15101 and Service2 :15102 both use TEST->QUIK).
+	// No StartTime/EndTime: the session never ends, so QuickFIX does not log out
+	// and reset sequence numbers every day at 00:00 UTC (06:00 in Bishkek). The
+	// QUIK adapter keeps its own numbers until it is started with -new.
 	cfg := fmt.Sprintf(`[DEFAULT]
 ConnectionType=initiator
 ReconnectInterval=5
 FileStorePath=%s
 FileLogPath=%s
-StartTime=00:00:00
-EndTime=00:00:00
 UseDataDictionary=N
 ValidateFieldsOutOfOrder=N
 ValidateUserDefinedFields=N

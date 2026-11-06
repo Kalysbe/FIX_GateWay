@@ -5,7 +5,9 @@ import (
 	"flag"
 	"fmt"
 	"github.com/fix-gateway/backend/internal/admin"
+	"github.com/fix-gateway/backend/internal/audit"
 	"github.com/fix-gateway/backend/internal/config"
+	"github.com/fix-gateway/backend/internal/observability"
 	"github.com/fix-gateway/backend/internal/platform/db"
 	"io"
 	"os"
@@ -55,7 +57,12 @@ func run() error {
 		return fmt.Errorf("database connection unavailable")
 	}
 	defer pool.Close()
-	if err := admin.NewUserStore(pool).RotatePassword(ctx, *email, password); err != nil {
+	logs, err := observability.OpenFileLog(cfg.LogDir)
+	if err != nil {
+		return fmt.Errorf("log directory unavailable")
+	}
+	defer logs.Close()
+	if err := admin.NewUserStore(pool).RotatePassword(ctx, audit.NewStore(logs), *email, password); err != nil {
 		return err
 	}
 	return nil

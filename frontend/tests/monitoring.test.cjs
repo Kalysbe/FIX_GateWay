@@ -1,7 +1,7 @@
 const assert = require('node:assert/strict');
 const { readFileSync } = require('node:fs');
 const { resolve } = require('node:path');
-const { test } = require('node:test');
+const { test } = globalThis;
 const vm = require('node:vm');
 const ts = require('typescript');
 const React = require('react');
@@ -26,6 +26,7 @@ function render(monitoring) {
     if(name==='../components/feedback') return {PageSpinner:()=>React.createElement('p',null,'Loading spinner'),ErrorBanner:({error})=>React.createElement('p',null,error?.message)};
     if(name==='../components/StatusBadge') return {StatusBadge:({status})=>React.createElement('span',null,status)};
     if(name==='../lib/adapters') return {displayAdapterName:name=>name,isHiddenAdapter:a=>a.enabled===false};
+    if(name==='../components/charts') return {CHART_COLORS:['c1','c2','c3','c4','c5'],CHART_DANGER:'d',TimeSeriesChart:()=>null};
     if(name.endsWith('.css')) return {};
     throw Error(name);
   }};

@@ -5,35 +5,25 @@ import (
 	"testing"
 )
 
-func TestMarketSnapshotOnSubscribeAndTopicChange(t *testing.T) {
+func TestNoMarketSnapshotOnSubscribeAndTopicChange(t *testing.T) {
 	h := NewHub()
-	h.MarketDataSnapshot = func() any { return map[string]any{"quotes": []any{map[string]any{"symbol": "TEST", "price": "12.34"}}} }
 	s, err := h.Subscribe(auth.RoleReadOnly, []string{"trade.created"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer s.Close()
-	if len(s.Events) != 0 {
-		t.Fatal("snapshot leaked to trade-only subscription")
-	}
 	if err := s.SetTopics([]string{"marketdata.tick"}); err != nil {
 		t.Fatal(err)
 	}
-	initial := <-s.Events
-	if initial.Type != "marketdata.tick" || len(initial.Data.Fields["quotes"].GetListValue().Values) != 1 {
-		t.Fatal("missing snapshot")
+	// Clients load the current Params rows over REST; the stream carries changes.
+	if len(s.Events) != 0 {
+		t.Fatal("unexpected market data snapshot")
 	}
-	h.Broadcast("marketdata.tick", map[string]any{"quotes": []any{}})
-	if next := <-s.Events; next.Sequence <= initial.Sequence {
-		t.Fatal("event ordering")
-	}
-	fresh, err := h.Subscribe(auth.RoleReadOnly, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer fresh.Close()
-	if len(fresh.Events) != 1 {
-		t.Fatal("new subscriber did not receive current quotes")
+	h.BroadcastMarketData([]byte(`{"ClassCode":"TQBR","SecCode":"SBER"}`), false)
+	first := <-s.Events
+	h.BroadcastMarketData([]byte(`{"ClassCode":"TQBR","SecCode":"SBER"}`), true)
+	if next := <-s.Events; next.Sequence <= first.Sequence || !next.GetRemoved() {
+		t.Fatal("event ordering or removal flag")
 	}
 }
 

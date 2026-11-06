@@ -53,7 +53,7 @@ func TestBrokerIsolationAndConnectionLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, c := range h.Connections().Connections {
-		if c.BrokerID == 1 && (len(c.Paths) != 2 || c.Paths[0] != "/api/v1/market-data" || c.Paths[1] != "/api/v1/orderbook") {
+		if c.BrokerID == 1 && (len(c.Paths) != 1 || c.Paths[0] != "/api/v1/market-data") {
 			t.Fatal("market data REST sources missing", c.Paths)
 		}
 	}

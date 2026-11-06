@@ -37,3 +37,8 @@ deploy/production/secrets/
 deploy/production/pki/
 deploy/production/fix/
 deploy/production/*.env
+
+# Playwright output (frontend e2e)
+frontend/test-results/
+frontend/playwright-report/
+frontend/blob-report/

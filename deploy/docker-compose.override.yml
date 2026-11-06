@@ -1,4 +1,4 @@
-# Сервер FIX_GateWay 172.23.10.96: FIX/БД QUIK на .84, API истории на .85.
+# Сервер FIX_GateWay 172.23.10.96: FIX и БД QUIK на .84 (сделки читаются из БД QUIK).
 services:
   postgres:
     # Наружу не публикуем: gateway ходит к базе внутри compose-сети
@@ -7,7 +7,6 @@ services:
   gateway:
     environment:
       ADAPTER_HOST_OVERRIDE: "172.23.10.84"
-      QUIK_API_BASE_URL: "http://172.23.10.85:5000"
     ports: !override
       - "8081:8080"
       - "8443:8443"

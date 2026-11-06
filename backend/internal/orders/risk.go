@@ -194,15 +194,17 @@ func checkTradingLimits(ctx context.Context, tx pgx.Tx, in CreateInput, policies
 func evaluateTradingLimits(in CreateInput, policies []TradingLimit, countOpen func() (int, error)) error {
 	var openCount *int
 	for _, p := range policies {
-		scope := "global"
+		// The message reaches the broker: it names whether the limit is the
+		// common one or this broker's own, in Russian like the rest of the API.
+		scope := "общее ограничение"
 		if p.BrokerID != 0 {
-			scope = fmt.Sprintf("broker %d", p.BrokerID)
+			scope = "ограничение брокера"
 		}
 		if p.Paused {
-			return &RiskRejected{Code: "TRADING_PAUSED", Message: scope + ": new orders are paused"}
+			return &RiskRejected{Code: "TRADING_PAUSED", Message: "Приём новых заявок приостановлен (" + scope + ")"}
 		}
 		if p.MaxQuantity != nil && in.Quantity.GreaterThan(*p.MaxQuantity) {
-			return &RiskRejected{Code: "MAX_ORDER_QUANTITY", Message: scope + ": quantity exceeds trading limit"}
+			return &RiskRejected{Code: "MAX_ORDER_QUANTITY", Message: fmt.Sprintf("Количество больше допустимого для одной заявки: %s (%s)", p.MaxQuantity.String(), scope)}
 		}
 		if p.MaxOpenOrders != nil {
 			if openCount == nil {
@@ -213,7 +215,7 @@ func evaluateTradingLimits(in CreateInput, policies []TradingLimit, countOpen fu
 				openCount = &n
 			}
 			if *openCount >= *p.MaxOpenOrders {
-				return &RiskRejected{Code: "MAX_OPEN_ORDERS", Message: scope + ": maximum open orders reached"}
+				return &RiskRejected{Code: "MAX_OPEN_ORDERS", Message: fmt.Sprintf("Достигнут лимит активных заявок: %d (%s)", *p.MaxOpenOrders, scope)}
 			}
 		}
 	}

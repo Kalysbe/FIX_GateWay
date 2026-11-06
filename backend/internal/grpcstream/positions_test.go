@@ -4,6 +4,8 @@ import (
 	"context"
 	"net"
 	"reflect"
+	"strconv"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -17,16 +19,18 @@ import (
 	"google.golang.org/grpc/test/bufconn"
 )
 
+// Money (MoneyLimits) and securities (DepoLimits) are separate events, each a
+// full array of the token firm's rows of its table.
 func TestBrokerPositionSnapshotsOverGRPC(t *testing.T) {
 	lis := bufconn.Listen(1 << 20)
 	defer lis.Close()
 	hub := realtime.NewHub()
 	var version atomic.Int64
-	svc := &Service{Hub: hub, Brokers: &testBrokers{tokenID: uuid.New()}, PositionsSnapshot: func(ctx context.Context, firms []string) (any, error) {
-		if !reflect.DeepEqual(firms, []string{"TEST", ""}) {
+	svc := &Service{Hub: hub, Brokers: &testBrokers{tokenID: uuid.New()}, PositionsSnapshot: func(ctx context.Context, table string, firms []string) (any, error) {
+		if !reflect.DeepEqual(firms, []string{"TEST"}) {
 			t.Errorf("untrusted firm scope: %v", firms)
 		}
-		return map[string]any{"firm_id": "TEST", "cash": []any{map[string]any{"pos_amt": version.Load()}}, "instruments": []any{}}, nil
+		return []any{map[string]any{"Table": table, "CurrentBal": version.Load()}}, nil
 	}}
 	server := grpc.NewServer()
 	defer server.Stop()
@@ -44,30 +48,34 @@ func TestBrokerPositionSnapshotsOverGRPC(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := stream.Send(&pb.ClientMessage{Command: &pb.ClientMessage_Subscribe{Subscribe: &pb.Subscribe{EventTypes: []string{"positions.updated"}}}}); err != nil {
+	if err := stream.Send(&pb.ClientMessage{Command: &pb.ClientMessage_Subscribe{Subscribe: &pb.Subscribe{EventTypes: []string{"moneylimits.updated", "depolimits.updated"}}}}); err != nil {
 		t.Fatal(err)
 	}
 	if msg, err := stream.Recv(); err != nil || msg.GetReady() == nil {
 		t.Fatal("missing ready", msg, err)
 	}
-	initial, err := stream.Recv()
-	if err != nil {
-		t.Fatal(err)
+	expect := func(eventType, table string, balance int64) *pb.Event {
+		t.Helper()
+		msg, err := stream.Recv()
+		if err != nil {
+			t.Fatal(err)
+		}
+		event := msg.GetEvent()
+		want := `[{"CurrentBal":` + strconv.FormatInt(balance, 10) + `,"Table":"` + table + `"}]`
+		if event.GetType() != eventType || event.GetDataJson() != want || event.GetData() != nil {
+			t.Fatalf("got %s %s, want %s %s", event.GetType(), event.GetDataJson(), eventType, want)
+		}
+		return event
 	}
-	if initial.GetEvent().GetType() != "positions.updated" || initial.GetEvent().GetData().Fields["firm_id"].GetStringValue() != "TEST" {
-		t.Fatal(initial)
-	}
+	expect("moneylimits.updated", "moneylimits", 0)
+	initial := expect("depolimits.updated", "depolimits", 0)
 	version.Store(12)
-	hub.Broadcast("positions.updated", map[string]any{"firm_id": "OTHER", "secret": "hidden"})
-	updated, err := stream.Recv()
-	if err != nil {
-		t.Fatal(err)
+	hub.Broadcast("depolimits.updated", map[string]any{"firm_id": "OTHER", "secret": "hidden"})
+	updated := expect("depolimits.updated", "depolimits", 12)
+	if strings.Contains(updated.GetDataJson(), "secret") {
+		t.Fatal("trigger data leaked", updated)
 	}
-	fields := updated.GetEvent().GetData().Fields
-	if fields["secret"] != nil || fields["cash"].GetListValue().Values[0].GetStructValue().Fields["pos_amt"].GetNumberValue() != 12 {
-		t.Fatal("incorrect scoped update", updated)
-	}
-	if updated.GetEvent().Sequence <= initial.GetEvent().Sequence {
+	if updated.Sequence <= initial.Sequence {
 		t.Fatal("sequence not increasing")
 	}
 }

@@ -66,6 +66,12 @@ function decodeJwtPayload(token: string): JwtPayload | null {
   }
 }
 
+/** Milliseconds since the epoch when the session token expires; null if unknown. */
+export function sessionExpiresAt(token = getToken()): number | null {
+  const payload = decodeJwtPayload(token);
+  return typeof payload?.exp === "number" ? payload.exp * 1000 : null;
+}
+
 export function isSessionValid(): boolean {
   const token = getToken();
   if (!token) return false;

@@ -26,32 +26,3 @@ func TestCheckFIXTextRejectsFramingCharacters(t *testing.T) {
 		t.Fatalf("maxLen 0 disables the limit: %v", err)
 	}
 }
-
-func TestCheckPositionMaintainTextChecksBlockKeysAndItems(t *testing.T) {
-	ok := PositionMaintainRequest{Firm: "2040", ClientCode: "kalys", Action: "2", TransType: "3",
-		Blocks: []PositionBlock{{PosType: "ML", UpdateAction: "1", Keys: map[string]string{"CurrCode": "KGS"}, Items: map[string]string{"Limit": "10"}}}}
-	if err := CheckPositionMaintainText(ok); err != nil {
-		t.Fatal(err)
-	}
-	bad := ok
-	bad.Blocks = []PositionBlock{{PosType: "ML", Keys: map[string]string{"Tag": "EQTV\x015018=X"}}}
-	if err := CheckPositionMaintainText(bad); err == nil {
-		t.Fatal("SOH in a position key value must be rejected")
-	}
-	bad = ok
-	bad.ClientCode = "kalys\x011=OTHER"
-	if err := CheckPositionMaintainText(bad); err == nil {
-		t.Fatal("SOH in client_code must be rejected")
-	}
-}
-
-func TestCheckMarketDataQueryTextChecksInstruments(t *testing.T) {
-	q := MarketDataQuery{Board: "TQBR", Instruments: []SecurityRef{{Symbol: "SBER", Board: "TQBR"}}}
-	if err := CheckMarketDataQueryText(q); err != nil {
-		t.Fatal(err)
-	}
-	q.Instruments[0].Symbol = "SBER\x01100=X"
-	if err := CheckMarketDataQueryText(q); err == nil {
-		t.Fatal("SOH in instrument symbol must be rejected")
-	}
-}

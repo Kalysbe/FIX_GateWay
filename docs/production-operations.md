@@ -16,7 +16,7 @@
 
 | Каталог | Файлы / требования |
 |---|---|
-| `GATEWAY_SECRETS_DIR` | `database-url`, `quik-export-database-url`, `jwt-secret`, `api-token-pepper`, `admin-password`; по одному значению в файле, без внутреннего перевода строки. `quik-export-database-url` — PostgreSQL URL источника текущих заявок `quik_export2` под ролью только с `SELECT` на `public."Orders"`; без него запуск завершается ошибкой. JWT/pepper ≥32 байт; случайные независимые значения. Пароль 12–72 байта. |
+| `GATEWAY_SECRETS_DIR` | `database-url`, `quik-export-database-url`, `jwt-secret`, `api-token-pepper`, `admin-password`; по одному значению в файле, без внутреннего перевода строки. `quik-export-database-url` — PostgreSQL URL источника текущих заявок `quik_export2` под ролью только с `SELECT` на `public."Orders"`, `public."Params"`, `public."Trdaccs"` и `public."Firms"` (PostgreSQL QUIK на `172.23.10.84`); без него запуск завершается ошибкой. JWT/pepper ≥32 байт; случайные независимые значения. Пароль 12–72 байта. |
 | `GATEWAY_PKI_DIR` | `database-ca.crt`, `server.crt`, `server.key`, `ca.crt`. gRPC server SAN совпадает с `GRPC_SERVER_NAME`; `ca.crt` проверяет сервер во внутреннем bridge. При включённом mTLS также нужны `bridge.crt` / `bridge.key` с clientAuth. |
 | `EDGE_TLS_DIR` | `tls.crt`, `tls.key` для публичного HTTPS, включая нужную цепочку. |
 | `FIX_CONFIG_DIR` | `transport.json`, venue dictionary, client certificate/key, venue CA, реальное свидетельство UAT. Начать с `deploy/production/fix-transport.example.json`; ключи объекта — реальные ID адаптеров. |
@@ -30,7 +30,7 @@ Gateway и backup работают как UID/GID `10001:10001`, frontend Nginx 
 
 Брокеры используют VPN + TLS + API-токен для REST и gRPC. По умолчанию `HMAC_REQUIRED=false`, `GRPC_MTLS_REQUIRED=false`. Доступ через VPN ограничивается интерфейсами хоста и firewall; приложение не проверяет наличие туннеля. mTLS и HMAC можно включить отдельно.
 
-`FIX_CREDENTIAL_ENV_FILE` — операторский env-файл с именами credentials, например `ARQA_USERNAME_FILE=/run/fix/username` и `ARQA_PASSWORD_FILE=/run/fix/password`. `UsernameEnv`/`PasswordEnv` конкретного адаптера должны ссылаться на `ARQA_USERNAME`/`ARQA_PASSWORD`. Содержимое credentials не помещается в env-файл. При необходимости отдельный QUIK API указывается явно через `QUIK_API_BASE_URL`; другие проекты не должны обнаруживаться автоматически.
+`FIX_CREDENTIAL_ENV_FILE` — операторский env-файл с именами credentials, например `ARQA_USERNAME_FILE=/run/fix/username` и `ARQA_PASSWORD_FILE=/run/fix/password`. `UsernameEnv`/`PasswordEnv` конкретного адаптера должны ссылаться на `ARQA_USERNAME`/`ARQA_PASSWORD`. Содержимое credentials не помещается в env-файл. Данные QUIK (заявки, текущие торги, счета, сделки) читаются только из БД QUIK через `QUIK_EXPORT_DATABASE_URL`; QUIK Module API не используется. Другие проекты не должны обнаруживаться автоматически.
 
 ## Production env и первый запуск
 
@@ -55,12 +55,11 @@ GRPC_PORT=8443
 HMAC_REQUIRED=false
 GRPC_MTLS_REQUIRED=false
 QUIK_FIX_HOST=172.23.10.84
-QUIK_API_BASE_URL=http://172.23.10.84:5000
 ```
 
-Тестовый QUIK расположен на `192.168.0.89`, production QUIK — на `172.23.10.84`. Production Compose задаёт `ADAPTER_HOST_OVERRIDE` из `QUIK_FIX_HOST`, поэтому тестовый host из исторических миграций не используется для FIX-соединений. Порты и CompID берутся из записей адаптеров; подтвердить их по production-контракту, а также TLS identity в `transport.json`. На тестовом стенде используются FIX `15101`/`15102` и QUIK API `5000`; доступность этих портов в production не проверялась.
+QUIK расположен на `172.23.10.84` (`192.168.0.89` больше не используется). Production Compose задаёт `ADAPTER_HOST_OVERRIDE` из `QUIK_FIX_HOST`, поэтому тестовый host из исторических миграций не используется для FIX-соединений. Порты и CompID берутся из записей адаптеров; подтвердить их по production-контракту, а также TLS identity в `transport.json`. БД QUIK — `172.23.10.84:5432/quik_export`; чтение `Trades` с сервера `172.23.10.96` проверено 28.10.2026.
 
-После миграций и до запуска production gateway применить `deploy/production/quik-endpoint.sql` **только к production БД FIX_GateWay**. Он задаёт production host, выключает simulator-адаптеры, отключает ResetOnLogon и сохраняет production origin QUIK API. Это необходимо и для БД, перенесённой с тестового стенда: сохранённый `gateway_settings.quik_api_base_url` имеет приоритет над `QUIK_API_BASE_URL`. Если production API использует другой порт/HTTPS origin, изменить этот origin в SQL и env согласованно до применения. Скрипт не меняет порты, CompID и credentials и не заменяет подготовку PKI/UAT.
+После миграций и до запуска production gateway применить `deploy/production/quik-endpoint.sql` **только к production БД FIX_GateWay**. Он задаёт production host, выключает simulator-адаптеры и отключает ResetOnLogon. Это необходимо и для БД, перенесённой с тестового стенда. Скрипт не меняет порты, CompID и credentials и не заменяет подготовку PKI/UAT.
 
 Заменить примеры реальными значениями. Для удалённых брокеров задать `HTTPS_BIND_IP` и `GRPC_BIND_IP` адресом интерфейса хоста, доступным через VPN; loopback из примера допускает только локальные подключения. Firewall разрешает эти порты только VPN-адресам брокеров. Проверить отсутствие конфликта `GATEWAY_SUBNET` (по умолчанию `10.89.0.0/24`); `EDGE_IPV4` должен находиться в этой сети. Gateway доверяет forwarded headers только точному IP edge. Edge сам завершает TLS и перезаписывает X-Forwarded-*; публичные `/health`, `/ready`, `/metrics`, Swagger/OpenAPI закрыты.
 
@@ -83,18 +82,33 @@ CLI работает только для SUPER_ADMIN, обновляет passwor
 
 ## Входящий FIX журнал и остановка торговли
 
-Входящие ER сначала записываются в `/app/fix-sessions/inbox` (fsync + atomic rename); только затем завершается callback FIX. Применение к БД повторяется и receipt коммитится вместе с order/trade. Дубликат после crash между commit и удалением journal не создаёт вторую сделку. ExecID учитывается в пределах логической заявки и venue trade date; при отсутствии даты используется original FIX time, затем nullable legacy identity. Время обработки gateway не подменяет дату исполнения.
+Входящие ER сначала записываются в `/app/fix-sessions/inbox` (fsync + atomic rename); только затем завершается callback FIX. Применение к БД повторяется и receipt коммитится вместе с заявкой. Дубликат после crash между commit и удалением journal не применяется повторно. Отчёт по заявке, которой уже нет в `orders`, не требует действий: сделки и итог заявки читаются из БД QUIK.
 
 При отказе БД FIFO-head сохраняется; новые торговые операции/outbox блокируются при ошибке или задержке. `/health` может быть успешным, а `/ready` — 503. При невозможности устойчивой записи gateway немедленно завершает процесс до подтверждения callback: требуется сохранённая FIX sequence и venue replay. Проверка этого replay на реальной площадке входит в UAT.
 
 Ограничения inbox: 1 GiB, 100000 записей, 1 MiB на запись. Заполнение, checksum corruption, неверные файлы и второй владелец завершают/блокируют работу безопасно. Перезапуск не лечит повреждённый журнал. Alertmanager получает критический сигнал. Сначала устранить БД/диск, затем дождаться опустошения очереди и проверить заявки/сделки/лимиты.
 
-Trade corrections/busts/replaces и протокольные rejects, требующие venue semantics, сохраняются как блокирующие события. Не применять их как обычные fills, не удалять journal и не выполнять blind resend. Порядок действий оператора:
+Trade corrections/busts/replaces и протокольные rejects, требующие venue semantics, сохраняются как блокирующие события. Не применять их как обычные fills, не удалять journal вручную и не выполнять blind resend.
 
-1. Остановить новую торговлю; сохранить DB + FIX volume, исходное событие и защищённые логи. Записать ID адаптера, заказа, ExecID/date/ref sequence.
-2. Получить подтверждённую историю от ARQA и сверить quantities/prices/status/sequence. Для legacy ExecID без даты также проверить неоднозначные повторы.
-3. Подготовить согласованную исправляющую миграцию/обработчик с audit trail и тестом на полученном контракте. Протестировать копию состояния; автоматического «пропустить событие» endpoint нет.
-4. После утверждения площадкой/владельцем торговли применить исправление, проверить FIFO, readiness и учёт. Никогда не включать `ResetOnLogon` для обхода инцидента.
+Session Reject (35=3) без RefMsgType (372) сопоставляется по RefSeqNum (45) с журналом последних 8192 исходящих сообщений адаптера. Отклонение heartbeat, test request и других неторговых сообщений пишется в лог и не останавливает торговлю. Отклонение D/F/G, а также ссылка на неизвестное сообщение (например, отправленное до перезапуска) по-прежнему блокируют inbox.
+
+### Карантин блокирующего отчёта
+
+Страница админки «Входящие FIX» (`/execution-inbox`, API `GET /api/v1/admin/execution-inbox`) показывает состояние очереди, блокирующий отчёт, текст ошибки, число попыток и исходный FIX. Если ошибка не временная (не отказ БД или диска), OPERATOR, ADMIN или SUPER_ADMIN может отложить отчёт с обязательной причиной (`POST /api/v1/admin/execution-inbox/{id}/quarantine`):
+
+- отчёт **не применяется** к заявкам, сделкам и лимитам и не удаляется: файл переносится в `inbox/quarantine/`, копия отчёта и ошибка сохраняются в `execution_inbox_quarantine` вместе с локальной заявкой (если её удалось найти по ClOrdID/OrigClOrdID/OrderID);
+- случай фиксируется до переноса файла; после сбоя между этими шагами отчёт с открытым случаем тоже переносится, а не применяется;
+- карантин возможен только для текущего блокирующего отчёта (иначе 409); действие пишется в журнал аудита — дневной файл `LOG_DIR/<дата>.log` (`EXECUTION_INBOX_QUARANTINE`);
+- следующие отчёты, в том числе по той же заявке, применяются в обычном порядке. Учитывайте это при сверке: состояние заявки после карантина может не отражать отложенный отчёт.
+
+Порядок действий оператора:
+
+1. Сохранить DB + FIX volume и защищённые логи. Записать ID адаптера, заказа, ExecID/date/ref sequence.
+2. Убедиться, что ошибка не временная. Отложить отчёт в карантин с причиной; торговля возобновляется после обработки очереди.
+3. Получить подтверждённую историю от ARQA/QUIK и сверить quantities/prices/status/sequence. Для legacy ExecID без даты также проверить неоднозначные повторы.
+4. Исправления заявок и сделок выполнять согласованным обработчиком/миграцией с audit trail. Закрыть случай с итогом сверки (`POST /api/v1/admin/execution-inbox/cases/{id}/resolve`, `EXECUTION_INBOX_CASE_RESOLVE`). Закрытие не применяет отчёт повторно. Никогда не включать `ResetOnLogon` для обхода инцидента.
+
+Повреждённый (нечитаемый) файл, обнаруженный во время работы, тоже можно отложить. Повреждённый журнал при запуске по-прежнему останавливает старт: перезапуск его не лечит.
 
 ## Экспорты и ограничения хранения
 
@@ -123,7 +137,7 @@ node scripts/backup-production.mjs --env-file /srv/fix-gateway/production.env
 1. Остановить и изолировать старый gateway. Не запускать второй на тех же FIX Sender/Target IDs. Сохранить повреждённое состояние для расследования.
 2. Выбрать последний **завершённый полный checkpoint**, проверить оба SHA256; скопировать с независимого узла. Расшифровать в приватном recovery окружении (age identity не передавать приложению).
 3. На отдельной БД применить `pg_restore --exit-on-error --no-owner`, восстановить соответствующий FIX tar в новый приватный volume с UID 10001. Не смешивать БД и session store из разных checkpoints.
-4. Проверить schema/version, orders/trades/outbox/receipts, inbox checksum и FIX sequences. При остановленном gateway согласовать replay и сверку событий после checkpoint с площадкой. Не менять sequences/выполнять reset самостоятельно.
+4. Проверить schema/version, orders/outbox/receipts, inbox checksum и FIX sequences. При остановленном gateway согласовать replay и сверку событий после checkpoint с площадкой. Не менять sequences/выполнять reset самостоятельно.
 5. Обновить операторские PKI/secrets/URL при необходимости, запустить один gateway, проверить readiness, обработку inbox, TLS и Bearer-доступ через VPN, настоящий alert channel. Сверить позиции, исполнения, отмены и лимиты перед разрешением новых заявок.
 6. Зафиксировать реально измеренные RPO/RTO. Если восстановлена только DB sidecar-копия, восстановление FIX state и replay требуют отдельного плана; такую копию не объявлять автоматически полноценным recovery.
 
@@ -133,4 +147,4 @@ node scripts/backup-production.mjs --env-file /srv/fix-gateway/production.env
 
 Перед обновлением сделать полный checkpoint, проверить UAT и релизные тесты, остановить старый gateway; сохранить image digests и compose/env без секретных значений в release record. Запустить новую версию с тем же согласованным volume.
 
-Миграция 26 снимает глобальную уникальность ExecID. Down на заполненной БД с допустимыми повторениями ExecID **намеренно откажется** восстанавливать старый constraint. Не удалять сделки для отката. Откат с потерей новых данных допустим только по согласованному recovery плану: восстановить совместимый DB + FIX checkpoint, сверить поздние события с площадкой. Успешный `up → down → up` на пустой тестовой БД не доказывает безопасный destructive rollback production.
+Миграция 40 удаляет `trades`, `trade_sides`, `trade_reports`, `trade_side_reports`, `trade_sync_runs`, `executions`, `instruments`, `quik_firms` и закрытые заявки (`docs/orders.md`). Её down восстанавливает только схему, поэтому образ версии старше миграции 40 после неё работает с пустыми таблицами; данные сделок и заявок при этом есть в БД QUIK. Откат с потерей новых данных допустим только по согласованному recovery плану: восстановить совместимый DB + FIX checkpoint, сверить поздние события с площадкой. Успешный `up → down → up` на пустой тестовой БД не доказывает безопасный destructive rollback production.

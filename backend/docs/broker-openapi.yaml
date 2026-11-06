@@ -5,19 +5,10 @@ info:
   description: |
     REST API для брокеров Кыргызской Фондовой Биржи.
 
-    Авторизация: `Authorization: Bearer <API-токен>`
-    Токен выдаётся оператором. `broker_id` определяется по токену автоматически.
-    Подключение: VPN + TLS. Клиентские сертификаты и HMAC по умолчанию не требуются.
+    Авторизация: `Authorization: Bearer <API-токен>`. Токен выдаёт оператор биржи.
 
-    Текущие заявки — исходные строки таблицы QUIK `Orders` вашей фирмы (см. `QuikOrderRow`).
-
-    Брокерские события gRPC имеют REST-источники: `order.updated` → GET `/api/v1/orders`,
-    `trade.created` → GET `/api/v1/trades`, `positions.updated` → GET `/api/v1/positions`,
-    `marketdata.tick` → GET `/api/v1/market-data`. REST возвращает текущие снимки,
-    gRPC передаёт обновления через `fixgateway.realtime.v1.RealtimeService/Stream`.
-    REST не воспроизводит последовательность пропущенных событий.
-
-    Единое руководство по REST и gRPC: `docs/broker-api-guide.md` в репозитории.
+    Формат ответа: `{"success", "code", "message", "error_code", "data"}`; у списков — ещё `has_more` и `next_offset`.
+    Коды ошибок — `GET /api/v1/errors`.
   contact:
     name: KSE Gateway Support
 servers:
@@ -25,228 +16,358 @@ servers:
     description: Local development
 tags:
   - name: Проверка связи
-    description: Health и readiness
-  - name: Фирма
-    description: Код фирмы текущего токена
+  - name: Токен
   - name: Справочники
-    description: Инструменты, стакан и счета
   - name: Заявки
-    description: Создание, просмотр и снятие заявок
   - name: Сделки
-    description: Список сделок (fills)
   - name: Позиции
-    description: Снимок позиций из QUIK
   - name: Рыночные данные
-    description: Текущие торги, статистика и торговый статус инструментов
 paths:
   /health:
     get:
       tags: [Проверка связи]
       summary: Liveness
-      description: Возвращает 200 если процесс жив.
       responses:
         "200":
           description: OK
-  /ready:
+  /api/v1/token:
     get:
-      tags: [Проверка связи]
-      summary: Readiness
-      description: Возвращает 200 если есть хотя бы один рабочий FIX-адаптер.
-      responses:
-        "200":
-          description: Ready
-        "503":
-          description: Not ready
-  /api/v1/firm:
-    get:
-      tags: [Фирма]
-      summary: Код фирмы текущего токена
+      tags: [Токен]
+      summary: Информация о токене
       security:
         - bearerAuth: []
       description: |
-        Требует `orders:read`.
-        Возвращает код фирмы, привязанный к токену (`quik_firm` → FIX tag 5018),
-        и название фирмы из локального кэша (если есть).
+        Доступен любому действующему токену. `token` — параметры токена, `broker` — брокер,
+        `firm` — строка QUIK `Firms` фирмы токена (`null`, если в `Firms` её нет).
       responses:
         "200":
-          description: OK
+          description: Токен, брокер и фирма
           content:
             application/json:
               schema:
                 type: object
                 properties:
-                  quik_firm:
-                    type: string
-                    description: Код фирмы (FIX 5018)
-                    example: "MC0031400000"
-                  firm_name:
-                    type: string
-                    description: Название фирмы
-                    example: "ТОО Example"
+                  token:
+                    type: object
+                    properties:
+                      id: {type: string, format: uuid}
+                      name: {type: string}
+                      description: {type: string}
+                      token_prefix: {type: string}
+                      status: {type: string, enum: [ACTIVE]}
+                      permissions: {type: array, items: {type: string}}
+                      firm_id: {type: string, description: "Фирма заявок (FIX 5018)"}
+                      expires_at: {type: string, format: date-time, nullable: true}
+                      created_at: {type: string, format: date-time}
+                      last_used_at: {type: string, format: date-time, nullable: true}
+                  broker:
+                    type: object
+                    properties:
+                      code: {type: string}
+                      name: {type: string}
+                      status: {type: string, enum: [ACTIVE]}
+                  firm:
+                    allOf: [{$ref: "#/components/schemas/QuikFirmRow"}]
+                    nullable: true
+              example:
+                token:
+                  id: 3f0c2a5e-6b1d-4c8e-9a7f-2d4b6e8f1a3c
+                  name: trader
+                  description: ""
+                  token_prefix: Xk3pQ9aL
+                  status: ACTIVE
+                  permissions: [orders:read, orders:create, orders:cancel]
+                  firm_id: "2040"
+                  expires_at: null
+                  created_at: "2026-10-20T09:15:00Z"
+                  last_used_at: "2026-11-03T04:02:11Z"
+                broker: {code: SENTI, name: Сенти, status: ACTIVE}
+                firm: {Exchange: KSE, FirmId: "2040", FirmName: Сенти, Status: null, StatusFlag: 1}
+        "401":
+          description: Unauthorized
+        "503":
+          description: QUIK недоступен
+  /api/v1/errors:
+    get:
+      tags: [Справочники]
+      summary: Коды ошибок
+      security:
+        - bearerAuth: []
+      description: |
+        `codes` — значения поля `code`. `error_codes` — значения поля `error_code` (коды отказа QUIK):
+        `operation` = `order` — отказ заявки, `cancel` — отказ снятия.
+      responses:
+        "200":
+          description: Справочник кодов
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  codes:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        code: {type: string}
+                        http_status: {type: integer}
+                        description: {type: string}
+                  error_codes:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        error_code: {type: integer}
+                        operation: {type: string, enum: [order, cancel]}
+                        source: {type: string}
+                        description: {type: string}
+              example:
+                codes:
+                  - {code: ORDER_REJECTED, http_status: 422, description: "QUIK отклонил заявку; причина — message и error_code"}
+                error_codes:
+                  - {error_code: 8637225, operation: order, source: "Дилерская библиотека QUIK (проверка лимитов и прав)", description: "Работа по данному торговому счёту запрещена"}
         "401":
           description: Unauthorized
   /api/v1/instruments:
     get:
       tags: [Справочники]
-      summary: Список активных инструментов
+      summary: Инструменты
       security:
         - bearerAuth: []
-      description: |
-        Требует `orders:read`. Используйте `quik_symbol` + `board` при создании заявки.
+      description: Требует `orders:read`. Строки QUIK `Securities`.
+      parameters:
+        - {in: query, name: limit, schema: {type: integer, minimum: 1, maximum: 1000, default: 200}}
+        - {in: query, name: offset, schema: {type: integer, minimum: 0, maximum: 10000000, default: 0}}
       responses:
         "200":
-          description: OK
+          description: Строки Securities
+          headers:
+            X-Has-More: {schema: {type: boolean}}
+            X-Next-Offset: {schema: {type: integer}}
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  instruments:
-                    type: array
-                    items:
-                      $ref: "#/components/schemas/Instrument"
+                type: array
+                items:
+                  $ref: "#/components/schemas/Instrument"
         "401":
           description: Unauthorized
+        "503":
+          description: QUIK недоступен
   /api/v1/market-data:
     get:
       tags: [Рыночные данные]
-      summary: Полный снимок текущих торгов
-      x-grpc-event: marketdata.tick
+      summary: Текущие торги
       security:
         - bearerAuth: []
-      description: |
-        Требует `orders:read`. REST-источник события gRPC `marketdata.tick`.
-        Возвращает все подписанные инструменты: цены, стакан, OHLC, средневзвешенную
-        цену, объём, оборот, торговый статус и время обновления.
-        Десятичные значения передаются строками. ID адаптера, ID FIX-запроса,
-        сырые FIX-поля и состояние внутренней подписки не выдаются.
-
-        Без фильтров возвращается весь рынок. Необязательные `symbol` (тикер или
-        SecurityID) и `board` ограничивают только ответ, не изменяя FIX-подписку.
-        Успешный GET всегда возвращает полный снимок выбранной выборки в `quotes`.
-        Поля `source`, `live`, `replace` и `subscription` в REST-ответе отсутствуют.
-        При недоступности потока возвращается HTTP 503 с `Retry-After`;
-        пустая успешная выборка возвращается как `quotes: []`.
-        Время получения конкретной котировки передаётся в `updated_at`;
-        подключение потока само по себе не гарантирует её свежесть или полноту.
+      description: Требует `orders:read`. Инструменты за сегодня; поля — в схеме `MarketDataRow`.
       parameters:
-        - in: query
-          name: symbol
-          schema: {type: string}
-          description: Тикер или SecurityID
-          example: GBA02280810
         - in: query
           name: board
           schema: {type: string}
-          description: Код класса
-          example: LIST_GBA
+          description: ClassCode
+        - in: query
+          name: symbol
+          schema: {type: string}
+          description: SecCode
+        - {in: query, name: limit, schema: {type: integer, minimum: 1, maximum: 5000, default: 1000}}
+        - {in: query, name: offset, schema: {type: integer, minimum: 0, maximum: 10000000, default: 0}}
       responses:
         "200":
-          description: Текущий снимок; quotes пуст, если доступный поток не содержит совпадений с фильтром
+          description: Инструменты текущих торгов
+          headers:
+            X-Has-More: {schema: {type: boolean}}
+            X-Next-Offset: {schema: {type: integer}}
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/MarketDataResponse"
+                type: array
+                items:
+                  $ref: "#/components/schemas/MarketDataRow"
               example:
-                quotes:
-                  - symbol: GBA02280810
-                    security_id: GBA02280810
-                    board: LIST_GBA
-                    currency: KGS
-                    last: "100.0"
-                    open: "99.5"
-                    high: "101.0"
-                    low: "99.0"
-                    volume: "1500"
-                    value: "150000.0"
-                    trading_status: "17"
-                    updated_at: "2026-10-21T09:00:00Z"
-                    bids: [{price: "99.5", size: "10"}]
-                    offers: [{price: "100.5", size: "12"}]
+                - {ClassCode: LIST_GBA, SecCode: GBA02270915, CouponValue: 2.5, status: торгуется, FaceUnit: KGS, SecShortName: "ГКО-2 летние (GBA02270915)", SecFullName: "ГКО-2 летние (GBA02270915)", ClassName: "Листинговые:облигации", lotsize: 1, tradingstatus: открыта, pricemin: 86, pricemax: 100, realminstep: null, bid: 100, biddepth: 16, offer: null, offerdepth: null, last: 95, qty: 15, time: "1900-01-01T16:40:15", open: null, high: 100, low: 95, prevprice: 95, waprice: 95.4, numtrades: 3, voltoday: 125, valtoday: 11925, accruedint: null, yield: 16.92, nextcoupon: "2027-01-31T00:00:00", couponperiod: 184}
+        "400":
+          description: Неверные limit/offset
         "401":
           description: Unauthorized
         "403":
-          description: Нет права orders:read или IP не в whitelist
+          description: Forbidden
         "429":
           description: Rate limited
         "503":
-          description: Временно недоступен поток рыночных данных, авторизация или исчерпана ёмкость обработки
-  /api/v1/orderbook:
+          description: QUIK недоступен
+  /api/v1/market-data/{board}/{symbol}:
     get:
-      tags: [Справочники]
-      summary: Стакан активных заявок
+      tags: [Рыночные данные]
+      summary: Инструмент текущих торгов
       security:
         - bearerAuth: []
-      description: |
-        Требует `orders:read`.
-
-        Живой стакан рынка по подписанным инструментам (FIX Market Data, полный стакан).
-        `bids` — спрос (лучшая цена первой), `offers` — предложение.
-        Это не заявки брокера, а видимые уровни для построения стакана торгов.
-
-        Фильтры `symbol` и `board` необязательны. Без них вернутся все инструменты.
+      description: Требует `orders:read`.
       parameters:
-        - in: query
-          name: symbol
-          schema:
-            type: string
-          description: Тикер или SecurityID
-          example: GBA02280810
-        - in: query
-          name: board
-          schema:
-            type: string
-          description: Код класса
-          example: LIST_GBA
+        - {in: path, name: board, required: true, schema: {type: string}, description: ClassCode}
+        - {in: path, name: symbol, required: true, schema: {type: string}, description: SecCode}
       responses:
         "200":
-          description: OK
+          description: Инструмент
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/OrderBookResponse"
-              example:
-                source: live
-                live: true
-                books:
-                  - symbol: GBA02280810
-                    security_id: GBA02280810
-                    board: LIST_GBA
-                    currency: KGS
-                    bid: "99.5"
-                    bid_size: "10"
-                    offer: "100.5"
-                    offer_size: "12"
-                    bids:
-                      - price: "99.5"
-                        size: "10"
-                    offers:
-                      - price: "100.5"
-                        size: "12"
+                $ref: "#/components/schemas/MarketDataRow"
         "401":
           description: Unauthorized
+        "403":
+          description: Forbidden
+        "404":
+          description: Инструмент не найден
+        "503":
+          description: QUIK недоступен
+  /api/v1/market-data/trades:
+    get:
+      tags: [Рыночные данные]
+      summary: Сделки рынка для графика цен
+      security:
+        - bearerAuth: []
+      description: |
+        Требует `orders:read`. Исполненные сделки КФБ всех участников из QUIK `Trades`, по одной строке на сделку,
+        в хронологическом порядке (`TradeDateTime`, затем `TradeNum`). Участники не раскрываются.
+
+        - `TradeNum` + `ClassCode` — идентификатор сделки;
+        - `TradeDateTime` и `CanceledDateTime` — время КФБ с часовым поясом (+06:00);
+        - `Price` — цена за единицу без комиссий, `SettleCurrency` — валюта расчётов;
+        - `Kind` — вид сделки (`Обычная`, `Адресная сделка первой части РЕПО` и др.);
+        - `CanceledDateTime` — `null`, если сделка не отменена.
+
+        Обновление: повторяйте запрос с `from` = `TradeDateTime` последней полученной сделки и отбрасывайте
+        уже полученные `TradeNum` + `ClassCode`. История — с 01.07.2026.
+      parameters:
+        - {in: query, name: board, schema: {type: string}, description: ClassCode}
+        - {in: query, name: symbol, schema: {type: string}, description: SecCode}
+        - {in: query, name: from, schema: {type: string}, description: "Начало периода включительно: ГГГГ-ММ-ДД (день КФБ) или RFC 3339"}
+        - {in: query, name: to, schema: {type: string}, description: "Конец периода включительно: ГГГГ-ММ-ДД (весь день КФБ) или RFC 3339"}
+        - {in: query, name: limit, schema: {type: integer, minimum: 1, maximum: 1000, default: 200}}
+        - {in: query, name: offset, schema: {type: integer, minimum: 0, maximum: 10000000, default: 0}}
+      responses:
+        "200":
+          description: Сделки
+          headers:
+            X-Has-More: {schema: {type: boolean}}
+            X-Next-Offset: {schema: {type: integer}}
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/MarketTrade"
+        "400":
+          description: Неверный from, to, limit или offset; from позже to
+        "401":
+          description: Unauthorized
+        "403":
+          description: Forbidden
+        "503":
+          description: QUIK недоступен
+  /api/v1/quotes:
+    get:
+      tags: [Рыночные данные]
+      summary: Котировки инструмента
+      security:
+        - bearerAuth: []
+      description: Требует `orders:read`. Активные заявки рынка за сегодня, от новых к старым.
+      parameters:
+        - {in: query, name: board, required: true, schema: {type: string}, description: ClassCode, example: LIST_GBA}
+        - {in: query, name: symbol, required: true, schema: {type: string}, description: SecCode, example: GBA02270915}
+        - {in: query, name: limit, schema: {type: integer, minimum: 1, maximum: 1000, default: 200}}
+        - {in: query, name: offset, schema: {type: integer, minimum: 0, maximum: 10000000, default: 0}}
+      responses:
+        "200":
+          description: Котировки
+          headers:
+            X-Has-More: {schema: {type: boolean}}
+            X-Next-Offset: {schema: {type: integer}}
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  required: [side, price, quantity, volume]
+                  additionalProperties: false
+                  properties:
+                    side: {type: string, enum: [BUY, SELL], nullable: true}
+                    price: {type: number, nullable: true}
+                    quantity: {type: number, nullable: true, description: Остаток}
+                    volume: {type: number, nullable: true, description: price × quantity}
+              example:
+                - {side: BUY, price: 100, quantity: 10, volume: 1000}
+                - {side: SELL, price: 100.5, quantity: 4, volume: 402}
+        "400":
+          description: Не указаны board и symbol, неверный limit или offset
+        "401":
+          description: Unauthorized
+        "403":
+          description: Forbidden
+        "429":
+          description: Rate limited
+        "503":
+          description: QUIK недоступен
+  /api/v1/orderbook:
+    get:
+      tags: [Рыночные данные]
+      summary: Стакан инструмента
+      security:
+        - bearerAuth: []
+      description: >-
+        Требует `orders:read`. Активные заявки рынка за сегодня, сложенные по цене:
+        `bids` — покупка, от высокой цены к низкой, `offers` — продажа, от низкой к высокой.
+        Участники не раскрываются.
+      parameters:
+        - {in: query, name: board, required: true, schema: {type: string}, description: ClassCode, example: LIST_GBA}
+        - {in: query, name: symbol, required: true, schema: {type: string}, description: SecCode, example: GBA02270915}
+      responses:
+        "200":
+          description: Стакан
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrderBook"
+              example:
+                board: LIST_GBA
+                symbol: GBA02270915
+                bids:
+                  - {price: 90.00000000, quantity: 18.00000000, volume: 1620}
+                offers:
+                  - {price: 95.00000000, quantity: 5878.00000000, volume: 558410}
+                  - {price: 96.00000000, quantity: 1.00000000, volume: 96}
+        "400":
+          description: Не указаны board и symbol
+        "401":
+          description: Unauthorized
+        "403":
+          description: Forbidden
+        "429":
+          description: Rate limited
+        "503":
+          description: QUIK недоступен
   /api/v1/accounts:
     get:
       tags: [Справочники]
-      summary: Счета текущего брокера
+      summary: Торговые счета фирмы
       security:
         - bearerAuth: []
-      description: |
-        Требует `orders:read`. В `account_id` заявки передавайте `trading_account`.
+      description: Требует `orders:read`. Строки QUIK `Trdaccs`. `TrdAccId` передаётся в `Account` заявки.
       responses:
         "200":
-          description: OK
+          description: Строки Trdaccs
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  accounts:
-                    type: array
-                    items:
-                      $ref: "#/components/schemas/BrokerAccount"
+                type: array
+                items:
+                  $ref: "#/components/schemas/QuikTradingAccountRow"
         "401":
           description: Unauthorized
+        "503":
+          description: QUIK недоступен
   /api/v1/orders:
     post:
       tags: [Заявки]
@@ -254,15 +375,14 @@ paths:
       security:
         - bearerAuth: []
       description: |
-        Требует `orders:create`. `broker_id` и `quik_firm` берутся из токена.
+        Требует `orders:create`. С `Price` — лимитная, без `Price` — рыночная. Срок — день.
 
-        Поля для QUIK/FIX:
-        - `symbol` → FIX tag 48 SecurityID
-        - `board` → FIX tag 100 ExDestination
-        - `account_id` → FIX tag 1 Account
-        - `client_code` → FIX tag 109 ClientID
+        - `201` — QUIK принял заявку;
+        - `202` `QUIK_ANSWER_PENDING` — QUIK не ответил за 10 с, итог — `GET /api/v1/orders/{id}`;
+        - `422` `ORDER_REJECTED` — QUIK отклонил заявку;
+        - `502` `ORDER_FAILED` — заявка не передана в QUIK.
 
-        Идемпотентность: повтор с тем же `client_order_id` возвращает `200` + существующую заявку.
+        Каждый запрос создаёт новую заявку. Перед повтором после сетевой ошибки проверьте `GET /api/v1/orders`.
       requestBody:
         required: true
         content:
@@ -270,39 +390,68 @@ paths:
             schema:
               $ref: "#/components/schemas/CreateOrderRequest"
             example:
-              account_id: "1-3101-006"
-              client_code: "006"
-              client_order_id: "ORD-20260818-0001"
-              symbol: "KG0105166315"
-              board: "LISTEDSTOCKK"
-              side: "BUY"
-              order_type: "LIMIT"
-              time_in_force: "DAY"
-              quantity: "1"
-              price: "400"
+              ClassCode: "LIST_GBA"
+              SecCode: "GBA02270915"
+              Operation: "Купля"
+              Price: 99.5
+              Qty: 1
+              Account: "1-3101-006"
+              ClientCode: "006"
       responses:
         "201":
-          description: Заявка создана
+          description: QUIK принял заявку
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/CreateOrderResponse"
-        "200":
-          description: Идемпотентный повтор — заявка уже существует
+                $ref: "#/components/schemas/Order"
+              example:
+                OrderNum: 26102912345
+                State: "Активна"
+                ClassCode: "LIST_GBA"
+                SecCode: "GBA02270915"
+                Operation: "Купля"
+                Price: 99.5
+                Qty: 1
+                Balance: 1
+                Account: "1-3101-006"
+                ClientCode: "006"
+                FirmId: "SENTI2004"
+                RejectReason: null
+                id: "276d043c-6716-4ebd-a7b7-15904e760d40"
+        "202":
+          description: QUIK_ANSWER_PENDING
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/CreateOrderResponse"
+                $ref: "#/components/schemas/Order"
+        "502":
+          description: ORDER_FAILED
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Order"
         "422":
-          description: Торговая пауза или превышение quantity/open-order лимита. Отказ не создаёт заявку; идемпотентный повтор принятой заявки сохраняет доступность.
+          description: ORDER_REJECTED, TRADING_PAUSED, MAX_ORDER_QUANTITY, MAX_OPEN_ORDERS
           content:
             application/json:
               schema:
-                type: object
-                required: [error, code]
-                properties:
-                  error: {type: string}
-                  code: {type: string, enum: [TRADING_PAUSED, MAX_ORDER_QUANTITY, MAX_OPEN_ORDERS]}
+                $ref: "#/components/schemas/Order"
+              example:
+                code: "ORDER_REJECTED"
+                error: "rejected by QUIK"
+                OrderNum: null
+                State: "Отклонена"
+                ClassCode: "LIST_GBA"
+                SecCode: "GBA02270915"
+                Operation: "Купля"
+                Price: 99.5
+                Qty: 1
+                Balance: 1
+                Account: "1-3101-006"
+                ClientCode: "006"
+                FirmId: "SENTI2004"
+                RejectReason: "Недостаточно средств"
+                id: "276d043c-6716-4ebd-a7b7-15904e760d40"
         "400":
           description: Ошибка валидации
           content:
@@ -312,31 +461,29 @@ paths:
         "401":
           description: Unauthorized
         "403":
-          description: Forbidden (нет права или IP не в whitelist)
+          description: Forbidden
         "429":
           description: Rate limited
     get:
       tags: [Заявки]
-      summary: Список заявок брокера
-      x-grpc-event: order.updated
+      summary: Заявки фирмы
       security:
         - bearerAuth: []
       description: |
-        Требует `orders:read`. Текущие заявки из таблицы QUIK `Orders` только вашей фирмы
-        (`quik_firm` токена, при пустом значении — код брокера). Ответ — JSON-массив исходных
-        строк БД: имена колонок, числа, строки и `null` без изменений, без обёртки и
-        вычисляемых полей. Числа могут иметь 19 знаков (`OrderNum`) — разбирайте их без потери точности.
-        Страницы: заголовки `X-Has-More` и `X-Next-Offset`. Если таблица меняется между запросами,
-        перечитайте список с первой страницы. REST-источник события gRPC `order.updated`.
+        Требует `orders:read`. Строки QUIK `Orders` за все даты, по убыванию `TradeDate`, затем `OrderNum`.
+        `OrderNum` может иметь 19 знаков. Фильтры применяются до пагинации.
       parameters:
+        - {in: query, name: date, schema: {type: string, format: date}, description: "TradeDate, ГГГГ-ММ-ДД"}
+        - {in: query, name: board, schema: {type: string}, description: ClassCode}
+        - {in: query, name: symbol, schema: {type: string}, description: SecCode}
         - {in: query, name: limit, schema: {type: integer, minimum: 1, maximum: 1000, default: 200}}
         - {in: query, name: offset, schema: {type: integer, minimum: 0, maximum: 10000000, default: 0}}
       responses:
         "200":
-          description: Исходные строки QUIK Orders
+          description: Строки Orders
           headers:
-            X-Has-More: {schema: {type: boolean}, description: Есть ли следующая страница}
-            X-Next-Offset: {schema: {type: integer}, description: offset следующей страницы}
+            X-Has-More: {schema: {type: boolean}}
+            X-Next-Offset: {schema: {type: integer}}
           content:
             application/json:
               schema:
@@ -344,30 +491,29 @@ paths:
                 items:
                   $ref: "#/components/schemas/QuikOrderRow"
         "400":
-          description: Неверный limit или offset
+          description: Неверный date, limit или offset
         "401":
           description: Unauthorized
         "503":
-          description: Источник QUIK Orders недоступен; данные не подменяются
+          description: QUIK недоступен
   /api/v1/orders/active:
     get:
       tags: [Заявки]
-      summary: Активные заявки брокера
+      summary: Активные заявки фирмы за сегодня
       security:
         - bearerAuth: []
-      description: |
-        Требует `orders:read`. То же, что `GET /api/v1/orders`, но только строки QUIK `Orders`
-        с `State` = `Активна`. Фильтр применяется в БД до пагинации; формат строк не меняется.
-        Страницы: заголовки `X-Has-More` и `X-Next-Offset`.
+      description: Требует `orders:read`. Фильтры применяются до пагинации.
       parameters:
+        - {in: query, name: board, schema: {type: string}, description: ClassCode}
+        - {in: query, name: symbol, schema: {type: string}, description: SecCode}
         - {in: query, name: limit, schema: {type: integer, minimum: 1, maximum: 1000, default: 200}}
         - {in: query, name: offset, schema: {type: integer, minimum: 0, maximum: 10000000, default: 0}}
       responses:
         "200":
-          description: Исходные строки QUIK Orders в состоянии «Активна»
+          description: Строки Orders
           headers:
-            X-Has-More: {schema: {type: boolean}, description: Есть ли следующая страница}
-            X-Next-Offset: {schema: {type: integer}, description: offset следующей страницы}
+            X-Has-More: {schema: {type: boolean}}
+            X-Next-Offset: {schema: {type: integer}}
           content:
             application/json:
               schema:
@@ -379,41 +525,36 @@ paths:
         "401":
           description: Unauthorized
         "503":
-          description: Источник QUIK Orders недоступен; данные не подменяются
+          description: QUIK недоступен
   /api/v1/orders/{id}:
     get:
       tags: [Заявки]
-      summary: Детали заявки
+      summary: Заявка
       security:
         - bearerAuth: []
-      description: |
-        Требует `orders:read`. Возвращает одну исходную строку QUIK `Orders` без обёртки,
-        переименования колонок, вычисляемых полей и истории. Тот же формат, что `data_json`
-        события gRPC `order.updated`.
+      description: Требует `orders:read`.
       parameters:
         - in: path
           name: id
           required: true
           schema:
             type: string
-          description: |
-            Ключ `quik-ГГГГММДД-КЛАСС-НОМЕР` (дата торгов, `ClassCode`, `OrderNum`)
-            или UUID заявки из ответа шлюза (`order.id`), если её строка есть в `Orders`.
+          description: "`quik-ГГГГММДД-КЛАСС-НОМЕР` или `id` из ответа на создание (пока заявка открыта)"
       responses:
         "200":
-          description: Исходная строка QUIK Orders
+          description: Строка Orders
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/QuikOrderRow"
         "400":
-          description: Неверный ключ заявки
+          description: Неверный ключ
         "401":
           description: Unauthorized
         "404":
-          description: Строки нет в Orders, она другой фирмы или UUID принадлежит другому брокеру. Отсутствие строки не означает снятие или исполнение.
+          description: Заявка не найдена
         "503":
-          description: Источник QUIK Orders недоступен; данные не подменяются
+          description: QUIK недоступен
   /api/v1/orders/{id}/cancel:
     post:
       tags: [Заявки]
@@ -421,21 +562,33 @@ paths:
       security:
         - bearerAuth: []
       description: |
-        Требует `orders:cancel`. Тело не нужно. UUID шлюза или ключ `quik-ГГГГММДД-КЛАСС-НОМЕР`.
-        Снять можно активную строку QUIK `Orders`, выставленную через шлюз.
-        Ответ `200` подтверждает приём команды, а не результат на бирже: дождитесь
-        изменения `State` строки в `Orders`. Если строка уже снята, возвращается `{"order": <строка>}`.
+        Требует `orders:cancel`. Тело не нужно.
+
+        - `200` — заявка снята;
+        - `202` `QUIK_ANSWER_PENDING` — QUIK не ответил за 10 с, итог — `GET /api/v1/orders/{id}`;
+        - `409` `CANCEL_REJECTED` — QUIK не снял заявку.
       parameters:
         - in: path
           name: id
           required: true
           schema:
             type: string
+          description: "`quik-ГГГГММДД-КЛАСС-НОМЕР` или `id` из ответа на создание"
       responses:
         "200":
-          description: Запрос на снятие принят
+          description: Заявка снята
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Order"
+        "202":
+          description: QUIK_ANSWER_PENDING
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Order"
         "400":
-          description: Неверный ключ или команду нельзя выполнить
+          description: Неверный ключ
           content:
             application/json:
               schema:
@@ -443,343 +596,162 @@ paths:
         "401":
           description: Unauthorized
         "404":
-          description: Строки нет в Orders или она другой фирмы
+          description: Заявка не найдена
         "409":
-          description: Заявка не активна в QUIK или выставлена не через шлюз
+          description: CANCEL_REJECTED, заявка не активна или выставлена не через API
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Order"
         "503":
-          description: Источник QUIK Orders или хранилище шлюза недоступны
+          description: QUIK недоступен
   /api/v1/trades:
     get:
       tags: [Сделки]
-      summary: Список сделок брокера
-      x-grpc-event: trade.created
+      summary: Сделки фирмы
       security:
         - bearerAuth: []
-      description: Требует `trades:read`. Последние 100 сделок своего брокера. Событие gRPC `trade.created` содержит исполнение (id, order_id, exec_id, last_qty, last_px, cum_qty, leaves_qty, adapter_id, created_at). REST дополнительно возвращает реквизиты заявки, инструмента, клиента и фирмы.
+      description: |
+        Требует `trades:read`. Строки QUIK `Trades` за все даты, по убыванию `TradeDate`, затем `TradeNum`.
+        Фильтры применяются до пагинации.
+      parameters:
+        - {in: query, name: date, schema: {type: string, format: date}, description: "TradeDate, ГГГГ-ММ-ДД"}
+        - {in: query, name: board, schema: {type: string}, description: ClassCode}
+        - {in: query, name: symbol, schema: {type: string}, description: SecCode}
+        - {in: query, name: limit, schema: {type: integer, minimum: 1, maximum: 1000, default: 200}}
+        - {in: query, name: offset, schema: {type: integer, minimum: 0, maximum: 10000000, default: 0}}
       responses:
         "200":
-          description: OK
+          description: Строки Trades
+          headers:
+            X-Has-More: {schema: {type: boolean}}
+            X-Next-Offset: {schema: {type: integer}}
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  trades:
-                    type: array
-                    items:
-                      $ref: "#/components/schemas/Trade"
+                type: array
+                items:
+                  $ref: "#/components/schemas/Trade"
+        "400":
+          description: Неверный date, limit или offset
         "401":
           description: Unauthorized
         "403":
-          description: Нет права `trades:read`
-  /api/v1/positions:
+          description: Forbidden
+        "503":
+          description: QUIK недоступен
+  /api/v1/positions/moneylimits:
     get:
       tags: [Позиции]
-      summary: Снимок позиций брокера
-      x-grpc-event: positions.updated
+      summary: Денежные позиции фирмы
       security:
         - bearerAuth: []
       description: |
-        Требует `positions:read`.
-
-        Токен определяет брокера. Выборка ограничена кодом брокера и `quik_firm`
-        его токена, как в событии gRPC `positions.updated`.
-        Массивы `cash` и `instruments` содержат те же поля позиций.
-
-        REST читает текущие позиции из базы шлюза. Шлюз автоматически поддерживает
-        FIX-поток позиций (`35=AN`, `263=1`) и получает снимки для восстановления.
-        PUT отправляет в QUIK `35=AL` и после `35=AM` обновляет снимок.
-        Если снимка ещё нет, списки пустые, в `note` — пояснение.
+        Требует `positions:read`. Строки QUIK `MoneyLimits` вашей фирмы за последнюю `LoadDate`
+        в исходном виде. Событие gRPC `moneylimits.updated` — тот же массив в `event.data_json`.
       responses:
         "200":
-          description: OK
+          description: Строки MoneyLimits
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/PositionsResponse"
-              example:
-                source: fix
-                firm_id: "2040"
-                snapshot:
-                  adapter_id: quik-fix-1
-                  pos_req_id: POS963157-296
-                  clearing_date: "20260817"
-                  status: OK
-                  report_count: 6
-                instruments:
-                  - kind: INSTRUMENT
-                    firm_id: "2040"
-                    client_code: kalys
-                    account_code: "1-3101-2040"
-                    symbol: KG0105166315
-                    pos_type: DL
-                    net_qty: "1000000"
-                cash:
-                  - kind: CASH
-                    firm_id: "2040"
-                    client_code: kalys
-                    symbol: EQTV
-                    pos_type: ML
-                    net_qty: "10000000"
+                type: array
+                items:
+                  $ref: "#/components/schemas/MoneyLimitRow"
         "401":
           description: Unauthorized
         "403":
-          description: Нет права `positions:read`
-    put:
+          description: Forbidden
+        "503":
+          description: QUIK недоступен
+  /api/v1/positions/depolimits:
+    get:
       tags: [Позиции]
-      summary: Установить позиции по деньгам и бумагам
+      summary: Позиции фирмы по бумагам
       security:
         - bearerAuth: []
       description: |
-        Требует `positions:write`.
-
-        Задаёт денежный остаток (ML) и/или количество бумаг (DL) в QUIK:
-        Position Maintenance Request `35=AL` → отчёт `35=AM`, затем снимок `AN`/`AP`.
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/SetPositionsRequest"
-            example:
-              client_code: kalys
-              account_code: "1-3101-2040"
-              cash:
-                - currency: KGS
-                  client_code: kalys
-                  amount: "1500000"
-                  tag: EQTV
-              instruments:
-                - symbol: KG0105166315
-                  client_code: kalys
-                  board: LISTEDSTOCKK
-                  quantity: "100"
+        Требует `positions:read`. Строки QUIK `DepoLimits` вашей фирмы за последнюю `LoadDate`
+        в исходном виде. Событие gRPC `depolimits.updated` — тот же массив в `event.data_json`.
       responses:
         "200":
-          description: OK
+          description: Строки DepoLimits
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/SetPositionsResponse"
-        "400":
-          description: Ошибка валидации
+                type: array
+                items:
+                  $ref: "#/components/schemas/DepoLimitRow"
         "401":
           description: Unauthorized
         "403":
-          description: Нет права `positions:write`
-  /api/v1/positions/cash:
-    put:
-      tags: [Позиции]
-      summary: Установить денежную позицию
-      security:
-        - bearerAuth: []
-      description: Требует `positions:write`.
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/SetCashRequest"
-            example:
-              client_code: kalys
-              currency: KGS
-              amount: "1500000"
-              tag: EQTV
-      responses:
-        "200":
-          description: OK
-        "400":
-          description: Ошибка валидации
-        "403":
-          description: Нет права `positions:write`
-    delete:
-      tags: [Позиции]
-      summary: Удалить денежную позицию в QUIK
-      security:
-        - bearerAuth: []
-      parameters:
-        - in: query
-          name: client_code
-          required: true
-          schema:
-            type: string
-        - in: query
-          name: currency
-          required: true
-          schema:
-            type: string
-        - in: query
-          name: tag
-          schema:
-            type: string
-      responses:
-        "200":
-          description: Снято
-        "404":
-          description: Не найдено
-  /api/v1/positions/instruments:
-    put:
-      tags: [Позиции]
-      summary: Установить позицию по ценным бумагам
-      security:
-        - bearerAuth: []
-      description: Требует `positions:write`.
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/SetInstrumentRequest"
-            example:
-              client_code: kalys
-              symbol: KG0105166315
-              board: LISTEDSTOCKK
-              quantity: "100"
-      responses:
-        "200":
-          description: OK
-        "400":
-          description: Ошибка валидации
-        "403":
-          description: Нет права `positions:write`
-    delete:
-      tags: [Позиции]
-      summary: Удалить позицию по бумагам в QUIK
-      security:
-        - bearerAuth: []
-      parameters:
-        - in: query
-          name: client_code
-          required: true
-          schema:
-            type: string
-        - in: query
-          name: symbol
-          required: true
-          schema:
-            type: string
-        - in: query
-          name: board
-          schema:
-            type: string
-      responses:
-        "200":
-          description: Снято
-        "404":
-          description: Не найдено
+          description: Forbidden
+        "503":
+          description: QUIK недоступен
 components:
   securitySchemes:
     bearerAuth:
       type: http
       scheme: bearer
       bearerFormat: API token
-      description: |
-        API-токен брокера, выданный оператором.
-        Вставьте только токен — Swagger автоматически добавит `Bearer `.
   schemas:
     Error:
       type: object
+      required: [error]
       properties:
         error:
           type: string
-        details:
-          type: object
+      example: {"error": "счёт \"1-3101-006\" не найден у фирмы \"FREEDOM2003\"; список счетов — GET /api/v1/accounts"}
     CreateOrderRequest:
       type: object
-      required: [account_id, client_code, client_order_id, symbol, board, side, order_type, quantity]
+      required: [ClassCode, SecCode, Operation, Qty, Account, ClientCode]
+      additionalProperties: false
       properties:
-        account_id:
+        ClassCode:
+          type: string
+          example: "LIST_GBA"
+        SecCode:
+          type: string
+          example: "GBA02270915"
+        Operation:
+          type: string
+          enum: ["Купля", "Продажа"]
+          example: "Купля"
+        Price:
+          type: number
+          example: 400
+          description: "Без Price — рыночная заявка"
+        Qty:
+          type: number
+          example: 1
+        Account:
           type: string
           example: "1-3101-006"
-          description: "Торговый код счёта → FIX tag 1 Account"
-        client_code:
+          description: "TrdAccId из GET /api/v1/accounts"
+        ClientCode:
           type: string
           example: "006"
-          description: "Код клиента → FIX tag 109 ClientID"
-        client_order_id:
-          type: string
-          example: "ORD-20260818-0001"
-          description: "Ваш уникальный ID заявки (идемпотентность) → FIX tag 11"
-        symbol:
-          type: string
-          example: "KG0105166315"
-          description: "Инструмент (тикер/ISIN) из GET /api/v1/instruments"
-        board:
-          type: string
-          example: "LISTEDSTOCKK"
-          description: "Код класса → FIX tag 100 ExDestination"
-        side:
-          type: string
-          enum: [BUY, SELL]
-          example: "BUY"
-        order_type:
-          type: string
-          enum: [MARKET, LIMIT]
-          example: "LIMIT"
-        time_in_force:
-          type: string
-          enum: [DAY, IOC, FOK, GTC]
-          example: "DAY"
-          default: "DAY"
-        quantity:
-          oneOf:
-            - type: string
-            - type: number
-          example: "1"
-          description: "Количество (строка или число)"
-        price:
-          oneOf:
-            - type: string
-            - type: number
-          example: "400"
-          description: "Цена для LIMIT (строка или число)"
-    CreateOrderResponse:
-      type: object
-      properties:
-        order:
-          $ref: "#/components/schemas/Order"
-        idempotent:
-          type: boolean
     Order:
       type: object
       properties:
+        OrderNum: {type: integer, format: int64, nullable: true, description: "Номер заявки в QUIK"}
+        State: {type: string, nullable: true, description: "Активна, Исполнена, Снята, Отклонена"}
+        ClassCode: {type: string}
+        SecCode: {type: string}
+        Operation: {type: string, enum: ["Купля", "Продажа"]}
+        Price: {type: number, nullable: true}
+        Qty: {type: number}
+        Balance: {type: number, description: Остаток}
+        Account: {type: string}
+        ClientCode: {type: string}
+        FirmId: {type: string}
+        RejectReason: {type: string, nullable: true}
         id: {type: string, format: uuid}
-        broker_id: {type: integer, format: int64}
-        account_id: {type: string, description: Торговый код счёта}
-        client_order_id: {type: string}
-        instrument_id: {type: integer, format: int64}
-        symbol: {type: string}
-        board: {type: string}
-        currency: {type: string}
-        side: {type: string, enum: [BUY, SELL]}
-        order_type: {type: string, enum: [MARKET, LIMIT]}
-        time_in_force: {type: string}
-        quantity: {type: string}
-        price: {type: string, nullable: true}
-        filled_quantity: {type: string}
-        avg_price: {type: string}
-        status:
-          type: string
-          enum: [RECEIVED, VALIDATING, VALIDATED, QUEUED, ROUTING, SENT, ACKNOWLEDGED, PARTIALLY_FILLED, FILLED, CANCEL_PENDING, CANCELLED, REJECTED, EXPIRED, FAILED]
-        adapter_id: {type: string, nullable: true}
-        fix_cl_ord_id: {type: string, nullable: true}
-        quik_order_id: {type: string, nullable: true}
-        client_code: {type: string}
-        quik_firm: {type: string}
-        firm_name: {type: string}
-        reject_reason: {type: string, nullable: true}
-        created_at: {type: string, format: date-time}
-        updated_at: {type: string, format: date-time}
-        request_id: {type: string}
-        trace_id: {type: string}
     QuikOrderRow:
       type: object
       additionalProperties: true
-      description: |
-        Строка `quik_export2.public."Orders"` как есть (`row_to_json`). Набор колонок задаёт QUIK;
-        шлюз не добавляет и не переименовывает поля. Ниже — колонки, по которым шлюз ищет строку.
       properties:
-        OrderNum: {type: number, description: "Номер заявки QUIK, до 19 знаков"}
+        OrderNum: {type: number}
         ClassCode: {type: string}
         TradeDate: {type: string}
         SecCode: {type: string}
@@ -787,414 +759,147 @@ components:
         Operation: {type: string}
         State: {type: string}
       example: {"OrderNum": 9007199254740993123, "ClassCode": "LIST_GBA", "TradeDate": "2026-10-22T00:00:00", "SecCode": "GBA02280810", "FirmId": "2040", "Operation": "Купля", "State": "Активна", "Qty": 10, "Balance": 8, "Price": 105.12345678}
-    OrderEvent:
+    QuikTradingAccountRow:
       type: object
+      additionalProperties: true
       properties:
-        id: {type: integer, format: int64}
-        order_id: {type: string, format: uuid}
-        event_type: {type: string}
-        from_status: {type: string, nullable: true}
-        to_status: {type: string, nullable: true}
-        adapter_id: {type: string, nullable: true}
-        message: {type: string}
-        raw_fix: {type: string}
-        created_at: {type: string, format: date-time}
-    BrokerAccount:
+        TrdAccId: {type: string}
+        FirmId: {type: string}
+    QuikFirmRow:
       type: object
+      additionalProperties: true
       properties:
-        id:
-          type: integer
-        broker_id:
-          type: integer
-        code:
-          type: string
-        name:
-          type: string
-        quik_firm:
-          type: string
-        trading_account:
-          type: string
-          example: "1-3101-2040"
-        status:
-          type: string
-          example: ACTIVE
+        FirmId: {type: string}
+        FirmName: {type: string, nullable: true}
     Instrument:
       type: object
+      additionalProperties: true
       properties:
-        id:
-          type: integer
-        internal_symbol:
-          type: string
-        quik_symbol:
-          type: string
-          example: KG0105166315
-        board:
-          type: string
-          example: LISTEDSTOCKK
-        currency:
-          type: string
-          example: KZT
-        security_type:
-          type: string
-        status:
-          type: string
-          example: ACTIVE
+        TradeDate: {type: string}
+        ClassCode: {type: string}
+        SecCode: {type: string}
+        FaceUnit: {type: string, nullable: true, description: Валюта}
+        SecShortName: {type: string, nullable: true}
+        SecFullName: {type: string, nullable: true}
+      example: {"TradeDate": "2026-11-02T00:00:00", "ClassCode": "LIST_GBA", "SecCode": "GBA02280810", "FaceUnit": "KGS", "SecShortName": "ГКО", "SecFullName": "Государственная бумага"}
     BookLevel:
       type: object
+      required: [price, quantity, volume]
+      additionalProperties: false
       properties:
-        price:
-          type: string
-          example: "99.5"
-        size:
-          type: string
-          example: "10"
-    MarketQuote:
+        price: {type: number, description: Цена}
+        quantity: {type: number, description: Остаток заявок по цене}
+        volume: {type: number, description: price × quantity}
+    MarketDataRow:
       type: object
-      description: Строка текущих торгов; пустая строка цены или статуса означает, что значение ещё не получено
+      additionalProperties: true
       properties:
-        symbol: {type: string}
-        security_id: {type: string}
-        board: {type: string}
-        currency: {type: string}
-        name: {type: string}
-        trade_date: {type: string}
-        trading_status: {type: string, description: Торговый статус FIX 326}
-        trading_session_id: {type: string, description: FIX 336}
-        trading_session_sub: {type: string, description: FIX 625}
-        bid: {type: string}
-        bid_size: {type: string}
-        offer: {type: string}
-        offer_size: {type: string}
-        bids:
-          type: array
-          items:
-            $ref: "#/components/schemas/BookLevel"
-        offers:
-          type: array
-          items:
-            $ref: "#/components/schemas/BookLevel"
-        last: {type: string}
-        last_size: {type: string}
-        last_time: {type: string}
-        open: {type: string}
-        high: {type: string}
-        low: {type: string}
-        close: {type: string}
-        wapr: {type: string, description: Средневзвешенная цена}
-        settle: {type: string}
-        current_price: {type: string}
-        official_price: {type: string}
-        volume: {type: string}
-        value: {type: string, description: Оборот}
-        updated_at: {type: string, format: date-time}
-    MarketDataResponse:
+        ClassCode: {type: string}
+        SecCode: {type: string}
+        CouponValue: {type: number, nullable: true}
+        status: {type: string, nullable: true}
+        FaceUnit: {type: string, nullable: true, description: Валюта}
+        SecShortName: {type: string, nullable: true}
+        SecFullName: {type: string, nullable: true}
+        ClassName: {type: string, nullable: true}
+        lotsize: {type: number, nullable: true, description: Размер лота}
+        tradingstatus: {type: string, nullable: true, description: Состояние сессии}
+        pricemin: {type: number, nullable: true, description: Минимально возможная цена}
+        pricemax: {type: number, nullable: true, description: Максимально возможная цена}
+        realminstep: {type: number, nullable: true, description: Минимальный шаг цены}
+        bid: {type: number, nullable: true, description: Лучшая цена спроса}
+        biddepth: {type: number, nullable: true, description: Спрос по лучшей цене}
+        offer: {type: number, nullable: true, description: Лучшая цена предложения}
+        offerdepth: {type: number, nullable: true, description: Предложение по лучшей цене}
+        last: {type: number, nullable: true, description: Цена последней сделки}
+        qty: {type: number, nullable: true, description: Количество в последней сделке}
+        time: {type: string, nullable: true, description: Время последней сделки}
+        open: {type: number, nullable: true, description: Цена открытия}
+        high: {type: number, nullable: true, description: Максимальная цена сделки}
+        low: {type: number, nullable: true, description: Минимальная цена сделки}
+        prevprice: {type: number, nullable: true, description: Цена закрытия}
+        waprice: {type: number, nullable: true, description: Средневзвешенная цена}
+        numtrades: {type: number, nullable: true, description: Количество сделок за сегодня}
+        voltoday: {type: number, nullable: true, description: Количество во всех сделках}
+        valtoday: {type: number, nullable: true, description: Оборот в деньгах}
+        accruedint: {type: number, nullable: true, description: Накопленный купонный доход}
+        yield: {type: number, nullable: true, description: Доходность последней сделки}
+        nextcoupon: {type: string, nullable: true, description: Дата выплаты купона}
+        couponperiod: {type: number, nullable: true, description: Длительность купона}
+    MarketTrade:
       type: object
-      required: [quotes]
+      required: [TradeNum, ClassCode, SecCode, TradeDateTime, Price, Qty, SettleCurrency, Kind, CanceledDateTime]
+      additionalProperties: false
       properties:
-        quotes:
-          type: array
-          items:
-            $ref: "#/components/schemas/MarketQuote"
+        TradeNum: {type: number, description: Номер сделки}
+        ClassCode: {type: string}
+        SecCode: {type: string}
+        TradeDateTime: {type: string, format: date-time, description: "Время исполнения, +06:00"}
+        Price: {type: number, nullable: true, description: Цена за единицу без комиссий}
+        Qty: {type: number, nullable: true, description: Количество}
+        SettleCurrency: {type: string, nullable: true, description: Валюта расчётов}
+        Kind: {type: string, nullable: true, description: Вид сделки}
+        CanceledDateTime: {type: string, format: date-time, nullable: true, description: "Время отмены, +06:00; null — сделка действует"}
+      example: {TradeNum: 4914, ClassCode: LIST_GBA, SecCode: GBA02270915, TradeDateTime: "2026-11-05T14:32:57.000+06:00", Price: 95.00000000, Qty: 10.00000000, SettleCurrency: KGS, Kind: Обычная, CanceledDateTime: null}
     OrderBook:
       type: object
+      required: [board, symbol, bids, offers]
+      additionalProperties: false
       properties:
-        symbol:
-          type: string
-        security_id:
-          type: string
-        board:
-          type: string
-        currency:
-          type: string
-        name:
-          type: string
-        last:
-          type: string
-        last_size:
-          type: string
-        last_time:
-          type: string
-        bid:
-          type: string
-        bid_size:
-          type: string
-        offer:
-          type: string
-        offer_size:
-          type: string
+        board: {type: string, description: ClassCode}
+        symbol: {type: string, description: SecCode}
         bids:
           type: array
+          description: Покупка, от высокой цены к низкой
           items:
             $ref: "#/components/schemas/BookLevel"
         offers:
           type: array
+          description: Продажа, от низкой цены к высокой
           items:
             $ref: "#/components/schemas/BookLevel"
-        updated_at:
-          type: string
-          format: date-time
-    OrderBookResponse:
-      type: object
-      properties:
-        source:
-          type: string
-          example: live
-        live:
-          type: boolean
-        books:
-          type: array
-          items:
-            $ref: "#/components/schemas/OrderBook"
-        note:
-          type: string
     Trade:
       type: object
+      additionalProperties: true
       properties:
-        trade_match_id:
-          type: string
-          description: Exchange matched trade identifier (FIX 880). Distinct from per-order exec_id.
-        contra_broker:
-          type: string
-          description: Counterparty broker from FIX 375, when disclosed.
-        contra_trader:
-          type: string
-          description: Counterparty trader from FIX 337, not a client identifier.
-        execution_date:
-          type: string
-          format: date
-          description: FIX trade date, or UTC receipt date for legacy executions.
-        broker_id: {type: integer, format: int64}
-        adapter_id: {type: string, nullable: true}
-        firm_name: {type: string}
-        fix_cl_ord_id: {type: string, nullable: true}
-        quik_order_id: {type: string, nullable: true}
-        id:
-          type: string
-          format: uuid
-        order_id:
-          type: string
-          format: uuid
-        exec_id:
-          type: string
-        last_qty:
-          type: string
-        last_px:
-          type: string
-        cum_qty:
-          type: string
-        leaves_qty:
-          type: string
-        client_order_id:
-          type: string
-        symbol:
-          type: string
-        board:
-          type: string
-        side:
-          type: string
-        client_code:
-          type: string
-        quik_firm:
-          type: string
-        created_at:
-          type: string
-          format: date-time
-    Position:
+        TradeNum: {type: number}
+        TradeDate: {type: string}
+        ClassCode: {type: string}
+        SecCode: {type: string}
+        OrderNum: {type: number}
+        Operation: {type: string}
+        Price: {type: number}
+        Qty: {type: number}
+        FirmId: {type: string}
+        Account: {type: string}
+        ClientCode: {type: string}
+        CPFirmId: {type: string, description: Фирма контрагента}
+      example: {"TradeNum": 11094, "TradeDate": "2026-10-06T00:00:00", "ClassCode": "LIST_GBA", "SecCode": "GBA02280810", "OrderNum": 22450, "Operation": "Купля", "Price": 99.00000000, "Qty": 201, "FirmId": "2040", "Account": "1-3101-2040", "ClientCode": "Kalys", "CPFirmId": "BAKAI2008"}
+    MoneyLimitRow:
       type: object
+      additionalProperties: true
       properties:
-        adapter_id: {type: string}
-        pos_maint_rpt_id: {type: string}
-        pos_req_id: {type: string}
-        clearing_date: {type: string}
-        update_action: {type: string, description: "FIX 5024: 0 New / 1 Change / 2 Delete"}
-        pos_amt_type: {type: string}
-        pos_amt: {type: string}
-        raw_fix: {type: string, description: Не включается в gRPC-снимок}
-        kind:
-          type: string
-          enum: [INSTRUMENT, CASH, FUTURES]
-        firm_id:
-          type: string
-          example: "2040"
-        client_code:
-          type: string
-        account_code:
-          type: string
-        symbol:
-          type: string
-        security_id:
-          type: string
-        board:
-          type: string
-        currency:
-          type: string
-        pos_type:
-          type: string
-          description: ML деньги, DL инструмент, FL/FP фьючерсы
-        long_qty:
-          type: string
-        short_qty:
-          type: string
-        net_qty:
-          type: string
-        settl_price:
-          type: string
-        source:
-          type: string
-          enum: [fix, manual]
-        keys:
-          type: object
-          additionalProperties:
-            type: string
-        items:
-          type: object
-          additionalProperties:
-            type: string
-    PositionSnapshot:
+        LoadDate: {type: string}
+        FirmId: {type: string}
+        ClientCode: {type: string}
+        Tag: {type: string}
+        CurrCode: {type: string, description: Валюта}
+        LimitKind: {type: string}
+        CurrentBal: {type: number, description: Текущий остаток}
+        OpenBal: {type: number, description: Входящий остаток}
+        Locked: {type: number, description: Заблокировано}
+      example: {"LoadDate": "2026-11-02T00:00:00", "FirmId": "2040", "ClientCode": "Kalys", "Tag": "EQTV", "CurrCode": "KGS", "LimitKind": "T0", "CurrentBal": 1518400.00000000, "OpenBal": 1518400.00000000, "Locked": 0.00000000}
+    DepoLimitRow:
       type: object
+      additionalProperties: true
       properties:
-        id:
-          type: integer
-        adapter_id:
-          type: string
-        pos_req_id:
-          type: string
-        clearing_date:
-          type: string
-        requested_at:
-          type: string
-          format: date-time
-        completed_at:
-          type: string
-          format: date-time
-        status:
-          type: string
-          example: OK
-        error:
-          type: string
-        report_count:
-          type: integer
-    PositionsResponse:
-      type: object
-      properties:
-        source:
-          type: string
-          enum: [fix, manual, mixed]
-          example: fix
-        firm_id:
-          type: string
-          description: Код брокера, по которому отфильтрован снимок
-          example: "2040"
-        snapshot:
-          $ref: "#/components/schemas/PositionSnapshot"
-        instruments:
-          type: array
-          items:
-            $ref: "#/components/schemas/Position"
-        cash:
-          type: array
-          items:
-            $ref: "#/components/schemas/Position"
-        note:
-          type: string
-          description: Пояснение, если снимка ещё нет
-    SetCashRequest:
-      type: object
-      required: [client_code, currency, amount]
-      properties:
-        client_code:
-          type: string
-          example: kalys
-        account_code:
-          type: string
-        currency:
-          type: string
-          example: KGS
-        tag:
-          type: string
-          example: EQTV
-        amount:
-          oneOf:
-            - type: string
-            - type: number
-          example: "1500000"
-        open_bal:
-          oneOf:
-            - type: string
-            - type: number
-        limit:
-          oneOf:
-            - type: string
-            - type: number
-        locked:
-          oneOf:
-            - type: string
-            - type: number
-    SetInstrumentRequest:
-      type: object
-      required: [client_code, symbol]
-      properties:
-        client_code:
-          type: string
-        account_code:
-          type: string
-        symbol:
-          type: string
-          example: KG0105166315
-        security_id:
-          type: string
-        board:
-          type: string
-          example: LISTEDSTOCKK
-        currency:
-          type: string
-        quantity:
-          oneOf:
-            - type: string
-            - type: number
-          example: "100"
-        long_qty:
-          oneOf:
-            - type: string
-            - type: number
-        short_qty:
-          oneOf:
-            - type: string
-            - type: number
-        settl_price:
-          oneOf:
-            - type: string
-            - type: number
-    SetPositionsRequest:
-      type: object
-      required: [client_code]
-      properties:
-        client_code:
-          type: string
-        account_code:
-          type: string
-        cash:
-          type: array
-          items:
-            $ref: "#/components/schemas/SetCashRequest"
-        instruments:
-          type: array
-          items:
-            $ref: "#/components/schemas/SetInstrumentRequest"
-    SetPositionsResponse:
-      type: object
-      properties:
-        ok:
-          type: boolean
-        firm_id:
-          type: string
-        cash:
-          type: array
-          items:
-            $ref: "#/components/schemas/Position"
-        instruments:
-          type: array
-          items:
-            $ref: "#/components/schemas/Position"
-        result:
-          $ref: "#/components/schemas/PositionsResponse"
+        LoadDate: {type: string}
+        FirmId: {type: string}
+        ClientCode: {type: string}
+        SecCode: {type: string}
+        Trdacc: {type: string, description: Торговый счёт}
+        LimitKind: {type: string}
+        CurrentBal: {type: number, description: Текущий остаток}
+        OpenBal: {type: number, description: Входящий остаток}
+        AwgPositionPrice: {type: number, description: Средняя цена}
+      example: {"LoadDate": "2026-11-02T00:00:00", "FirmId": "2040", "ClientCode": "Kalys", "SecCode": "GBA02280810", "Trdacc": "1-3101-2040", "LimitKind": "T0", "CurrentBal": 17.00000000, "OpenBal": 17.00000000, "AwgPositionPrice": 0.00000000}

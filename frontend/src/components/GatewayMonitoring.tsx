@@ -5,6 +5,7 @@ import type { Dashboard } from "../types/admin";
 import { displayAdapterName, isHiddenAdapter, isSimulator } from "../lib/adapters";
 import { StatusBadge } from "./StatusBadge";
 import { ErrorBanner } from "./feedback";
+import { CHART_COLORS, TimeSeriesChart } from "./charts";
 
 type Sample = {
   timestamp: string;
@@ -71,10 +72,10 @@ export function GatewayMonitoring({ dashboard: d }: { dashboard?: Dashboard }) {
         <Metric label="Горутины" value={latest ? number(latest.goroutines) : "—"} detail={`CPU-ядер: ${latest?.cpu_cores ?? "—"}`} />
       </div>
       <div className="grid gap-4 lg:grid-cols-2">
-        <Chart title="CPU процесса, % одного ядра" data={points("cpu_pct")} color="#7c3aed" />
-        <Chart title="Память процесса (RSS), МБ" data={points("rss_mb")} color="#0891b2" />
-        <Chart title="HTTP-запросы / с" data={points("http_rps")} color="#0284c7" />
-        <Chart title="Очередь заявок" data={points("queue")} color="#d97706" />
+        <Chart title="CPU процесса, % одного ядра" data={points("cpu_pct")} color={CHART_COLORS[3]} />
+        <Chart title="Память процесса (RSS), МБ" data={points("rss_mb")} color={CHART_COLORS[0]} />
+        <Chart title="HTTP-запросы / с" data={points("http_rps")} color="var(--chart-in)" />
+        <Chart title="Очередь заявок" data={points("queue")} color={CHART_COLORS[2]} />
       </div>
       <p className="text-xs text-muted">История за последние 10 минут хранится в Prometheus. Скорости рассчитываются за минуту; графики обновляются каждые 15 с. HTTP включает административные запросы. CPU и RSS относятся к процессу шлюза; недоступные замеры обозначены «—».</p>
     </div>
@@ -88,7 +89,7 @@ export function GatewayMonitoring({ dashboard: d }: { dashboard?: Dashboard }) {
             <Metric label="Попытки отправки" value={counters?.adapter_requests_total == null ? "—" : number(counters.adapter_requests_total)} />
             <Metric label="Ошибки отправки" value={counters?.adapter_errors_total == null ? "—" : number(counters.adapter_errors_total)} />
           </div>
-          <Chart title="Отправки в адаптер / с" data={points("adapter_rps", a.id)} color="#059669" />
+          <Chart title="Отправки в адаптер / с" data={points("adapter_rps", a.id)} color={CHART_COLORS[1]} />
           <p className="text-xs text-muted">Счётчики отправок с запуска шлюза. CPU и память удалённого адаптера не передаются.</p>
         </div>;
       })}
@@ -98,37 +99,19 @@ export function GatewayMonitoring({ dashboard: d }: { dashboard?: Dashboard }) {
 }
 
 function Node({ title, detail }: { title: string; detail: string }) {
-  return <div className="rounded-lg border border-slate-200 bg-surface p-4 text-center"><div className="font-semibold">{title}</div><div className="mt-2 text-xs text-muted">{detail}</div></div>;
+  return <div className="rounded-lg border border-line bg-surface p-4 text-center"><div className="font-semibold">{title}</div><div className="mt-2 text-xs text-muted">{detail}</div></div>;
 }
 function Arrows({ forward, back }: { forward: string; back: string }) {
-  return <div className="text-center"><div className="text-[10px] text-muted">{forward}</div><div className="text-2xl text-sky-600">→</div><div className="text-2xl text-emerald-600">←</div><div className="text-[10px] text-muted">{back}</div></div>;
+  return <div className="text-center"><div className="text-[10px] text-muted">{forward}</div><div className="text-2xl text-info">→</div><div className="text-2xl text-success">←</div><div className="text-[10px] text-muted">{back}</div></div>;
 }
 function Metric({ label, value, detail }: { label: string; value: string; detail?: string }) {
   return <div className="rounded-lg bg-surface p-3"><div className="text-xs text-muted">{label}</div><div className="mt-1 font-mono text-lg">{value}</div>{detail && <div className="mt-1 text-xs text-muted">{detail}</div>}</div>;
 }
 function Chart({ title, data, color }: { title: string; data: { time: string; value: number | null }[]; color: string }) {
   const valid = data.filter(p => p.value != null);
-  const max = Math.max(1, ...valid.map(p => p.value!));
-  const start = data.length ? Date.parse(data[0].time) : 0;
-  const end = data.length ? Date.parse(data.at(-1)!.time) : 0;
-  const x = (time: string) => 45 + (Date.parse(time) - start) / Math.max(1, end - start) * 535;
-  const y = (v: number) => 135 - v / max * 110;
-  let drawing = false;
-  const path = data.map(p => {
-    if (p.value == null) { drawing = false; return ""; }
-    const command = `${drawing ? "L" : "M"}${x(p.time)},${y(p.value)}`;
-    drawing = true;
-    return command;
-  }).join(" ");
-  return <div className="rounded-lg border border-slate-200 p-3">
+  return <div className="rounded-lg border border-line p-3">
     <div className="flex justify-between text-sm"><span>{title}</span><span className="font-mono">{data.at(-1)?.value == null ? "—" : number(data.at(-1)!.value!)}</span></div>
-    {valid.length < 2 ? <div className="flex h-40 items-center justify-center text-xs text-muted">История метрик пока недоступна</div> : <>
-      <svg viewBox="0 0 600 155" className="mt-2 w-full" role="img" aria-label={title}>
-        {[0, 0.5, 1].map(v => <g key={v}><line x1="45" x2="580" y1={y(v * max)} y2={y(v * max)} stroke="#e2e8f0" /><text x="2" y={y(v * max) + 4} fontSize="10" fill="#64748b">{number(v * max)}</text></g>)}
-        <path d={path} fill="none" stroke={color} strokeWidth="2" />
-        {valid.map(p => <circle key={p.time} cx={x(p.time)} cy={y(p.value!)} r="3" fill={color}><title>{new Date(p.time).toLocaleTimeString("ru-RU")} · {number(p.value!)}</title></circle>)}
-      </svg>
-      <div className="flex justify-between text-[10px] text-muted"><span>{new Date(start).toLocaleTimeString("ru-RU")}</span><span>{new Date(end).toLocaleTimeString("ru-RU")}</span></div>
-    </>}
+    {valid.length < 2 ? <div className="flex h-40 items-center justify-center text-xs text-muted">История метрик пока недоступна</div>
+      : <div className="mt-2"><TimeSeriesChart label={title} series={[{ label: title, color, points: data }]} height={150} format={number} dots /></div>}
   </div>;
 }

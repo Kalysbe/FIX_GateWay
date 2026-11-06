@@ -10,12 +10,12 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-func (s *Server) serveMergedOpenAPI(w http.ResponseWriter, r *http.Request, routes []docRoute, baseFile string, brokerOnly bool) {
+func (s *Server) serveMergedOpenAPI(w http.ResponseWriter, r *http.Request, routes []docRoute, baseFile string) {
 	if !s.docsEnabled() {
 		writeErr(w, http.StatusNotFound, "not found")
 		return
 	}
-	body, err := mergeOpenAPI(baseFile, routes, brokerOnly, r)
+	body, err := mergeOpenAPI(baseFile, routes, r)
 	if err != nil {
 		s.writeInternal(w, err)
 		return
@@ -25,7 +25,7 @@ func (s *Server) serveMergedOpenAPI(w http.ResponseWriter, r *http.Request, rout
 	_, _ = w.Write(body)
 }
 
-func mergeOpenAPI(baseFile string, routes []docRoute, brokerOnly bool, r *http.Request) ([]byte, error) {
+func mergeOpenAPI(baseFile string, routes []docRoute, r *http.Request) ([]byte, error) {
 	doc, err := loadOpenAPIBase(baseFile)
 	if err != nil {
 		return nil, err
@@ -35,11 +35,12 @@ func mergeOpenAPI(baseFile string, routes []docRoute, brokerOnly bool, r *http.R
 		doc.Paths = openapi3.NewPaths()
 	}
 	for _, rt := range routes {
-		if brokerOnly && !brokerVisiblePath(rt.Path) {
+		if !brokerVisiblePath(rt.Path) {
 			continue
 		}
 		ensureOperation(doc, rt)
 	}
+	wrapBrokerResponses(doc)
 	if r != nil && r.Host != "" {
 		scheme := "http"
 		if r.TLS != nil || strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https") {
@@ -66,15 +67,7 @@ func loadOpenAPIBase(path string) (*openapi3.T, error) {
 		}
 		return nil, err
 	}
-	loader := openapi3.NewLoader()
-	doc, err := loader.LoadFromData(raw)
-	if err != nil {
-		return nil, err
-	}
-	if doc.Info != nil && doc.Info.Description != "" && !strings.Contains(doc.Info.Description, "ServeMux") {
-		doc.Info.Description += "\n\nНедостающие пути дополняются автоматически из зарегистрированных HTTP-маршрутов."
-	}
-	return doc, nil
+	return openapi3.NewLoader().LoadFromData(raw)
 }
 
 func emptyOpenAPI() *openapi3.T {
@@ -119,7 +112,6 @@ func ensureOperation(doc *openapi3.T, rt docRoute) {
 	}
 	op := &openapi3.Operation{
 		Summary:     autoSummary(rt.Method, rt.Path),
-		Description: "Операция зарегистрирована в HTTP mux и добавлена в Swagger автоматически.",
 		OperationID: autoOperationID(rt.Method, rt.Path),
 		Tags:        []string{autoTag(rt.Path)},
 		Responses:   openapi3.NewResponses(openapi3.WithStatus(http.StatusOK, &openapi3.ResponseRef{Value: openapi3.NewResponse().WithDescription("OK")})),
@@ -134,7 +126,7 @@ func ensureOperation(doc *openapi3.T, rt docRoute) {
 }
 
 func brokerVisiblePath(path string) bool {
-	if path == "/health" || path == "/ready" {
+	if path == "/health" {
 		return true
 	}
 	if strings.HasPrefix(path, "/api/v1/admin") || path == "/metrics" {
@@ -170,8 +162,6 @@ func autoTag(path string) string {
 	switch {
 	case path == "/health" || path == "/ready" || path == "/metrics":
 		return "Ops"
-	case strings.Contains(path, "/quik-api"):
-		return "QUIK API"
 	case strings.HasPrefix(path, "/api/v1/admin"):
 		return "Admin"
 	case strings.HasPrefix(path, "/api/v1/orders"):
@@ -180,7 +170,7 @@ func autoTag(path string) string {
 		return "Trades"
 	case strings.HasPrefix(path, "/api/v1/positions"):
 		return "Positions"
-	case strings.HasPrefix(path, "/api/v1/accounts"), strings.HasPrefix(path, "/api/v1/instruments"), strings.HasPrefix(path, "/api/v1/orderbook"), path == "/api/v1/firm":
+	case strings.HasPrefix(path, "/api/v1/accounts"), strings.HasPrefix(path, "/api/v1/instruments"), strings.HasPrefix(path, "/api/v1/orderbook"), path == "/api/v1/token":
 		return "Reference"
 	default:
 		return "API"

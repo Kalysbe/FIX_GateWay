@@ -31,7 +31,7 @@ export default function TokensPage() {
     <PageHeader title="Токены" subtitle="Поиск токенов · владелец, права и использование" />
     <TokenLookup tokenId={tokenId} onSelect={selectToken} />
     {q.error && <ErrorBanner error={q.error} onRetry={() => q.refetch()} />}
-    <DataTable title="API-токены" rows={q.data?.tokens ?? []} columns={columns} rowKey={t => t.id} loading={q.isLoading}
+    <DataTable urlState title="API-токены" rows={q.data?.tokens ?? []} columns={columns} rowKey={t => t.id} loading={q.isLoading}
       onRefresh={() => void q.refetch()} refreshing={q.isFetching} searchPlaceholder="Брокер, название, префикс, ID…"
       emptyTitle="Токенов пока нет" emptyHint="Откройте карточку брокера и создайте токен"
       summary={rows => [{ label: "Токенов", value: rows.length }, { label: "Активны", value: rows.filter(t => t.status === "ACTIVE").length, tone: "success" }, { label: "Отозваны", value: rows.filter(t => t.status === "REVOKED").length, tone: "danger" }, { label: "Истекли", value: rows.filter(t => t.status === "EXPIRED").length, tone: "warn" }]} />

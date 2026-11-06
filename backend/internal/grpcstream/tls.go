@@ -3,9 +3,11 @@ package grpcstream
 import (
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/pem"
 	"fmt"
 	"google.golang.org/grpc/credentials"
 	"os"
+	"time"
 )
 
 func roots(path string) (*x509.CertPool, error) {
@@ -19,6 +21,23 @@ func roots(path string) (*x509.CertPool, error) {
 	}
 	return pool, nil
 }
+// CertificateExpiry is the NotAfter of the first certificate in a PEM file.
+func CertificateExpiry(path string) (time.Time, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return time.Time{}, err
+	}
+	block, _ := pem.Decode(data)
+	if block == nil || block.Type != "CERTIFICATE" {
+		return time.Time{}, fmt.Errorf("no certificate in %s", path)
+	}
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return time.Time{}, err
+	}
+	return cert.NotAfter, nil
+}
+
 func ServerCredentials(cert, key, ca string, mtls bool) (credentials.TransportCredentials, error) {
 	pair, err := tls.LoadX509KeyPair(cert, key)
 	if err != nil {

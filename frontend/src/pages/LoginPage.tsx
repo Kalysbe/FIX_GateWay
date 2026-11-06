@@ -1,24 +1,25 @@
-import { FormEvent, useState } from "react";
+import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
+import { useForm } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
 import { api, setSessionUser, setToken } from "../api";
 import { Icons } from "../components/icons";
+import { loginSchema, type LoginValues } from "../lib/schemas";
 import "./login.css";
 
 export default function LoginPage() {
   const nav = useNavigate();
   const queryClient = useQueryClient();
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
-  const [error, setError] = useState("");
-  const [loading, setLoading] = useState(false);
+  const { register, handleSubmit, setError, clearErrors, formState: { errors, isSubmitting: loading } } = useForm<LoginValues>({
+    resolver: zodResolver(loginSchema),
+    defaultValues: { email: "", password: "" },
+  });
+  const error = errors.root?.message ?? "";
 
-  async function onSubmit(e: FormEvent) {
-    e.preventDefault();
-    if (loading) return;
-    setLoading(true);
-    setError("");
+  const onSubmit = handleSubmit(async ({ email, password }) => {
+    clearErrors("root");
     try {
       const res = await api<{ token: string; user?: { id?: string; email?: string; role?: string; full_name?: string } }>(
         "/api/v1/admin/login",
@@ -31,12 +32,9 @@ export default function LoginPage() {
       if (res.user) setSessionUser(res.user);
       nav("/");
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "Ошибка входа");
-    } finally {
-      setLoading(false);
+      setError("root", { message: err instanceof Error ? err.message : "Ошибка входа" });
     }
-  }
-
+  });
   return (
     <main className="login-page">
       <div className="login-window">
@@ -76,7 +74,7 @@ export default function LoginPage() {
         </aside>
 
         <section className="login-form-area" aria-labelledby="login-title">
-          <form onSubmit={onSubmit} className="login-form" aria-busy={loading}>
+          <form onSubmit={onSubmit} className="login-form" aria-busy={loading} noValidate>
             <div className="login-form-heading">
               <div className="login-form-symbol"><Icons.lock size={23} /></div>
               <h1 id="login-title">Вход в консоль</h1>
@@ -89,18 +87,18 @@ export default function LoginPage() {
                 <input
                   id="login-email"
                   className="login-input"
-                  name="email"
                   type="email"
                   autoComplete="username"
                   autoCapitalize="none"
                   spellCheck={false}
                   placeholder="name@company.com"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  aria-describedby={error ? "login-error" : undefined}
+                  {...register("email")}
+                  aria-invalid={errors.email ? true : undefined}
+                  aria-describedby={errors.email ? "login-email-error" : error ? "login-error" : undefined}
                   readOnly={loading}
                   required
                 />
+                {errors.email && <p id="login-email-error" className="login-field-error">{errors.email.message}</p>}
               </div>
 
               <div className="login-field">
@@ -110,12 +108,11 @@ export default function LoginPage() {
                     id="login-password"
                     className="login-input"
                     type={showPassword ? "text" : "password"}
-                    name="password"
                     autoComplete="current-password"
                     placeholder="Введите пароль"
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    aria-describedby={error ? "login-error" : undefined}
+                    {...register("password")}
+                    aria-invalid={errors.password ? true : undefined}
+                    aria-describedby={errors.password ? "login-password-error" : error ? "login-error" : undefined}
                     readOnly={loading}
                     required
                   />
@@ -127,10 +124,10 @@ export default function LoginPage() {
                     aria-controls="login-password"
                     title={showPassword ? "Скрыть пароль" : "Показать пароль"}
                   >
-                    <Icons.eye size={19} />
-                    {showPassword && <span className="login-eye-slash" aria-hidden="true" />}
+                    {showPassword ? <Icons.eyeOff size={18} /> : <Icons.eye size={18} />}
                   </button>
                 </div>
+                {errors.password && <p id="login-password-error" className="login-field-error">{errors.password.message}</p>}
               </div>
             </div>
 
