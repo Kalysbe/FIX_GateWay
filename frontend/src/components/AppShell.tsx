@@ -15,7 +15,7 @@ import { CommandPalette } from "./CommandPalette";
 import { Sheet, SheetContent, SheetTitle } from "./ui/sheet";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "./ui/tooltip";
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuLabel, DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuTrigger } from "./ui/dropdown-menu";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuSeparator, DropdownMenuTrigger } from "./ui/dropdown-menu";
 import { BOTTOM_NAV, MAIN_NAV, type NavItem } from "../lib/navigation";
 
 const COLLAPSE_KEY = "fixgw-sidebar-collapsed";
@@ -75,8 +75,6 @@ function NavLink({ item, active, path, collapsed, onNavigate }: { item: NavItem;
 }
 
 function SidebarContent({ path, collapsed, onNavigate }: { path: string; collapsed: boolean; onNavigate?: () => void }) {
-  const user = getSessionUser();
-  const displayName = user?.full_name || user?.email || "Админ";
   return (
     <>
       <Link to="/" className={cn("flex h-14 shrink-0 items-center gap-2.5 border-b border-sidebar-border", collapsed ? "justify-center px-0" : "px-4")} onClick={onNavigate} aria-label={collapsed ? "FIX Gateway" : undefined}>
@@ -92,13 +90,16 @@ function SidebarContent({ path, collapsed, onNavigate }: { path: string; collaps
       </Link>
 
       <nav aria-label="Основная навигация" className={cn("flex-1 space-y-0.5 overflow-y-auto overflow-x-hidden pb-3", collapsed ? "px-2.5" : "px-2")}>
-        {MAIN_NAV.map((item, index) => {
+        {SIDEBAR_NAV.map((item, index) => {
           const active = !!(item.to && item.match?.(path));
-          const groupStart = MAIN_NAV[index - 1]?.group !== item.group;
+          const groupStart = SIDEBAR_NAV[index - 1]?.group !== item.group;
           return (
             <div key={item.label}>
               {groupStart && (collapsed ? <div className="mx-2 my-3 h-px bg-sidebar-border" aria-hidden /> : <div className="nav-group-label" data-section={item.section}>{item.group}</div>)}
-              <NavLink item={item} active={active} path={path} collapsed={collapsed} onNavigate={onNavigate} />
+              {/* Key sections live in the header from 1280px; below that the sidebar keeps them. */}
+              <div className={cn(item.header && "xl:hidden")}>
+                <NavLink item={item} active={active} path={path} collapsed={collapsed} onNavigate={onNavigate} />
+              </div>
             </div>
           );
         })}
@@ -111,21 +112,65 @@ function SidebarContent({ path, collapsed, onNavigate }: { path: string; collaps
           ))}
         </div>
       )}
-
-      <div className={cn("border-t border-sidebar-border py-3", collapsed ? "flex justify-center px-2" : "px-3")}>
-        <div className="flex items-center gap-2.5" title={collapsed ? `${displayName} · ${roleLabel(user?.role)}` : undefined}>
-          <div className="user-avatar flex h-8 w-8 shrink-0 items-center justify-center text-[12px] font-semibold">
-            {userInitials(user?.full_name, user?.email)}
-          </div>
-          {!collapsed && (
-            <div className="min-w-0">
-              <div className="truncate text-[13px] font-medium">{displayName}</div>
-              <div className="truncate text-[11px] text-muted">{roleLabel(user?.role)}</div>
-            </div>
-          )}
-        </div>
-      </div>
     </>
+  );
+}
+
+const SIDEBAR_NAV = MAIN_NAV.filter((item) => item.sidebar !== false);
+const HEADER_NAV = MAIN_NAV.filter((item) => item.header);
+
+/** Key trading sections in the header, shown from 1280px wide. */
+function HeaderNav({ path }: { path: string }) {
+  return (
+    <nav aria-label="Ключевые разделы" className="header-nav hidden xl:flex">
+      {HEADER_NAV.map((item) => {
+        const active = !!item.match?.(path);
+        return (
+          <Link key={item.label} to={item.to!} data-section={item.section} className={cn(active && "header-nav-active")} aria-current={active ? "page" : undefined}>
+            <item.icon size={15} />
+            <span>{item.label}</span>
+          </Link>
+        );
+      })}
+    </nav>
+  );
+}
+
+function UserMenu() {
+  const user = getSessionUser();
+  const displayName = user?.full_name || user?.email || "Админ";
+  return (
+    <DropdownMenu>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <DropdownMenuTrigger asChild>
+            <button type="button" className="user-menu-trigger">
+              <span aria-hidden className="user-avatar flex h-8 w-8 shrink-0 items-center justify-center text-[12px] font-semibold">
+                {userInitials(user?.full_name, user?.email)}
+              </span>
+              <span className="sr-only">Профиль: {displayName}</span>
+            </button>
+          </DropdownMenuTrigger>
+        </TooltipTrigger>
+        <TooltipContent>{displayName}</TooltipContent>
+      </Tooltip>
+      <DropdownMenuContent align="end" className="min-w-56">
+        <DropdownMenuLabel className="font-normal normal-case tracking-normal">
+          <div className="truncate text-[13px] font-medium text-ink">{displayName}</div>
+          <div className="truncate text-[11px] text-muted">{roleLabel(user?.role)}</div>
+        </DropdownMenuLabel>
+        <DropdownMenuSeparator />
+        <DropdownMenuItem
+          onSelect={() => {
+            clearToken();
+            window.location.href = "/login";
+          }}
+        >
+          <Icons.logout size={15} />
+          Выйти
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 
@@ -314,23 +359,17 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
                 </ol>
               </nav>
             </div>
-            <div className="flex items-center gap-1">
-              <button type="button" className="global-search mr-1" onClick={() => setCommandOpen(true)} aria-keyshortcuts="Control+K">
+            <HeaderNav path={loc.pathname} />
+            <div className="flex shrink-0 items-center gap-1">
+              <button type="button" className="global-search mr-1" onClick={() => setCommandOpen(true)} aria-keyshortcuts="Control+K" aria-label="Быстрый переход">
                 <Icons.search size={15} />
                 <span>Быстрый переход</span>
                 <kbd>Ctrl K</kbd>
               </button>
               <ThemeMenu />
               <NotificationBell />
-              <HeaderButton
-                label="Выйти"
-                onClick={() => {
-                  clearToken();
-                  window.location.href = "/login";
-                }}
-              >
-                <Icons.logout size={17} />
-              </HeaderButton>
+              <div className="mx-1 h-5 w-px bg-line" aria-hidden />
+              <UserMenu />
             </div>
           </header>
           <main id="main-content" className="app-main flex-1 px-4 py-6 md:px-6">{children}</main>
