@@ -341,8 +341,9 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
                   <Icons.menu size={18} />
                 </button>
               )}
-              <div className="mx-1 hidden h-5 w-px bg-line md:block" aria-hidden />
-              <nav aria-label="Хлебные крошки" className="min-w-0">
+              {/* One crumb only repeats the page heading; crumbs show from the second level (a card in a list). */}
+              {crumbs.length > 1 && <div className="mx-1 hidden h-5 w-px bg-line md:block" aria-hidden />}
+              {crumbs.length > 1 && <nav aria-label="Хлебные крошки" className="min-w-0">
                 <ol className="flex min-w-0 items-center gap-1.5 text-[13px] text-muted">
                   {crumbs.map((c, i) => (
                     <li key={c.label} className="flex min-w-0 items-center gap-1.5">
@@ -357,7 +358,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
                     </li>
                   ))}
                 </ol>
-              </nav>
+              </nav>}
             </div>
             <HeaderNav path={loc.pathname} />
             <div className="flex shrink-0 items-center gap-1">

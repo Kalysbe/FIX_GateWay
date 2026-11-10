@@ -19,17 +19,6 @@ export type NavItem = {
   sidebar?: false;
 };
 
-const LOG_CHILDREN = [
-  { to: "/logs", label: "Все" },
-  { to: "/logs/api", label: "API" },
-  { to: "/logs/orders", label: "Заявки" },
-  { to: "/logs/errors", label: "Ошибки" },
-  { to: "/logs/auth", label: "Авторизация" },
-  { to: "/logs/fix", label: "FIX / Adapters" },
-  { to: "/logs/system", label: "Система" },
-  { to: "/logs/audit", label: "Аудит" },
-];
-
 export const MAIN_NAV: NavItem[] = [
   { group: "Обзор", section: "overview", to: "/", label: "Дашборд", icon: Icons.dashboard, match: (p) => p === "/" },
   { group: "Обзор", section: "overview", to: "/monitoring", label: "Мониторинг", icon: Icons.monitoring, match: (p) => p === "/monitoring" },
@@ -46,7 +35,7 @@ export const MAIN_NAV: NavItem[] = [
   { group: "Инфраструктура", section: "infra", to: "/adapters", label: "Подключения FIX", icon: Icons.adapters, match: (p) => p.startsWith("/adapters") },
   { group: "Инфраструктура", section: "infra", to: "/execution-inbox", label: "Входящие FIX", icon: Icons.inbox, match: (p) => p === "/execution-inbox" },
   { group: "Инфраструктура", section: "infra", to: "/grpc", label: "gRPC · Подписки", icon: Icons.stream, match: (p) => p === "/grpc" },
-  { group: "Инфраструктура", section: "infra", to: "/logs", label: "Логи и аудит", icon: Icons.audit, match: (p) => p.startsWith("/logs"), children: LOG_CHILDREN },
+  { group: "Инфраструктура", section: "infra", to: "/logs", label: "Логи и аудит", icon: Icons.audit, match: (p) => p.startsWith("/logs") },
   { group: "Инфраструктура", section: "infra", to: "/notifications", label: "Уведомления", icon: Icons.bell, match: (p) => p.startsWith("/notifications"), sidebar: false },
 ];
 

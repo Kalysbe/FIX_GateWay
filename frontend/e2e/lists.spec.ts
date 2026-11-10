@@ -37,6 +37,9 @@ test("логи: все фильтры переживают перезагруз�
   });
   await page.goto("/logs");
   await page.getByRole("combobox", { name: "Важность" }).selectOption("ERROR");
+  // Rare filters wait under "Ещё фильтры" and the panel reopens by itself once one is set.
+  await expect(page.getByLabel("IP-адрес")).toHaveCount(0);
+  await page.getByRole("button", { name: /Ещё фильтры/ }).click();
   await page.getByLabel("IP-адрес").fill("10.0.0.7");
   await expect(page).toHaveURL(/ip=10\.0\.0\.7/);
   await page.locator("#main-content").getByRole("link", { name: "Ошибки", exact: true }).click();

@@ -4,7 +4,8 @@ import { keepPreviousData, useInfiniteQuery, useQuery, useQueryClient } from "@t
 import { api, apiDownload } from "../api";
 import { PageHeader } from "../components/PageHeader";
 import { formatDateTime, formatMs, formatNumber, logTypeLabel } from "../labels";
-import { useBreadcrumbs } from "../components/breadcrumbs";
+import { Icons } from "../components/icons";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../components/ui/dropdown-menu";
 import { DataTable, type TableColumn } from "../components/DataTable";
 import { StatusBadge } from "../components/StatusBadge";
 import { ErrorBanner } from "../components/feedback";
@@ -58,7 +59,7 @@ const KINDS: { id: string; label: string }[] = [
   { id: "auth", label: "Авторизация" },
   { id: "fix", label: "FIX / Adapters" },
   { id: "system", label: "Система" },
-  { id: "audit", label: "Audit" },
+  { id: "audit", label: "Аудит" },
 ];
 
 function isoDayStart() {
@@ -100,7 +101,15 @@ export default function LogsPage() {
   const dEndpoint = useDebounced(endpoint, 350);
   const dAdapter = useDebounced(adapter, 350);
 
-  useBreadcrumbs([{ label: "Логи" }, { label: KINDS.find((k) => k.id === kind)?.label || "Все" }]);
+  // Rarely used filters sit under "Ещё фильтры"; the panel opens by itself when one of them is set.
+  const moreValues = [method, ip, requestId, orderId, clientOrderId, endpoint, adapter, errorCode];
+  const moreActive = moreValues.filter(Boolean).length;
+  const [moreOpen, setMoreOpen] = useState(() => moreActive > 0);
+  function resetFilters() {
+    setTo(""); setSeverity(""); setMethod(""); setIp(""); setRequestId(""); setOrderId("");
+    setClientOrderId(""); setEndpoint(""); setAdapter(""); setErrorCode("");
+    setParams(mergeParam(params, "broker_id", ""));
+  }
 
   // The filters, once settled, go back into the URL (today's start is the default and stays out).
   useEffect(() => {
@@ -174,77 +183,99 @@ export default function LogsPage() {
   }
 
   const columns: TableColumn<LogRow>[] = [
-    { id: "time", header: "Время", value: row => dateValue(row.timestamp), cell: row => <button type="button" className="text-accent whitespace-nowrap font-mono text-[10px]" onClick={() => setSelected(row)} aria-label={"Открыть событие " + row.id}>{formatDateTime(row.timestamp)}</button> },
+    { id: "time", header: "Время", value: row => dateValue(row.timestamp), cell: row => <button type="button" className="whitespace-nowrap text-[12px] tabular-nums text-ink underline-offset-2 hover:text-accent hover:underline" onClick={() => setSelected(row)} aria-label={"Открыть событие " + row.id}>{formatDateTime(row.timestamp)}</button> },
     { id: "severity", header: "Важность", value: row => row.severity, cell: row => <StatusBadge status={row.severity} /> },
     { id: "type", header: "Тип", value: row => logTypeLabel(row.type) },
-    { id: "subtype", header: "Событие", value: row => row.subtype, className: "font-mono text-[10px]" },
+    { id: "subtype", header: "Событие", value: row => row.subtype, className: "font-mono text-[11px]" },
     { id: "broker", header: "Брокер", value: row => row.broker_name || row.broker_id },
-    { id: "ip", header: "IP", value: row => row.client_ip, className: "font-mono text-[10px]" },
-    { id: "endpoint", header: "Endpoint", value: row => [row.http_method, row.endpoint].filter(Boolean).join(" "), className: "font-mono text-[10px]" },
+    { id: "ip", header: "IP", value: row => row.client_ip, className: "font-mono text-[11px]" },
+    { id: "endpoint", header: "Endpoint", value: row => [row.http_method, row.endpoint].filter(Boolean).join(" "), className: "font-mono text-[11px]" },
     { id: "status", header: "Статус", value: row => row.status_code ?? row.result, cell: row => <span className={row.status_code && row.status_code >= 400 ? "badge-danger" : row.status_code ? "badge-success" : "badge-muted"}>{row.status_code ?? row.result ?? "—"}</span> },
     { id: "duration", header: "Задержка", value: row => row.response_time_ms, cell: row => formatMs(row.response_time_ms), numeric: true },
-    { id: "request", header: "Request ID", value: row => row.request_id, className: "font-mono text-[10px]" },
+    { id: "request", header: "Request ID", value: row => row.request_id, className: "font-mono text-[11px]" },
   ];
 
   return (
     <div className="space-y-4">
       <PageHeader
-        title="Логи"
+        title="Логи и аудит"
         subtitle={`Показано ${formatNumber(loaded)} · с сервера по ${PAGE_SIZE}${q.isFetching && !q.isFetchingNextPage ? " · обновление…" : ""}`}
         actions={
-          <div className="flex gap-2">
-            <button type="button" className="btn-muted" onClick={() => exportLogs("csv")}>
-              CSV
-            </button>
-            <button type="button" className="btn-muted" onClick={() => exportLogs("json")}>
-              JSON
-            </button>
-          </div>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button type="button" className="btn-muted">
+                <Icons.download size={15} />
+                Экспорт
+                <Icons.chevronDown size={14} />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem onSelect={() => exportLogs("csv")}>CSV</DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => exportLogs("json")}>JSON</DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         }
       />
 
-      <div className="flex flex-wrap gap-1">
+      <nav aria-label="Разделы журнала" className="tab-bar" data-section="infra">
         {KINDS.map((k) => (
           <Link
             key={k.id}
             to={{ pathname: k.id === "all" ? "/logs" : `/logs/${k.id}`, search: params.toString() }}
-            className={kind === k.id ? "btn" : "btn-muted"}
+            aria-current={kind === k.id ? "page" : undefined}
           >
             {k.label}
           </Link>
         ))}
-      </div>
+      </nav>
 
-      <div className="card flex flex-wrap items-center gap-2">
-        <input className="input w-auto" type="datetime-local" aria-label="Начало периода" value={toLocal(from)} onChange={(e) => setFrom(fromLocal(e.target.value))} />
-        <input className="input w-auto" type="datetime-local" aria-label="Конец периода" value={toLocal(to)} onChange={(e) => setTo(fromLocal(e.target.value))} />
-        <select className="input w-auto" aria-label="Фирма" value={brokerId} onChange={(e) => setParams(mergeParam(params, "broker_id", e.target.value))}>
-          <option value="">Все фирмы</option>
-          {(brokers.data?.brokers || []).map((b) => (
-            <option key={b.id} value={b.id}>
-              {b.name}
-            </option>
-          ))}
-        </select>
-        <select className="input w-auto" aria-label="Важность" value={severity} onChange={(e) => setSeverity(e.target.value)}>
-          <option value="">Важность</option>
-          {["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"].map((s) => (
-            <option key={s}>{s}</option>
-          ))}
-        </select>
-        <select className="input w-auto" aria-label="HTTP метод" value={method} onChange={(e) => setMethod(e.target.value)}>
-          <option value="">Метод</option>
-          {["GET", "POST", "PATCH", "DELETE"].map((s) => (
-            <option key={s}>{s}</option>
-          ))}
-        </select>
-        <input className="input min-w-[140px] flex-1" aria-label="IP-адрес" placeholder="IP" value={ip} onChange={(e) => setIp(e.target.value)} />
-        <input className="input min-w-[160px] flex-1" aria-label="Request ID" placeholder="Request ID" value={requestId} onChange={(e) => setRequestId(e.target.value)} />
-        <input className="input min-w-[140px]" aria-label="Order ID" placeholder="Order ID" value={orderId} onChange={(e) => setOrderId(e.target.value)} />
-        <input className="input min-w-[140px]" aria-label="Client Order ID" placeholder="Client Order ID" value={clientOrderId} onChange={(e) => setClientOrderId(e.target.value)} />
-        <input className="input min-w-[140px]" aria-label="Endpoint" placeholder="Endpoint" value={endpoint} onChange={(e) => setEndpoint(e.target.value)} />
-        <input className="input min-w-[120px]" aria-label="Адаптер" placeholder="Adapter" value={adapter} onChange={(e) => setAdapter(e.target.value)} />
-        <input className="input min-w-[140px]" aria-label="Код ошибки" placeholder="Код ошибки" value={errorCode} onChange={(e) => setErrorCode(e.target.value)} />
+      <div className="card space-y-3">
+        <div className="flex flex-wrap items-center gap-2">
+          <input className="input w-auto" type="datetime-local" aria-label="Начало периода" value={toLocal(from)} onChange={(e) => setFrom(fromLocal(e.target.value))} />
+          <span className="text-faint" aria-hidden>—</span>
+          <input className="input w-auto" type="datetime-local" aria-label="Конец периода" value={toLocal(to)} onChange={(e) => setTo(fromLocal(e.target.value))} />
+          <select className="input w-auto" aria-label="Фирма" value={brokerId} onChange={(e) => setParams(mergeParam(params, "broker_id", e.target.value))}>
+            <option value="">Все фирмы</option>
+            {(brokers.data?.brokers || []).map((b) => (
+              <option key={b.id} value={b.id}>
+                {b.name}
+              </option>
+            ))}
+          </select>
+          <select className="input w-auto" aria-label="Важность" value={severity} onChange={(e) => setSeverity(e.target.value)}>
+            <option value="">Любая важность</option>
+            {["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"].map((s) => (
+              <option key={s}>{s}</option>
+            ))}
+          </select>
+          <button type="button" className="btn-muted" aria-expanded={moreOpen} aria-controls="logs-more-filters" onClick={() => setMoreOpen((v) => !v)}>
+            Ещё фильтры
+            {moreActive > 0 && <span className="rounded-full bg-subtle px-1.5 text-[11px] font-semibold text-ink">{moreActive}</span>}
+            <Icons.chevronDown size={14} className={moreOpen ? "rotate-180 transition-transform" : "transition-transform"} />
+          </button>
+          {(moreActive > 0 || severity || brokerId || to) && (
+            <button type="button" className="text-[13px] font-medium text-muted hover:text-ink" onClick={resetFilters}>
+              Сбросить
+            </button>
+          )}
+        </div>
+        {moreOpen && (
+          <div id="logs-more-filters" className="grid gap-2 border-t border-line pt-3 sm:grid-cols-2 lg:grid-cols-4">
+            <select className="input" aria-label="HTTP метод" value={method} onChange={(e) => setMethod(e.target.value)}>
+              <option value="">Любой метод</option>
+              {["GET", "POST", "PATCH", "DELETE"].map((s) => (
+                <option key={s}>{s}</option>
+              ))}
+            </select>
+            <input className="input" aria-label="IP-адрес" placeholder="IP" value={ip} onChange={(e) => setIp(e.target.value)} />
+            <input className="input" aria-label="Request ID" placeholder="Request ID" value={requestId} onChange={(e) => setRequestId(e.target.value)} />
+            <input className="input" aria-label="Order ID" placeholder="Order ID" value={orderId} onChange={(e) => setOrderId(e.target.value)} />
+            <input className="input" aria-label="Client Order ID" placeholder="Client Order ID" value={clientOrderId} onChange={(e) => setClientOrderId(e.target.value)} />
+            <input className="input" aria-label="Endpoint" placeholder="Endpoint" value={endpoint} onChange={(e) => setEndpoint(e.target.value)} />
+            <input className="input" aria-label="Адаптер" placeholder="Адаптер" value={adapter} onChange={(e) => setAdapter(e.target.value)} />
+            <input className="input" aria-label="Код ошибки" placeholder="Код ошибки" value={errorCode} onChange={(e) => setErrorCode(e.target.value)} />
+          </div>
+        )}
       </div>
 
       {q.error && <ErrorBanner error={q.error} onRetry={() => q.refetch()} />}
