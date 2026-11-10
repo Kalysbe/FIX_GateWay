@@ -30,6 +30,24 @@ test("уведомления: выбор непрочитанных и отме�
   await expect(page.getByRole("button", { name: /Непрочитанные/ })).toHaveAttribute("aria-pressed", "true");
 });
 
+test("логи: у отклонённой заявки видно JSON, который прислал брокер", async ({ page }) => {
+  const row = {
+    id: "e1", timestamp: "2026-11-10T07:39:09Z", type: "error", subtype: "VALIDATION_ERROR", severity: "ERROR",
+    broker_name: "Сенти", http_method: "POST", endpoint: "/api/v1/orders", status_code: 422,
+    error_code: "ORDER_REJECTED", error_message: "Вам запрещена работа по данному торговому счету (код QUIK 8637225)", failure_stage: "quik",
+  };
+  await mockApi(page, {
+    "GET /api/v1/admin/logs": () => ({ logs: [row], next_cursor: null }),
+    "GET /api/v1/admin/brokers": () => ({ brokers: [] }),
+    "GET /api/v1/admin/logs/e1": () => ({ log: { ...row, request_body: '{"account_id":"SENTI01","Price":100.50,"Qty":10}' } }),
+  });
+  await page.goto("/logs/errors");
+  await page.getByRole("button", { name: "Открыть событие e1" }).click();
+  const body = page.getByTestId("log-request-body");
+  await expect(body).toBeVisible();
+  await expect(body).toHaveText('{\n  "account_id": "SENTI01",\n  "Price": 100.50,\n  "Qty": 10\n}');
+});
+
 test("логи: все фильтры переживают перезагрузку и смену раздела", async ({ page }) => {
   const sent = await mockApi(page, {
     "GET /api/v1/admin/logs": () => ({ logs: [], next_cursor: null }),

@@ -10,6 +10,7 @@ import { DataTable, type TableColumn } from "../components/DataTable";
 import { StatusBadge } from "../components/StatusBadge";
 import { ErrorBanner } from "../components/feedback";
 import { dateValue } from "../lib/table";
+import { prettyJsonText } from "../lib/prettyJson";
 import { Modal } from "../components/Modal";
 
 const PAGE_SIZE = 25;
@@ -49,6 +50,7 @@ export type LogRow = {
   error_message?: string;
   failure_stage?: string;
   message?: string;
+  request_body?: string;
 };
 
 const KINDS: { id: string; label: string }[] = [
@@ -345,6 +347,17 @@ function LogDetails({ row, onClose }: { row: LogRow; onClose: () => void }) {
           {d.failure_stage && <Row k="Stage" v={d.failure_stage} />}
           {d.message && <Row k="Message" v={d.message} />}
         </dl>
+        {d.request_body && (
+          <div className="mt-4">
+            <div className="mb-1 text-sm text-muted">Запрос брокера (JSON)</div>
+            <pre
+              data-testid="log-request-body"
+              className="max-h-80 overflow-auto rounded-md border border-line bg-subtle p-3 font-mono text-xs whitespace-pre-wrap break-all"
+            >
+              {prettyJsonText(d.request_body)}
+            </pre>
+          </div>
+        )}
         {d.order_id && (
           <Link to={`/orders/${d.order_id}`} className="mt-4 inline-block text-sm font-medium text-accent">
             Открыть заявку и полный trace →

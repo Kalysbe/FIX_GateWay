@@ -115,7 +115,7 @@ func (s *Store) List(ctx context.Context, f Filter) ([]Event, bool, error) {
 	out := make([]Event, 0, len(found))
 	for _, e := range found {
 		c := *e
-		c.Before, c.After, c.Metadata = nil, nil, nil
+		c.Before, c.After, c.Metadata, c.RequestBody = nil, nil, nil, ""
 		out = append(out, c)
 	}
 	return out, more, nil

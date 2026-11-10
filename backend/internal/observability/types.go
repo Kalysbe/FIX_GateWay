@@ -166,6 +166,7 @@ type Event struct {
 	Before         json.RawMessage `json:"before,omitempty"`
 	After          json.RawMessage `json:"after,omitempty"`
 	Metadata       json.RawMessage `json:"metadata,omitempty"`
+	RequestBody    string          `json:"request_body,omitempty"` // broker's JSON as sent, failed requests only
 	CreatedAt      time.Time       `json:"created_at"`
 }
 
