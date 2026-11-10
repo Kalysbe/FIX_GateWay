@@ -40,7 +40,7 @@ export default function LoginPage() {
       <div className="login-window">
         <aside className="login-story" aria-label="FIX Gateway">
           <div className="login-brand">
-            <div className="login-brand-mark"><Icons.logo size={25} /></div>
+            <img src="/logo.png" alt="" width={45} height={45} className="login-brand-logo" />
             <div>
               <strong>FIX Gateway</strong>
               <span>Операционная консоль</span>
@@ -59,7 +59,7 @@ export default function LoginPage() {
               </div>
               <div className="login-network-line"><Icons.chevron size={12} /></div>
               <div className="login-network-node login-network-gateway">
-                <div className="login-network-icon"><Icons.logo size={27} /></div>
+                <div className="login-network-icon"><img src="/logo.png" alt="" width={30} height={30} /></div>
                 <span>Gateway</span>
               </div>
               <div className="login-network-line"><Icons.chevron size={12} /></div>

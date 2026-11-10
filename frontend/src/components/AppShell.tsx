@@ -78,9 +78,7 @@ function SidebarContent({ path, collapsed, onNavigate }: { path: string; collaps
   return (
     <>
       <Link to="/" className={cn("flex h-14 shrink-0 items-center gap-2.5 border-b border-sidebar-border", collapsed ? "justify-center px-0" : "px-4")} onClick={onNavigate} aria-label={collapsed ? "FIX Gateway" : undefined}>
-        <div className="brand-mark flex h-8 w-8 shrink-0 items-center justify-center rounded-lg">
-          <Icons.logo size={16} />
-        </div>
+        <img src="/logo.png" alt="" width={32} height={32} className="h-8 w-8 shrink-0" />
         {!collapsed && (
           <div className="min-w-0 leading-tight">
             <div className="truncate text-[14px] font-semibold tracking-tight text-ink">FIX Gateway</div>

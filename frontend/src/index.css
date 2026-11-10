@@ -313,7 +313,6 @@ a:focus-visible, summary:focus-visible { outline: 2px solid var(--ring); outline
 .app-shell { isolation: isolate; }
 .app-sidebar { width: 248px; transition: width var(--motion-surface) var(--ease-out); }
 .app-sidebar[data-collapsed="true"] { width: 60px; }
-.brand-mark { background: linear-gradient(145deg, #4cbcc6, #1d6f7a); color: #fff; box-shadow: 0 4px 10px -2px rgb(47 154 166 / 0.45); }
 .nav-group-label { padding: 16px 10px 6px; color: var(--faint); font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: .1em; white-space: nowrap; }
 .nav-link { position: relative; display: flex; align-items: center; gap: 10px; min-height: 34px; padding: 0 10px; border-radius: 7px; color: var(--sidebar-foreground); font-size: 13px; font-weight: 500; white-space: nowrap; transition: background-color var(--motion-feedback) ease, color var(--motion-feedback) ease; }
 .nav-link svg { color: var(--faint); flex-shrink: 0; transition: color var(--motion-feedback) ease; }
@@ -586,7 +585,6 @@ a:focus-visible, summary:focus-visible { outline: 2px solid var(--ring); outline
   radial-gradient(900px 340px at 0% 0%, color-mix(in srgb, var(--hue-overview) var(--app-glow), transparent), transparent 70%),
   radial-gradient(800px 320px at 100% 0%, color-mix(in srgb, var(--hue-admin) var(--app-glow), transparent), transparent 70%);
   background-repeat: no-repeat; }
-.brand-mark { background: linear-gradient(140deg, var(--hue-overview), var(--hue-trading)); box-shadow: 0 4px 12px -3px color-mix(in srgb, var(--hue-trading) 55%, transparent); }
 .user-avatar { background: linear-gradient(140deg, var(--hue-admin-soft), var(--hue-trading-soft)); color: var(--hue-admin-ink); border-color: color-mix(in srgb, var(--hue-admin) 25%, transparent); }
 
 /* Dashboard tiles: a hue stripe on top and an icon chip. */

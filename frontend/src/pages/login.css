@@ -34,17 +34,7 @@
 }
 
 .login-brand { display: flex; align-items: center; gap: 13px; }
-.login-brand-mark {
-  display: grid;
-  place-items: center;
-  flex-shrink: 0;
-  width: 45px;
-  height: 45px;
-  border: 1px solid #ffffff26;
-  border-radius: 13px;
-  color: #b9eded;
-  background: #ffffff0d;
-}
+.login-brand-logo { flex-shrink: 0; width: 45px; height: 45px; }
 .login-brand strong { display: block; font-size: 18px; font-weight: 600; letter-spacing: -.035em; }
 .login-brand span { display: block; margin-top: 3px; color: #b2c9cc; font-size: 11px; }
 .login-eyebrow { color: #a2cdd0; font-size: 10px; font-weight: 500; letter-spacing: .13em; text-transform: uppercase; }
@@ -145,7 +135,7 @@
   .login-page { padding: 24px 16px; }
   .login-window { grid-template-columns: 1fr; width: min(100%, 440px); min-height: auto; border-radius: 20px; }
   .login-story { display: block; padding: 24px 28px; }
-  .login-brand-mark { width: 41px; height: 41px; border-radius: 11px; }
+  .login-brand-logo { width: 41px; height: 41px; }
   .login-brand strong { font-size: 17px; }
   .login-story-content, .login-story-footer { display: none; }
   .login-form-area { padding: 32px 28px 28px; }
