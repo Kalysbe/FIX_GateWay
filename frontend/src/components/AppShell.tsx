@@ -136,7 +136,7 @@ function HeaderNav({ path }: { path: string }) {
 
 function UserMenu() {
   const user = getSessionUser();
-  const displayName = user?.full_name || user?.email || "Админ";
+  const displayName = user?.full_name || user?.username || "Админ";
   return (
     <DropdownMenu>
       <Tooltip>
@@ -144,7 +144,7 @@ function UserMenu() {
           <DropdownMenuTrigger asChild>
             <button type="button" className="user-menu-trigger">
               <span aria-hidden className="user-avatar flex h-8 w-8 shrink-0 items-center justify-center text-[12px] font-semibold">
-                {userInitials(user?.full_name, user?.email)}
+                {userInitials(user?.full_name, user?.username)}
               </span>
               <span className="sr-only">Профиль: {displayName}</span>
             </button>

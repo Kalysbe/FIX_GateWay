@@ -81,15 +81,15 @@ func TestExecutionInboxQuarantineAPI(t *testing.T) {
 		return nil
 	}, nil)
 
-	email := uuid.NewString() + "@example.test"
-	if err := users.EnsureAdmin(ctx, email, "quarantine-test-password"); err != nil {
+	username := "user-" + uuid.NewString()
+	if err := users.EnsureAdmin(ctx, username, "quarantine-test-password"); err != nil {
 		t.Fatal(err)
 	}
 	token := func(role string) string {
-		if _, err := pool.Exec(ctx, `UPDATE users SET role_code=$2 WHERE email=$1`, email, role); err != nil {
+		if _, err := pool.Exec(ctx, `UPDATE users SET role_code=$2 WHERE username=$1`, username, role); err != nil {
 			t.Fatal(err)
 		}
-		u, err := users.Authenticate(ctx, email, "quarantine-test-password")
+		u, err := users.Authenticate(ctx, username, "quarantine-test-password")
 		if err != nil {
 			t.Fatal(err)
 		}

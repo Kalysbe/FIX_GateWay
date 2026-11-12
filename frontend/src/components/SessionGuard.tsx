@@ -28,7 +28,7 @@ export function SessionGuard() {
   const expiresAt = sessionExpiresAt(token);
   const left = expiresAt ? expiresAt - now : Infinity;
   const warn = left <= SESSION_WARN_MS && left > 0 && dismissedFor !== token;
-  const email = getSessionUser()?.email ?? "";
+  const username = getSessionUser()?.username ?? "";
 
   // The current token's own expiry timer; a replaced token's timer does nothing.
   useEffect(() => watchSessionExpiry(), [token]);
@@ -50,8 +50,8 @@ export function SessionGuard() {
     setBusy(true);
     setError("");
     try {
-      const res = await api<{ token: string; user?: { id?: string; email?: string; role?: string; full_name?: string } }>(
-        "/api/v1/admin/login", { method: "POST", body: JSON.stringify({ email, password }) });
+      const res = await api<{ token: string; user?: { id?: string; username?: string; role?: string; full_name?: string } }>(
+        "/api/v1/admin/login", { method: "POST", body: JSON.stringify({ username, password }) });
       setToken(res.token);
       if (res.user) setSessionUser(res.user);
       setPassword("");
@@ -69,7 +69,7 @@ export function SessionGuard() {
   return <Modal title="Сессия скоро закончится" onClose={() => setDismissedFor(token)}>
     <form onSubmit={extend} className="space-y-3" noValidate>
       <p className="text-sm text-muted">
-        Через <strong className="font-mono text-ink" aria-live="polite">{clock(left)}</strong> консоль выйдет из учётной записи {email && <span className="font-medium text-ink">{email}</span>}.
+        Через <strong className="font-mono text-ink" aria-live="polite">{clock(left)}</strong> консоль выйдет из учётной записи {username && <span className="font-medium text-ink">{username}</span>}.
         Чтобы продолжить работу на этой странице, введите пароль: открытые фильтры и введённые данные сохранятся.
       </p>
       <label className="block space-y-1.5 text-sm">

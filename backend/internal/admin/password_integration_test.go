@@ -28,17 +28,17 @@ func TestExplicitPasswordRotationRevokesSessions(t *testing.T) {
 	}
 	defer pool.Close()
 	store := NewUserStore(pool)
-	email := uuid.NewString() + "@example.test"
-	if err := store.EnsureAdmin(ctx, email, "admin123"); err != nil {
+	username := "user-" + uuid.NewString()
+	if err := store.EnsureAdmin(ctx, username, "admin123"); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.RefuseDefaultPassword(ctx, email); err == nil {
+	if err := store.RefuseDefaultPassword(ctx, username); err == nil {
 		t.Fatal("existing default password accepted")
 	}
-	if err := store.EnsureAdmin(ctx, email, "bootstrap-change-does-not-rotate"); err != nil {
+	if err := store.EnsureAdmin(ctx, username, "bootstrap-change-does-not-rotate"); err != nil {
 		t.Fatal(err)
 	}
-	user, err := store.Authenticate(ctx, email, "admin123")
+	user, err := store.Authenticate(ctx, username, "admin123")
 	if err != nil {
 		t.Fatal("bootstrap unexpectedly rotated existing account")
 	}
@@ -52,19 +52,19 @@ func TestExplicitPasswordRotationRevokesSessions(t *testing.T) {
 	}
 	defer logs.Close()
 	auditLog := audit.NewStore(logs)
-	if err := store.RotatePassword(ctx, auditLog, email, "new-explicit-password-123"); err != nil {
+	if err := store.RotatePassword(ctx, auditLog, username, "new-explicit-password-123"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.AuthenticateSession(ctx, "fixture-jwt", token); err == nil {
 		t.Fatal("old session survived password rotation")
 	}
-	if _, err := store.Authenticate(ctx, email, "admin123"); err == nil {
+	if _, err := store.Authenticate(ctx, username, "admin123"); err == nil {
 		t.Fatal("old password survived rotation")
 	}
-	if err := store.RefuseDefaultPassword(ctx, email); err != nil {
+	if err := store.RefuseDefaultPassword(ctx, username); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.Authenticate(ctx, email, "new-explicit-password-123"); err != nil {
+	if _, err := store.Authenticate(ctx, username, "new-explicit-password-123"); err != nil {
 		t.Fatal(err)
 	}
 	records, err := auditLog.Records(ctx)

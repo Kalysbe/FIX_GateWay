@@ -756,14 +756,14 @@ func (s *Server) adminLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		Email    string `json:"email"`
+		Username string `json:"username"`
 		Password string `json:"password"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid json")
 		return
 	}
-	u, err := s.users.Authenticate(r.Context(), req.Email, req.Password)
+	u, err := s.users.Authenticate(r.Context(), req.Username, req.Password)
 	if err != nil {
 		if errors.Is(err, admin.ErrAuthenticationUnavailable) {
 			writeErr(w, http.StatusServiceUnavailable, "authentication temporarily unavailable")
@@ -786,14 +786,14 @@ func (s *Server) adminLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"token": token,
-		"user":  map[string]any{"id": u.ID, "email": u.Email, "role": u.RoleCode, "full_name": u.FullName},
+		"user":  map[string]any{"id": u.ID, "username": u.Username, "role": u.RoleCode, "full_name": u.FullName},
 	})
 	s.emitObs(observability.Event{
 		Type: observability.TypeAuth, Subtype: observability.AuthSuccess, ClientIP: ip,
 		Endpoint: r.URL.Path, HTTPMethod: r.Method, RequestID: observability.RequestIDFrom(r.Context()),
 		ActorType: "admin", ActorID: u.ID.String(), Message: "admin login",
 	})
-	s.writeAdminAudit(r, "USER_LOGIN", "user", u.ID.String(), nil, nil, map[string]any{"email": u.Email})
+	s.writeAdminAudit(r, "USER_LOGIN", "user", u.ID.String(), nil, nil, map[string]any{"username": u.Username})
 }
 
 func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {

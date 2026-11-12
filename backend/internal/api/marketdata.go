@@ -134,7 +134,7 @@ func (s *Server) patchMarketDataSettings(w http.ResponseWriter, r *http.Request)
 	}
 	admin, _ := AdminFromContext(r.Context())
 	before, _ := s.marketClasses.Classes(r.Context())
-	classes, err := s.marketClasses.SetClasses(r.Context(), req.Classes, admin.Email)
+	classes, err := s.marketClasses.SetClasses(r.Context(), req.Classes, admin.Username)
 	if err != nil {
 		if errors.Is(err, quikexport.ErrInvalidClasses) {
 			writeErr(w, http.StatusBadRequest, err.Error())

@@ -25,7 +25,7 @@ function sql(statement){return command(['exec','-T','postgres','psql','-U','gate
 // which stays until FINISHED_ORDER_GRACE after QUIK closes it.
 function localOrder(id){assert.match(id,/^[0-9a-f-]{36}$/i);return JSON.parse(sql(`SELECT json_build_object('status',status,'filled_quantity',filled_quantity)::text FROM orders o WHERE id='${id}'`));}
 async function until(fn,timeout=60000){const end=Date.now()+timeout;while(Date.now()<end){try{if(await fn())return;}catch{}await delay(300);}throw Error('Recovery timed out');}
-const {token:admin}=await call('/api/v1/admin/login','','POST',{email:'admin@localhost',password:'admin123'});
+const {token:admin}=await call('/api/v1/admin/login','','POST',{username:'admin',password:'admin123'});
 const {broker}=await call('/api/v1/admin/brokers',admin,'POST',{code:`RECOVERY-${randomUUID()}`,name:'Execution journal recovery test'},201);
 const {token}=await call(`/api/v1/admin/brokers/${broker.id}/tokens`,admin,'POST',{name:'Recovery',quik_firm:'SIM',expires_in_days:30,permissions:['orders:create','orders:read']},201);
 for(const restart of [false,true]){

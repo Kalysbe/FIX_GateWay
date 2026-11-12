@@ -105,7 +105,7 @@ async function main() {
   assert.ok(containers.some(c=>c.Project==='fix-gateway-local' && c.State==='running' &&
     c.Publishers.some(p=>p.PublishedPort===28080 && p.TargetPort===8080)));
   await expect('/ready');
-  admin=(await expect('/api/v1/admin/login','','POST',{email:'admin@localhost',password:'admin123'})).token;
+  admin=(await expect('/api/v1/admin/login','','POST',{username:'admin',password:'admin123'})).token;
   const adapters=(await expect('/api/v1/admin/adapters',admin)).adapters.filter(a=>a.enabled);
   assert.ok(adapters.length===2 && adapters.every(a=>a.host==='fixsimulator' && a.type==='simulator'));
   const {broker}=await expect('/api/v1/admin/brokers',admin,'POST',{code:prefix,name:'Isolated reliability test'},201);

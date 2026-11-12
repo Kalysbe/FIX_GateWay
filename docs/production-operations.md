@@ -37,7 +37,7 @@ Gateway и backup работают как UID/GID `10001:10001`, frontend Nginx 
 Приватный env-файл содержит пути, origin и публичные параметры. Обязательные переменные:
 
 ```dotenv
-ADMIN_EMAIL=operator@example.org
+ADMIN_USERNAME=operator
 PUBLIC_ORIGIN=https://gateway.example.org
 GRPC_SERVER_NAME=grpc.gateway.example.org
 GATEWAY_SECRETS_DIR=/srv/fix-gateway/secrets

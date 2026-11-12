@@ -18,8 +18,8 @@ export function roleLabel(role?: string | null): string {
   return ROLE_LABEL[role.toUpperCase()] || role;
 }
 
-export function userInitials(name?: string, email?: string): string {
-  const src = (name || email || "A").trim();
+export function userInitials(name?: string, username?: string): string {
+  const src = (name || username || "A").trim();
   const parts = src.split(/[\s@._-]+/).filter(Boolean);
   if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase();
   return src.slice(0, 2).toUpperCase();

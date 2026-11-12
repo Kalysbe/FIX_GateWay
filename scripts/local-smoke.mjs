@@ -104,7 +104,7 @@ async function main() {
   'The isolated access proxy must own the smoke endpoint');
   await request('/ready');
   const login = await request('/api/v1/admin/login', '', 'POST', {
-    email: 'admin@localhost', password: 'admin123',
+    username: 'admin', password: 'admin123',
   });
   const admin = login.token;
   assert.ok(admin, 'Missing admin token');

@@ -44,7 +44,7 @@ export function getSessionUser(): SessionUser | null {
   }
   const payload = decodeJwtPayload(getToken());
   if (!payload) return null;
-  return { email: payload.email, role: payload.role };
+  return { username: payload.username, role: payload.role };
 }
 
 export function clearToken() {
@@ -52,7 +52,7 @@ export function clearToken() {
   sessionStorage.removeItem(USER_KEY);
 }
 
-type JwtPayload = { exp?: number; email?: string; role?: string; sub?: string };
+type JwtPayload = { exp?: number; username?: string; role?: string; sub?: string };
 
 function decodeJwtPayload(token: string): JwtPayload | null {
   const parts = token.split(".");

@@ -102,11 +102,11 @@ INSERT INTO public."Orders" SELECT n, c, (now() AT TIME ZONE 'Asia/Bishkek')::da
 	if err != nil {
 		t.Fatal(err)
 	}
-	email := uuid.NewString() + "@example.test"
-	if err := users.EnsureAdmin(ctx, email, "params-test-password"); err != nil {
+	username := "user-" + uuid.NewString()
+	if err := users.EnsureAdmin(ctx, username, "params-test-password"); err != nil {
 		t.Fatal(err)
 	}
-	u, err := users.Authenticate(ctx, email, "params-test-password")
+	u, err := users.Authenticate(ctx, username, "params-test-password")
 	if err != nil {
 		t.Fatal(err)
 	}

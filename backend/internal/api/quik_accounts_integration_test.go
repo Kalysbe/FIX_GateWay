@@ -77,11 +77,11 @@ CREATE TABLE public."Securities" ("TradeDate" timestamp,"ClassCode" text,"SecCod
 	if err != nil {
 		t.Fatal(err)
 	}
-	email := uuid.NewString() + "@example.test"
-	if err := users.EnsureAdmin(ctx, email, "accounts-test-password"); err != nil {
+	username := "user-" + uuid.NewString()
+	if err := users.EnsureAdmin(ctx, username, "accounts-test-password"); err != nil {
 		t.Fatal(err)
 	}
-	u, err := users.Authenticate(ctx, email, "accounts-test-password")
+	u, err := users.Authenticate(ctx, username, "accounts-test-password")
 	if err != nil {
 		t.Fatal(err)
 	}

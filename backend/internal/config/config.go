@@ -43,7 +43,7 @@ type Config struct {
 	QuikExportDatabaseURL    string
 	JWTSecret                string
 	APITokenPepper           string
-	AdminEmail               string
+	AdminUsername            string
 	AdminPassword            string
 	LBStrategy               string
 	OutboxPollInterval       time.Duration
@@ -126,7 +126,7 @@ func Load() Config {
 		QuikExportDatabaseURL:    getEnv("QUIK_EXPORT_DATABASE_URL", ""),
 		JWTSecret:                getEnv("JWT_SECRET", "dev-jwt-secret-change-me"),
 		APITokenPepper:           getEnv("API_TOKEN_PEPPER", "dev-token-pepper-change-me"),
-		AdminEmail:               getEnv("ADMIN_EMAIL", "admin@localhost"),
+		AdminUsername:            adminUsername(),
 		AdminPassword:            getEnv("ADMIN_PASSWORD", "admin123"),
 		LBStrategy:               getEnv("LB_STRATEGY", "least_connections"),
 		OutboxPollInterval:       getDuration("OUTBOX_POLL_INTERVAL", 500*time.Millisecond),
@@ -287,6 +287,22 @@ func getEnv(key, def string) string {
 		return v
 	}
 	return def
+}
+
+// adminUsername is the bootstrap administrator's login: ADMIN_USERNAME, or for
+// an older setup the part of ADMIN_EMAIL before "@" — the same login migration
+// 43 gave that account.
+func adminUsername() string {
+	if v := strings.TrimSpace(os.Getenv("ADMIN_USERNAME")); v != "" {
+		return v
+	}
+	if v := strings.TrimSpace(os.Getenv("ADMIN_EMAIL")); v != "" {
+		if at := strings.Index(v, "@"); at > 0 {
+			return v[:at]
+		}
+		return v
+	}
+	return "admin"
 }
 
 // getEnvAllowEmpty is getEnv for settings where an explicit empty value differs

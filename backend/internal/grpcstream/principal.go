@@ -112,7 +112,7 @@ func (s *Service) authenticate(ctx context.Context, md metadata.MD, raw string) 
 	p.role = claims.RoleCode
 	p.expires = claims.ExpiresAt.Time
 	p.info.UserID = claims.UserID
-	p.info.Email = claims.Email
+	p.info.Username = claims.Username
 	if len(md.Get("x-browser-bridge")) == 1 && strings.EqualFold(md.Get("x-browser-bridge")[0], "true") {
 		p.info.Transport = "Browser → gRPC"
 	}

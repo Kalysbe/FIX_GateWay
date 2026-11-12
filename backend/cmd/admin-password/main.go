@@ -24,7 +24,7 @@ func main() {
 }
 func run() error {
 	path := flag.String("new-password-file", "", "private file with new password (never pass a password as an argument)")
-	email := flag.String("email", "", "super administrator email; defaults to ADMIN_EMAIL")
+	username := flag.String("username", "", "super administrator login; defaults to ADMIN_USERNAME")
 	flag.Parse()
 	if *path == "" {
 		return fmt.Errorf("-new-password-file required")
@@ -47,8 +47,8 @@ func run() error {
 	if err := cfg.Validate(); err != nil {
 		return err
 	}
-	if *email == "" {
-		*email = cfg.AdminEmail
+	if *username == "" {
+		*username = cfg.AdminUsername
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
@@ -62,7 +62,7 @@ func run() error {
 		return fmt.Errorf("log directory unavailable")
 	}
 	defer logs.Close()
-	if err := admin.NewUserStore(pool).RotatePassword(ctx, audit.NewStore(logs), *email, password); err != nil {
+	if err := admin.NewUserStore(pool).RotatePassword(ctx, audit.NewStore(logs), *username, password); err != nil {
 		return err
 	}
 	return nil

@@ -127,14 +127,14 @@ func TestSecurityAuditDatabase(t *testing.T) {
 		t.Fatalf("unauthorized request changed order: %s", status)
 	}
 	t.Run("admin_session_revocation", func(t *testing.T) {
-		email := uuid.NewString() + "@example.test"
-		if err := users.EnsureAdmin(ctx, email, "audit-test-password"); err != nil {
+		username := "user-" + uuid.NewString()
+		if err := users.EnsureAdmin(ctx, username, "audit-test-password"); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := pool.Exec(ctx, `UPDATE users SET role_code='READ_ONLY' WHERE email=$1`, email); err != nil {
+		if _, err := pool.Exec(ctx, `UPDATE users SET role_code='READ_ONLY' WHERE username=$1`, username); err != nil {
 			t.Fatal(err)
 		}
-		u, err := users.Authenticate(ctx, email, "audit-test-password")
+		u, err := users.Authenticate(ctx, username, "audit-test-password")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -198,11 +198,11 @@ func TestSecurityAuditDatabase(t *testing.T) {
 		}
 	})
 	t.Run("password_update_revokes_session_without_explicit_timestamp", func(t *testing.T) {
-		email := uuid.NewString() + "@example.test"
-		if err := users.EnsureAdmin(ctx, email, "audit-test-password"); err != nil {
+		username := "user-" + uuid.NewString()
+		if err := users.EnsureAdmin(ctx, username, "audit-test-password"); err != nil {
 			t.Fatal(err)
 		}
-		u, err := users.Authenticate(ctx, email, "audit-test-password")
+		u, err := users.Authenticate(ctx, username, "audit-test-password")
 		if err != nil {
 			t.Fatal(err)
 		}

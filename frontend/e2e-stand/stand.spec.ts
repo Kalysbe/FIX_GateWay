@@ -1,12 +1,12 @@
 import { expect, test, type Page } from "@playwright/test";
 
 // Local stand credentials from deploy/docker-compose.local.yml (development only).
-const EMAIL = process.env.STAND_EMAIL ?? "admin@localhost";
+const USERNAME = process.env.STAND_USERNAME ?? "admin";
 const PASSWORD = process.env.STAND_PASSWORD ?? "admin123";
 
 async function login(page: Page) {
   await page.goto("/login");
-  await page.getByLabel("Электронная почта").fill(EMAIL);
+  await page.getByLabel("Логин").fill(USERNAME);
   await page.getByLabel("Пароль", { exact: true }).fill(PASSWORD);
   await page.getByRole("button", { name: "Войти в консоль" }).click();
   await expect(page).toHaveURL(/\/$/);

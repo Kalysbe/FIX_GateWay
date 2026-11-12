@@ -63,7 +63,8 @@ services:
       QUIK_EXPORT_DATABASE_URL: ${QUIK_EXPORT_DATABASE_URL:-}
       JWT_SECRET: ${JWT_SECRET:-dev-jwt-secret-change-me}
       API_TOKEN_PEPPER: ${API_TOKEN_PEPPER:-dev-token-pepper-change-me}
-      ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@localhost}
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin123}
       LB_STRATEGY: ${LB_STRATEGY:-least_connections}
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173,http://localhost:3000}

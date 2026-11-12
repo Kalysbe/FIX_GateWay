@@ -14,7 +14,7 @@ type ConnectionInfo struct {
 	BrokerID    int64     `json:"broker_id,omitempty"`
 	BrokerCode  string    `json:"broker_code,omitempty"`
 	BrokerName  string    `json:"broker_name,omitempty"`
-	Email       string    `json:"email"`
+	Username    string    `json:"username"`
 	Peer        string    `json:"peer"`
 	Transport   string    `json:"transport"`
 	ConnectedAt time.Time `json:"connected_at"`

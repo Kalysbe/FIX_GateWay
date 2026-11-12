@@ -4,7 +4,7 @@ import { defineConfig, devices } from "@playwright/test";
 // the real gateway, PostgreSQL and FIX simulator, no mocks. Start the stand first.
 // This build of the console is served by `vite preview` and forwards /api to the
 // stand's gateway (GATEWAY_URL, default localhost:28080); STAND_URL points at an
-// already running console instead. STAND_EMAIL / STAND_PASSWORD override the
+// already running console instead. STAND_USERNAME / STAND_PASSWORD override the
 // stand's documented credentials.
 const PORT = 5180;
 const external = process.env.STAND_URL;

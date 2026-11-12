@@ -30,7 +30,7 @@ assert.equal(sql('SELECT version FROM schema_migrations'),String(latestMigration
 assert.equal(sql('SELECT dirty FROM schema_migrations'),'f');
 // Broker REST returns only QUIK Orders rows; the request lifecycle is the local ledger.
 const localStatus=id=>sql(`SELECT status FROM orders WHERE id='${id}'`);
-const {token:admin}=await call('/api/v1/admin/login','','POST',{email:'admin@localhost',password:'admin123'});
+const {token:admin}=await call('/api/v1/admin/login','','POST',{username:'admin',password:'admin123'});
 const {broker}=await call('/api/v1/admin/brokers',admin,'POST',{code:`VERIFY-${randomUUID()}`,name:'Release verification'},201);
 const {token}=await call(`/api/v1/admin/brokers/${broker.id}/tokens`,admin,'POST',{name:'Verification',quik_firm:'SIM',expires_in_days:30,permissions:['orders:create','orders:read']},201);
 const payload={ClassCode:'TQBR',SecCode:'SBER',Operation:'Купля',Price:100,Qty:1,Account:'VERIFY',ClientCode:'VERIFY'};

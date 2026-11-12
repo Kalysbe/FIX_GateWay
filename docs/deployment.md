@@ -46,7 +46,7 @@ Services:
 Default admin:
 
 ```text
-email: admin@localhost
+login: admin
 password: admin123
 ```
 
@@ -69,7 +69,7 @@ password: admin123
 | `DOCS_PUBLIC` | Serve Swagger/OpenAPI. Defaults to off in production |
 | `DEFAULT_RATE_LIMIT_RPS` / `DEFAULT_ORDER_RATE_LIMIT` | Per-token request and order rate limits |
 | `AUTH_FAIL_MAX_PER_MINUTE` | Brute-force threshold for failed Bearer auth per IP |
-| `ADMIN_EMAIL` / `ADMIN_PASSWORD` | Bootstrap admin |
+| `ADMIN_USERNAME` / `ADMIN_PASSWORD` | Bootstrap admin (login; an older `ADMIN_EMAIL` is used as the part before `@`) |
 | `LB_STRATEGY` | `least_connections` (default), `round_robin`, `weighted_round_robin` |
 | `CORS_ORIGINS` | Comma-separated origins |
 | `QUIK_EXPORT_DATABASE_URL` | Read-only QUIK database: `Orders`, `Params`, `Securities`, `Classes`, `Trdaccs`, `Firms`, `Trades`, `MoneyLimits` and `DepoLimits`. Without it no order can be accepted. The QUIK Module API is not used |

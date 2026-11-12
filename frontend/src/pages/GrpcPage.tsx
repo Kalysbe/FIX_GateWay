@@ -8,7 +8,7 @@ import { PageHeader } from "../components/PageHeader";
 import { ErrorBanner } from "../components/feedback";
 import { DataTable, type TableColumn } from "../components/DataTable";
 
-type Connection = { id: string; user_id: string; email: string; role: string; broker_id?: number; broker_code?: string; broker_name?: string; transport: string; peer: string; connected_at: string; topics: string[]; paths: string[] };
+type Connection = { id: string; user_id: string; username: string; role: string; broker_id?: number; broker_code?: string; broker_name?: string; transport: string; peer: string; connected_at: string; topics: string[]; paths: string[] };
 type Snapshot = { instance_id: string; revision: number; connections: Connection[] };
 export default function GrpcPage() {
   useBreadcrumbs([{ label: "gRPC" }]);
@@ -22,7 +22,7 @@ export default function GrpcPage() {
   if (!allowed) return <p>Просмотр gRPC-подключений недоступен для вашей роли.</p>;
   const all = (snapshot?.connections ?? []).filter(c => c.transport === "gRPC");
   const columns: TableColumn<Connection>[] = [
-    { id: "client", header: "Клиент", value: c => [c.broker_name, c.broker_code, c.email, c.user_id].filter(Boolean).join(" "), cell: c => <>{c.broker_id ? <Link className="text-accent font-medium" to={"/brokers/" + c.broker_id}>{c.broker_name} · {c.broker_code}</Link> : c.email || c.user_id}<div className="text-[10px] text-muted">{c.role}</div></> },
+    { id: "client", header: "Клиент", value: c => [c.broker_name, c.broker_code, c.username, c.user_id].filter(Boolean).join(" "), cell: c => <>{c.broker_id ? <Link className="text-accent font-medium" to={"/brokers/" + c.broker_id}>{c.broker_name} · {c.broker_code}</Link> : c.username || c.user_id}<div className="text-[10px] text-muted">{c.role}</div></> },
     { id: "transport", header: "Подключение", value: c => c.transport + " " + c.peer, cell: c => <><span className="badge-success">gRPC Stream</span><div className="mt-1 font-mono text-[10px] text-muted">{c.peer}</div></> },
     { id: "topics", header: "Подписки", value: c => c.topics.join(" "), cell: c => <div className="space-y-1">{c.topics.map(t => <code className="block text-[10px]" key={t}>{t}</code>)}</div> },
     { id: "paths", header: "Пути данных", value: c => c.paths.join(" "), cell: c => <div className="space-y-1">{c.paths.map(p => <code className="block text-[10px]" key={p}>{p}</code>)}</div> },

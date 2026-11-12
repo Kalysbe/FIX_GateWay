@@ -93,7 +93,7 @@ async function main(){
   assert.equal(cfg.name,project);assert.equal(cfg.networks.default.internal,true);assert.equal(cfg.services.gateway.environment.ADAPTER_HOST_OVERRIDE,'fixsimulator');assert.deepEqual(Object.keys(cfg.services.gateway.networks),['default']);
   report.simulatorFillDelaySeconds=Number.parseFloat(cfg.services.fixsimulator.environment.SIM_FILL_DELAY);
   assert.equal(await sql('select current_database()'),'fix_gateway_local');
-  admin=(await expect('/api/v1/admin/login','','POST',{email:'admin@localhost',password:'admin123'})).token;
+  admin=(await expect('/api/v1/admin/login','','POST',{username:'admin',password:'admin123'})).token;
   const adapters=(await expect('/api/v1/admin/adapters')).adapters.filter(a=>a.enabled);assert.equal(adapters.length,2);assert.ok(adapters.every(a=>a.type==='simulator'&&a.host==='fixsimulator'));
   const {broker}=await expect('/api/v1/admin/brokers',admin,'POST',{code:prefix,name:'Isolated adapter capacity benchmark'},201);brokerId=broker.id;
   await expect(`/api/v1/admin/brokers/${brokerId}`,admin,'PATCH',{rate_limit_rps:20000,rate_limit_orders_per_sec:20000});

@@ -78,7 +78,7 @@ services:
       APP_ENV: development
       JWT_SECRET: local-simulator-jwt-secret-development-only
       API_TOKEN_PEPPER: local-simulator-token-pepper-development-only
-      ADMIN_EMAIL: admin@localhost
+      ADMIN_USERNAME: admin
       ADMIN_PASSWORD: admin123
       HTTP_ADDR: ":8080"
       PROMETHEUS_URL: http://prometheus:9090

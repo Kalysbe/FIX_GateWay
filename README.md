@@ -24,7 +24,7 @@ The existing deployment includes ARQA UAT adapter seeds. For an isolated simulat
 environment with a separate database and the admin interface, use
 [Local testing](docs/local-testing.md).
 
-- Admin UI: http://localhost:5173 (`admin@localhost` / `admin123`)
+- Admin UI: http://localhost:5173 (`admin` / `admin123`)
 - API + Swagger: http://localhost:8080/broker-swagger
 - Prometheus: http://localhost:9090
 - Two FIX simulator acceptors: `:5001`, `:5002`

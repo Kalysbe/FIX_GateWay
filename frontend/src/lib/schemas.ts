@@ -3,12 +3,8 @@ import { z } from "zod";
 // Client-side checks only repeat what the server requires; the server stays the authority.
 const filled = (message: string) => z.string().refine(v => v.trim() !== "", message);
 
-// As lenient as the browser's own type="email" check: a host without a dot
-// (admin@localhost on the local stand) is a valid login.
-const loginEmail = /^[^\s@]+@[^\s@]+$/;
-
 export const loginSchema = z.object({
-  email: filled("Укажите электронную почту").refine(v => loginEmail.test(v.trim()), "Неверный адрес почты"),
+  username: filled("Укажите логин").transform(v => v.trim()),
   password: z.string().min(1, "Введите пароль"),
 });
 export type LoginValues = z.infer<typeof loginSchema>;

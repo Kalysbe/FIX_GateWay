@@ -76,12 +76,12 @@ func main() {
 	}
 
 	users := admin.NewUserStore(pool)
-	if err := users.EnsureAdmin(ctx, cfg.AdminEmail, cfg.AdminPassword); err != nil {
+	if err := users.EnsureAdmin(ctx, cfg.AdminUsername, cfg.AdminPassword); err != nil {
 		log.Error("ensure admin failed", "error", err)
 		os.Exit(1)
 	}
 	if cfg.IsProduction() {
-		if err := users.RefuseDefaultPassword(ctx, cfg.AdminEmail); err != nil {
+		if err := users.RefuseDefaultPassword(ctx, cfg.AdminUsername); err != nil {
 			log.Error("unsafe administrator credential", "error", err)
 			os.Exit(1)
 		}

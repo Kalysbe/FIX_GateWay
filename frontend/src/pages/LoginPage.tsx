@@ -14,16 +14,16 @@ export default function LoginPage() {
   const [showPassword, setShowPassword] = useState(false);
   const { register, handleSubmit, setError, clearErrors, formState: { errors, isSubmitting: loading } } = useForm<LoginValues>({
     resolver: zodResolver(loginSchema),
-    defaultValues: { email: "", password: "" },
+    defaultValues: { username: "", password: "" },
   });
   const error = errors.root?.message ?? "";
 
-  const onSubmit = handleSubmit(async ({ email, password }) => {
+  const onSubmit = handleSubmit(async ({ username, password }) => {
     clearErrors("root");
     try {
-      const res = await api<{ token: string; user?: { id?: string; email?: string; role?: string; full_name?: string } }>(
+      const res = await api<{ token: string; user?: { id?: string; username?: string; role?: string; full_name?: string } }>(
         "/api/v1/admin/login",
-        { method: "POST", body: JSON.stringify({ email, password }) },
+        { method: "POST", body: JSON.stringify({ username, password }) },
       );
       // Cached admin data belongs to the previous authenticated session.
       await queryClient.cancelQueries();
@@ -83,22 +83,22 @@ export default function LoginPage() {
 
             <div className="login-fields">
               <div className="login-field">
-                <label htmlFor="login-email">Электронная почта</label>
+                <label htmlFor="login-username">Логин</label>
                 <input
-                  id="login-email"
+                  id="login-username"
                   className="login-input"
-                  type="email"
+                  type="text"
                   autoComplete="username"
                   autoCapitalize="none"
                   spellCheck={false}
-                  placeholder="name@company.com"
-                  {...register("email")}
-                  aria-invalid={errors.email ? true : undefined}
-                  aria-describedby={errors.email ? "login-email-error" : error ? "login-error" : undefined}
+                  placeholder="Введите логин"
+                  {...register("username")}
+                  aria-invalid={errors.username ? true : undefined}
+                  aria-describedby={errors.username ? "login-username-error" : error ? "login-error" : undefined}
                   readOnly={loading}
                   required
                 />
-                {errors.email && <p id="login-email-error" className="login-field-error">{errors.email.message}</p>}
+                {errors.username && <p id="login-username-error" className="login-field-error">{errors.username.message}</p>}
               </div>
 
               <div className="login-field">
