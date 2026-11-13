@@ -145,18 +145,6 @@ func handleConn(conn net.Conn, port string) {
 				continue
 			}
 			handleCancel(session, conn, sender, target, &seqOut, fields)
-		case "AL":
-			if !loggedOn {
-				session.mu.Unlock()
-				continue
-			}
-			handlePosMaint(conn, sender, target, &seqOut, fields)
-		case "AN":
-			if !loggedOn {
-				session.mu.Unlock()
-				continue
-			}
-			handlePosRequest(conn, sender, target, &seqOut, fields)
 		default:
 			log.Printf("[%s] ignore msg type %s", port, msgType)
 		}
@@ -278,32 +266,6 @@ func handleCancel(session *simSession, conn net.Conn, sender, target string, seq
 		"55": order.symbol, "54": order.side, "38": order.qty, "14": "0", "151": "0", "6": "0",
 	}
 	_, _ = conn.Write([]byte(buildMsg("8", sender, target, seq, er)))
-}
-
-func handlePosMaint(conn net.Conn, sender, target string, seq *int32, f map[string]string) {
-	reqID := f["710"]
-	am := map[string]string{
-		"710": reqID,
-		"721": fmt.Sprintf("PmR%d", time.Now().UnixNano()%1_000_000),
-		"709": firstNonEmptySim(f["709"], "3"),
-		"712": firstNonEmptySim(f["712"], "2"),
-		"722": "1", // Completed
-		"723": "0",
-	}
-	_, _ = conn.Write([]byte(buildMsg("AM", sender, target, seq, am)))
-}
-
-func handlePosRequest(conn net.Conn, sender, target string, seq *int32, f map[string]string) {
-	reqID := f["710"]
-	ao := map[string]string{
-		"710": reqID,
-		"721": fmt.Sprintf("RfPA%d", time.Now().UnixNano()%1_000_000),
-		"724": "0",
-		"728": "0",
-		"729": "0",
-		"727": "0",
-	}
-	_, _ = conn.Write([]byte(buildMsg("AO", sender, target, seq, ao)))
 }
 
 func firstNonEmptySim(vals ...string) string {

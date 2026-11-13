@@ -42,7 +42,7 @@ func TestTokenLookupDatabase(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s := &Server{pool: pool, brokers: store, audit: audit.NewStore(pool), log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	s := &Server{pool: pool, brokers: store, audit: audit.NewStore(testLogFiles(t)), log: slog.New(slog.NewTextHandler(io.Discard, nil))}
 	create := func(status domain.TokenStatus, legacy bool) brokers.CreatedToken {
 		t.Helper()
 		created, err := store.CreateTokenExt(ctx, brokers.CreateTokenInput{BrokerID: broker.ID, Name: "Lookup fixture", QuikFirm: "2040", Permissions: []string{auth.PermOrdersRead}})
@@ -141,7 +141,16 @@ func TestTokenLookupDatabase(t *testing.T) {
 		t.Fatal("overview leaked secret")
 	}
 	var auditCount, unsafeAudit int
-	if err := pool.QueryRow(ctx, `SELECT count(*), count(*) FILTER (WHERE request_payload IS NOT NULL) FROM audit_logs WHERE action IN ('TOKEN_LOOKUP','TOKEN_INSPECTED')`).Scan(&auditCount, &unsafeAudit); err != nil || auditCount == 0 || unsafeAudit != 0 {
+	records, err := s.audit.Records(ctx)
+	for _, e := range records {
+		if e.Subtype == "TOKEN_LOOKUP" || e.Subtype == "TOKEN_INSPECTED" {
+			auditCount++
+			if len(e.Metadata) > 0 {
+				unsafeAudit++
+			}
+		}
+	}
+	if err != nil || auditCount == 0 || unsafeAudit != 0 {
 		t.Fatal("lookup audit persisted request body")
 	}
 

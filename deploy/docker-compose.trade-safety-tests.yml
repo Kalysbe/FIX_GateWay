@@ -13,7 +13,7 @@ services:
       timeout: 3s
       retries: 30
   tests:
-    image: golang:1.26.9-alpine@sha256:3082400e369fa24d5fc60bca20edab3f6d604e0c5a690ec66b295eff4dd87ade
+    image: golang:1.26.10-alpine@sha256:87c65a688975c0b1d4585d204874c45ca78354670e3a5f11368c5a492303d696
     working_dir: /src
     tmpfs: ["/fault-disk:size=64k,mode=0700"]
     volumes:
@@ -29,11 +29,9 @@ services:
     entrypoint: [/bin/sh, -ec]
     command:
       - |
-        go test ./internal/fixaudit ./internal/executioninbox ./internal/tradeledger ./internal/adapters/arqa ./internal/adapters ./internal/api ./internal/observability ./internal/metrics ./cmd/gateway
-        go test -tags integration ./internal/tradeledger -count=1 -v
+        go test ./internal/fixaudit ./internal/executioninbox ./internal/adapters/arqa ./internal/adapters ./internal/api ./internal/observability ./internal/metrics ./cmd/gateway
         go test -tags integration ./internal/fixaudit -count=1 -v
-        go test -tags integration ./internal/api -run 'TestTradeLedger' -count=1 -v
-        go test -tags integration ./internal/orders -run 'Test(ExecutionIDs|InboxReceipts|ExecutionReplay)' -count=1 -v
+        go test -tags integration ./internal/orders -run 'Test(InboxReceipts|ExecutionReplay|PurgeFinished)' -count=1 -v
 volumes:
   modcache:
   buildcache:

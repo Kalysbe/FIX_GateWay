@@ -74,21 +74,23 @@ func transportSettings(id string, reset bool) (string, error) {
 			return "", errors.New("FIX transport file unavailable or empty")
 		}
 	}
-	if c.StartTime == "" {
-		c.StartTime = "00:00:00"
-	}
-	if c.EndTime == "" {
-		c.EndTime = "00:00:00"
-	}
-	if c.TimeZone == "" {
-		c.TimeZone = "UTC"
-	}
 	for _, v := range []string{c.Dictionary, c.Certificate, c.PrivateKey, c.CA, c.ServerName, c.StartTime, c.EndTime, c.TimeZone} {
 		if strings.ContainsAny(v, "\r\n\x00") {
 			return "", errors.New("invalid FIX setting")
 		}
 	}
-	return fmt.Sprintf("\nUseDataDictionary=Y\nDataDictionary=%s\nValidateFieldsOutOfOrder=Y\nValidateUserDefinedFields=Y\nSocketCertificateFile=%s\nSocketPrivateKeyFile=%s\nSocketCAFile=%s\nSocketServerName=%s\nSocketInsecureSkipVerify=N\nSocketTimeout=10s\nStartTime=%s\nEndTime=%s\nTimeZone=%s\n", c.Dictionary, c.Certificate, c.PrivateKey, c.CA, c.ServerName, c.StartTime, c.EndTime, c.TimeZone), nil
+	out := fmt.Sprintf("\nUseDataDictionary=Y\nDataDictionary=%s\nValidateFieldsOutOfOrder=Y\nValidateUserDefinedFields=Y\nSocketCertificateFile=%s\nSocketPrivateKeyFile=%s\nSocketCAFile=%s\nSocketServerName=%s\nSocketInsecureSkipVerify=N\nSocketTimeout=10s\n", c.Dictionary, c.Certificate, c.PrivateKey, c.CA, c.ServerName)
+	// Without a schedule the session never ends: no daily logout and reset.
+	if c.StartTime != "" || c.EndTime != "" {
+		if c.StartTime == "" || c.EndTime == "" {
+			return "", errors.New("FIX start_time and end_time must be set together")
+		}
+		if c.TimeZone == "" {
+			c.TimeZone = "UTC"
+		}
+		out += fmt.Sprintf("StartTime=%s\nEndTime=%s\nTimeZone=%s\n", c.StartTime, c.EndTime, c.TimeZone)
+	}
+	return out, nil
 }
 
 func credential(name string) (string, error) {

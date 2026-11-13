@@ -18,7 +18,8 @@ groups:
         labels: {severity: critical}
         annotations: {summary: "Gateway cannot reach PostgreSQL"}
       - alert: AllFIXSessionsUnavailable
-        expr: gateway_fix_available_sessions == 0
+        # Outside the FIX session hours (09:05-04:00 Bishkek) no session is held by design.
+        expr: gateway_fix_available_sessions == 0 and on() gateway_fix_session_paused == 0
         for: 1m
         labels: {severity: critical}
         annotations: {summary: "No runtime FIX session available for trading; check venue schedule"}

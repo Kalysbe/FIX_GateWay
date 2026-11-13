@@ -21,6 +21,8 @@ func TestClassifyBrokerAPI(t *testing.T) {
 		{"POST", "/api/v1/orders/abc/cancel", SubOrderCancel},
 		{"GET", "/api/v1/trades", SubTradesList},
 		{"GET", "/api/v1/positions", SubPositionsList},
+		{"GET", "/api/v1/positions/moneylimits", SubPositionsList},
+		{"GET", "/api/v1/positions/depolimits", SubPositionsList},
 		{"GET", "/api/v1/instruments", SubInstrumentRead},
 		{"GET", "/health", SubHealthRequest},
 		{"POST", "/api/v1/admin/brokers", SubBrokerRequest},

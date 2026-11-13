@@ -44,7 +44,7 @@ export function getSessionUser(): SessionUser | null {
   }
   const payload = decodeJwtPayload(getToken());
   if (!payload) return null;
-  return { email: payload.email, role: payload.role };
+  return { username: payload.username, role: payload.role };
 }
 
 export function clearToken() {
@@ -52,7 +52,7 @@ export function clearToken() {
   sessionStorage.removeItem(USER_KEY);
 }
 
-type JwtPayload = { exp?: number; email?: string; role?: string; sub?: string };
+type JwtPayload = { exp?: number; username?: string; role?: string; sub?: string };
 
 function decodeJwtPayload(token: string): JwtPayload | null {
   const parts = token.split(".");
@@ -64,6 +64,12 @@ function decodeJwtPayload(token: string): JwtPayload | null {
   } catch {
     return null;
   }
+}
+
+/** Milliseconds since the epoch when the session token expires; null if unknown. */
+export function sessionExpiresAt(token = getToken()): number | null {
+  const payload = decodeJwtPayload(token);
+  return typeof payload?.exp === "number" ? payload.exp * 1000 : null;
 }
 
 export function isSessionValid(): boolean {

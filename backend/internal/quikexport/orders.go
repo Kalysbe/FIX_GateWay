@@ -65,8 +65,11 @@ func (o Order) VenueID() string {
 	return parsed.Format("060102") + "-" + o.Text("ClassCode") + "-" + o.Text("OrderNum")
 }
 
-func (o Order) Side() string {
-	switch strings.ToUpper(o.Text("Operation")) {
+func (o Order) Side() string { return OperationSide(o.Text("Operation")) }
+
+// OperationSide maps a raw Orders "Operation" value to BUY or SELL; "" if unknown.
+func OperationSide(operation string) string {
+	switch strings.ToUpper(strings.TrimSpace(operation)) {
 	case "КУПЛЯ", "ПОКУПКА", "BUY":
 		return "BUY"
 	case "ПРОДАЖА", "SELL":
@@ -79,9 +82,16 @@ type OrderFilter struct {
 	// nil is admin/all firms. A non-nil empty string matches no firm.
 	Firm *string
 	// State matches the raw "State" column; empty means any state.
-	State  string
-	Limit  int
-	Offset int
+	State string
+	// ClassCode and SecCode match the trimmed columns; empty means any.
+	ClassCode string
+	SecCode   string
+	// Today keeps only rows whose TradeDate is today's KSE trading day (UTC+6).
+	Today bool
+	// TradeDay keeps only rows of this YYYY-MM-DD trading date; empty means any.
+	TradeDay string
+	Limit    int
+	Offset   int
 }
 
 type OrderPage struct {
@@ -104,6 +114,10 @@ func (s *Store) ListOrders(ctx context.Context, f OrderFilter) (OrderPage, error
 	if s == nil || s.pool == nil {
 		return out, ErrNotConfigured
 	}
+	classes, err := s.servedClasses(ctx)
+	if err != nil {
+		return out, err
+	}
 	limit := f.Limit
 	if limit > 0 {
 		limit++
@@ -111,8 +125,12 @@ func (s *Store) ListOrders(ctx context.Context, f OrderFilter) (OrderPage, error
 	rows, err := s.pool.Query(ctx, `SELECT row_to_json(o) FROM public."Orders" o
 WHERE ($1::text IS NULL OR (btrim(o."FirmId")=$1 AND $1<>''))
 AND ($4::text='' OR btrim(o."State"::text)=$4)
+AND ($5::text='' OR btrim(o."ClassCode"::text)=$5) AND ($6::text='' OR btrim(o."SecCode"::text)=$6)
+AND (NOT $7::boolean OR o."TradeDate"::date=(now() AT TIME ZONE 'Asia/Bishkek')::date)
+AND ($8::text[] IS NULL OR btrim(o."ClassCode"::text)=ANY($8::text[]))
+AND ($9::text='' OR o."TradeDate"::date=NULLIF($9::text,'')::date)
 ORDER BY o."TradeDate" DESC, o."OrderNum" DESC, o."ClassCode"
-LIMIT NULLIF($2,0) OFFSET $3`, f.Firm, limit, f.Offset, f.State)
+LIMIT NULLIF($2,0) OFFSET $3`, f.Firm, limit, f.Offset, f.State, strings.TrimSpace(f.ClassCode), strings.TrimSpace(f.SecCode), f.Today, classes, f.TradeDay)
 	if err != nil {
 		return out, err
 	}
@@ -142,7 +160,12 @@ func (s *Store) CountOrdersByState(ctx context.Context) (map[string]int, error) 
 	if s == nil || s.pool == nil {
 		return out, ErrNotConfigured
 	}
-	rows, err := s.pool.Query(ctx, `SELECT COALESCE(o."State"::text, ''), count(*) FROM public."Orders" o GROUP BY 1`)
+	classes, err := s.servedClasses(ctx)
+	if err != nil {
+		return out, err
+	}
+	rows, err := s.pool.Query(ctx, `SELECT COALESCE(o."State"::text, ''), count(*) FROM public."Orders" o
+WHERE $1::text[] IS NULL OR btrim(o."ClassCode"::text)=ANY($1::text[]) GROUP BY 1`, classes)
 	if err != nil {
 		return out, err
 	}
@@ -193,10 +216,15 @@ func (s *Store) GetOrder(ctx context.Context, key string, firm *string) (Order, 
 	if err != nil {
 		return Order{}, err
 	}
+	classes, err := s.servedClasses(ctx)
+	if err != nil {
+		return Order{}, err
+	}
 	var raw []byte
 	err = s.pool.QueryRow(ctx, `SELECT row_to_json(o) FROM public."Orders" o
 WHERE o."TradeDate"=$1::date AND o."ClassCode"=$2 AND o."OrderNum"=$3::numeric
-AND ($4::text IS NULL OR (btrim(o."FirmId")=$4 AND $4<>''))`, date, board, number, firm).Scan(&raw)
+AND ($4::text IS NULL OR (btrim(o."FirmId")=$4 AND $4<>''))
+AND ($5::text[] IS NULL OR btrim(o."ClassCode"::text)=ANY($5::text[]))`, date, board, number, firm, classes).Scan(&raw)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Order{}, ErrOrderNotFound
 	}

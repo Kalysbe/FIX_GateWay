@@ -1,7 +1,7 @@
 const assert = require('node:assert/strict');
 const { readFileSync } = require('node:fs');
 const { resolve } = require('node:path');
-const { test } = require('node:test');
+const { test } = globalThis;
 const vm = require('node:vm');
 const ts = require('typescript');
 const React = require('react');
@@ -26,6 +26,8 @@ function renderDashboard(daily) {
   const feedback = { PageSpinner: () => React.createElement('p', null, 'Loading daily statistics'), ErrorBanner: ({ error }) => React.createElement('p', null, error.message), EmptyState: () => null };
   imports['./feedback'] = imports['../components/feedback'] = feedback;
   imports['./StatusBadge'] = imports['../components/StatusBadge'] = { StatusBadge: () => null };
+  imports['../components/icons'] = { Icons: new Proxy({}, { get: () => () => null }) };
+  imports['./charts'] = { CHART_COLORS: ['c1', 'c2', 'c3', 'c4', 'c5'], TimeSeriesChart: () => null };
   imports['../components/PageHeader'] = { PageHeader: ({ title }) => React.createElement('h1', null, title) };
   const load = path => {
     const compiled = ts.transpileModule(readFileSync(resolve(__dirname, path), 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.ReactJSX } }).outputText;

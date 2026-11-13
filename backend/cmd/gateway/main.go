@@ -21,7 +21,6 @@ import (
 	"github.com/fix-gateway/backend/internal/domain"
 	"github.com/fix-gateway/backend/internal/executioninbox"
 	"github.com/fix-gateway/backend/internal/grpcstream"
-	"github.com/fix-gateway/backend/internal/marketdata"
 	"github.com/fix-gateway/backend/internal/metrics"
 	"github.com/fix-gateway/backend/internal/observability"
 	"github.com/fix-gateway/backend/internal/orders"
@@ -29,11 +28,9 @@ import (
 	"github.com/fix-gateway/backend/internal/platform/db"
 	"github.com/fix-gateway/backend/internal/platform/logx"
 	"github.com/fix-gateway/backend/internal/platform/migrate"
-	"github.com/fix-gateway/backend/internal/positions"
 	"github.com/fix-gateway/backend/internal/quikexport"
 	"github.com/fix-gateway/backend/internal/ratelimit"
 	"github.com/fix-gateway/backend/internal/realtime"
-	"github.com/fix-gateway/backend/internal/refdata"
 	"github.com/fix-gateway/backend/internal/routing"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/keepalive"
@@ -79,26 +76,37 @@ func main() {
 	}
 
 	users := admin.NewUserStore(pool)
-	if err := users.EnsureAdmin(ctx, cfg.AdminEmail, cfg.AdminPassword); err != nil {
+	if err := users.EnsureAdmin(ctx, cfg.AdminUsername, cfg.AdminPassword); err != nil {
 		log.Error("ensure admin failed", "error", err)
 		os.Exit(1)
 	}
 	if cfg.IsProduction() {
-		if err := users.RefuseDefaultPassword(ctx, cfg.AdminEmail); err != nil {
+		if err := users.RefuseDefaultPassword(ctx, cfg.AdminUsername); err != nil {
 			log.Error("unsafe administrator credential", "error", err)
 			os.Exit(1)
 		}
 	}
 
+	// Logs and the audit trail go to daily files, not the database.
+	logFiles, err := observability.OpenFileLog(cfg.LogDir)
+	if err != nil {
+		log.Error("log directory unavailable", "dir", cfg.LogDir, "error", err)
+		os.Exit(1)
+	}
+	defer logFiles.Close()
 	brokerStore := brokers.NewStore(pool, cfg.APITokenPepper)
 	orderStore := orders.NewStore(pool)
-	auditStore := audit.NewStore(pool)
+	auditStore := audit.NewStore(logFiles)
 	orderSvc := orders.NewService(orderStore, brokerStore, auditStore)
+	if quikExportStore != nil {
+		// Accounts a firm may trade come only from QUIK Trdaccs, instruments from Securities.
+		orderSvc.SetTradingAccounts(quikExportStore)
+		orderSvc.SetInstruments(quikExportStore)
+	}
 	adapterStore := adapters.NewStore(pool)
 	outboxStore := outbox.NewStore(pool)
-	refStore := refdata.NewStore(pool)
 	hub := realtime.NewHub()
-	obsStore := observability.NewStore(pool)
+	obsStore := observability.NewStore(pool, logFiles)
 	obsSettings := observability.DefaultSettings()
 	obsSettings.FastMS = cfg.ObsFastMS
 	obsSettings.NormalMS = cfg.ObsNormalMS
@@ -152,31 +160,12 @@ func main() {
 		cfg.HealthInterval,
 	)
 	manager.SetHostOverride(cfg.AdapterHostOverride)
-	positionStore := positions.NewStore(pool)
-	positionWriter := &automaticPositionSnapshots{store: positionStore, hub: hub}
-	manager.SetPositionListener(func(adapterID, reqID string, items []domain.FIXPosition) error {
-		persist, cancel := context.WithTimeout(ctx, 10*time.Second)
-		defer cancel()
-		return positionWriter.saveStream(persist, adapterID, reqID, items)
-	})
-	hub.MarketDataSnapshot = func() any {
-		_, quotes, ok := manager.LiveQuotes()
-		if !ok {
-			quotes = []domain.MarketQuote{}
-		}
-		for i := range quotes {
-			quotes[i].RawFIX = ""
-		}
-		return map[string]any{"quotes": quotes, "subscription": manager.MarketDataSubscription(), "replace": true}
+	fixHours, err := adapters.ParseSessionHours(cfg.FIXSessionHours, quikexport.KSETime)
+	if err != nil {
+		log.Error("invalid FIX_SESSION_HOURS", "error", err)
+		os.Exit(1)
 	}
-	manager.SetMarketDataListener(func(quotes []domain.MarketQuote) {
-		slim := make([]domain.MarketQuote, len(quotes))
-		for i, q := range quotes {
-			q.RawFIX = ""
-			slim[i] = q
-		}
-		hub.Broadcast("marketdata.tick", map[string]any{"quotes": slim})
-	})
+	manager.SetSessionHours(fixHours)
 	manager.SetStatusListener(func(adapterID string, status domain.AdapterStatus) {
 		hub.Broadcast("adapter.status_changed", map[string]any{
 			"adapter_id": adapterID, "status": status,
@@ -203,6 +192,17 @@ func main() {
 		}
 		obs.Emit(observability.Event{Type: eventType, Subtype: subtype, AdapterID: adapterID, Message: message, Severity: sev})
 	})
+	sessionDown := newSessionDownAlarm(fixSessionDownGrace, func(adapterID, sessionID string) {
+		// A stopped adapter (scheduled pause, disable, shutdown) is not an outage.
+		if _, running := manager.Get(adapterID); !running {
+			return
+		}
+		obs.Emit(observability.Event{
+			Type: observability.TypeError, Subtype: observability.CritFIXSessionDown,
+			AdapterID: adapterID, SessionID: sessionID, Severity: observability.SeverityCritical,
+			ErrorCode: observability.CritFIXSessionDown, Message: "FIX session down", FailureStage: "fix_session",
+		})
+	})
 	manager.SetFIXHandler(func(kind, adapterID, sessionID, msgType, direction, clOrdID, reason string, seq int) {
 		e := observability.Event{
 			Type: observability.TypeFIX, Subtype: kind, AdapterID: adapterID, SessionID: sessionID,
@@ -211,19 +211,20 @@ func main() {
 		if seq > 0 {
 			e.FIXSeqNum = &seq
 		}
-		if kind == "FIX_SESSION_DISCONNECTED" {
+		switch kind {
+		case "FIX_SESSION_DISCONNECTED":
 			e.Severity = observability.SeverityWarning
-			obs.Emit(observability.Event{
-				Type: observability.TypeError, Subtype: observability.CritFIXSessionDown,
-				AdapterID: adapterID, SessionID: sessionID, Severity: observability.SeverityCritical,
-				ErrorCode: observability.CritFIXSessionDown, Message: "FIX session down", FailureStage: "fix_session",
-			})
+			sessionDown.down(adapterID, sessionID)
+		case "FIX_SESSION_CONNECTED":
+			sessionDown.up(adapterID)
 		}
 		obs.Emit(e)
 	})
 
 	server = api.NewServer(cfg, log, pool, brokerStore, orderSvc, orderStore, adapterStore, manager, outboxStore, auditStore, users, hub, obs)
-	server.SetExecutionInbox(inbox)
+	inboxCases := executioninbox.NewCaseStore(pool)
+	inbox.SetQuarantineCheck(inboxCases.Exists)
+	server.SetExecutionInbox(inbox, inboxCases)
 	nonces := auth.NewPersistentNonceStore(pool, 10*time.Minute)
 	server.SetNonceStore(nonces)
 	go nonces.RunCleanup(ctx)
@@ -242,20 +243,40 @@ func main() {
 			metrics.ExecutionInboxApplyFailures.Inc()
 		}
 	})
-	go server.RunDashboardRefresh(ctx)
-	if os.Getenv("TRADE_RECONCILIATION_ENABLED") == "true" {
-		go server.RunTradeReconciliation(ctx)
+	marketClasses := quikexport.NewClassSettings(pool)
+	server.SetMarketDataClasses(marketClasses)
+	orderSvc.SetServedClasses(marketClasses.Classes)
+	if quikExportStore != nil {
+		quikExportStore.SetServedClasses(marketClasses.Classes)
 	}
 	server.SetQuikExport(quikExportStore)
+	go server.RunFIXSafetyMonitor(ctx)
+	go orderStore.RunPurge(ctx, log, cfg.FinishedOrderGrace)
 	if quikExportStore != nil {
 		go quikExportStore.RunOrders(ctx, func(change quikexport.OrderChange) {
 			hub.BroadcastOrderForFirm(change.Order.Raw, strings.TrimSpace(change.Order.Text("FirmId")), change.Removed)
 		}, func(err error) {
 			log.Warn("QUIK Orders change read failed; retaining previous selection", "error", err)
 		})
+		go quikExportStore.RunTrades(ctx, func(trade quikexport.Order) {
+			hub.BroadcastTradeForFirm(trade.Raw, strings.TrimSpace(trade.Text("FirmId")))
+		}, func(err error) {
+			log.Warn("QUIK Trades change read failed; retaining previous selection", "error", err)
+		})
+		go quikExportStore.RunPositions(ctx, func(table string) {
+			// Only a trigger: each broker stream reads its own firm's rows of the table.
+			hub.Broadcast(table+".updated", map[string]any{"source": "quik"})
+		}, func(err error) {
+			log.Warn("QUIK positions change read failed; retaining previous selection", "error", err)
+		})
+		go quikExportStore.RunParams(ctx, func(change quikexport.ParamChange) {
+			hub.BroadcastMarketData(change.Param.Raw, change.Removed)
+		}, func(err error) {
+			log.Warn("QUIK Params change read failed; retaining previous selection", "error", err)
+		})
 	}
 	admission := ratelimit.NewAdmissionWithCapacity(int64(cfg.RateLimitMaxStates))
-	rateStore := &ratelimit.Store{Pool: pool, Admission: admission, DefaultRead: cfg.DefaultRateLimitRPS, DefaultTrade: cfg.DefaultOrderRateLimit}
+	rateStore := &ratelimit.Store{Pool: pool, Audit: auditStore.RateLimitUpdated, Admission: admission, DefaultRead: cfg.DefaultRateLimitRPS, DefaultTrade: cfg.DefaultOrderRateLimit}
 	if err := rateStore.Refresh(ctx); err != nil {
 		log.Error("rate limit configuration unavailable", "error", err)
 		os.Exit(1)
@@ -269,6 +290,14 @@ func main() {
 		log.Error("gRPC TLS configuration failed; provision certificates", "error", err)
 		os.Exit(1)
 	}
+	if notAfter, err := grpcstream.CertificateExpiry(cfg.GRPCCertFile); err == nil {
+		server.SetGRPCCertificateExpiry(notAfter)
+		if !time.Now().Before(notAfter) {
+			log.Error("gRPC server certificate has expired; TLS clients and the admin event stream cannot connect", "not_after", notAfter)
+		} else if time.Until(notAfter) <= api.GRPCCertWarnBefore {
+			log.Warn("gRPC server certificate expires soon", "not_after", notAfter)
+		}
+	}
 	clientCreds, err := grpcstream.ClientCredentials(cfg.GRPCClientCertFile, cfg.GRPCClientKeyFile, cfg.GRPCCAFile, cfg.GRPCServerName)
 	if err != nil {
 		log.Error("gRPC bridge TLS configuration failed", "error", err)
@@ -280,7 +309,9 @@ func main() {
 		os.Exit(1)
 	}
 	grpcServer := grpc.NewServer(grpc.Creds(grpcCreds), grpc.MaxRecvMsgSize(16<<10), grpc.MaxSendMsgSize(8<<20), grpc.MaxConcurrentStreams(128), grpc.KeepaliveParams(keepalive.ServerParameters{MaxConnectionIdle: 2 * time.Minute, Time: time.Minute, Timeout: 10 * time.Second}))
-	pb.RegisterRealtimeServiceServer(grpcServer, &grpcstream.Service{Hub: hub, Users: users, Brokers: brokerStore, HMACRequired: cfg.HMACRequired, Nonces: nonces, JWTSecret: cfg.JWTSecret, Admission: admission, Log: log, PositionsSnapshot: positions.NewStore(pool).RealtimeSnapshot})
+	pb.RegisterRealtimeServiceServer(grpcServer, &grpcstream.Service{Hub: hub, Users: users, Brokers: brokerStore, HMACRequired: cfg.HMACRequired, Nonces: nonces, JWTSecret: cfg.JWTSecret, Admission: admission, Log: log, PositionsSnapshot: func(work context.Context, table string, firms []string) (any, error) {
+		return quikExportStore.ListPositionTable(work, table, firms)
+	}})
 	go func() {
 		log.Info("gRPC realtime listening", "addr", cfg.GRPCAddr, "mtls", cfg.GRPCRequireClientCert)
 		if err := grpcServer.Serve(grpcListener); err != nil {
@@ -301,24 +332,19 @@ func main() {
 		log.Error("adapter manager start failed", "error", err)
 	}
 
-	go syncInstrumentsAfterLogon(ctx, log, manager, refStore)
-	if cfg.PositionStreamEnabled {
-		go positionSubscriptionLoop(ctx, log, manager, hub, 5*time.Second)
-	}
-	go positionSnapshotLoop(ctx, log, manager, positionWriter, cfg.PositionSyncInterval)
-	go syncMarketDataLoop(ctx, log, manager, marketdata.NewStore(pool), refStore, hub, cfg.MarketDataSyncInterval, cfg.MarketDataBoards)
-
 	worker := outbox.NewWorker(outboxStore, orderStore, manager, log, cfg.WorkerID, cfg.OutboxPollInterval, cfg.OutboxBatchSize)
 	worker.SetObserver(obs)
 	worker.SetDispatchGuard(func() bool { return inbox.Status().Healthy() })
 	orderSvc.SetQueueNotifier(worker.Notify)
 	go worker.Run(ctx)
 
+	// Streams and export downloads set their own write deadlines.
 	httpServer := &http.Server{
 		Addr:              cfg.HTTPAddr,
 		Handler:           server.Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      cfg.HTTPWriteTimeout,
 		IdleTimeout:       120 * time.Second,
 		MaxHeaderBytes:    1 << 16,
 	}
@@ -341,8 +367,13 @@ func main() {
 	<-ctx.Done()
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer shutdownCancel()
-	_ = httpServer.Shutdown(shutdownCtx)
-	_ = opsServer.Shutdown(shutdownCtx)
+	// Long-lived streams would hold the HTTP drain for the whole budget, and
+	// the container is killed before the FIX sessions send Logout; QUIK then
+	// sees a dropped socket. The drain is capped so Logout always goes out.
+	drainCtx, drainCancel := context.WithTimeout(shutdownCtx, 5*time.Second)
+	_ = httpServer.Shutdown(drainCtx)
+	_ = opsServer.Shutdown(drainCtx)
+	drainCancel()
 	grpcServer.Stop()
 	manager.StopAll(shutdownCtx)
 	log.Info("gateway stopped")

@@ -372,8 +372,13 @@ func (s *Server) downloadExportJob(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "export not ready")
 		return
 	}
+	// Exports are bounded in size but may exceed the server write timeout on
+	// a slow link; allow a longer, still finite, transfer.
+	_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(exportDownloadTimeout))
 	http.ServeFile(w, r, job.FilePath)
 }
+
+const exportDownloadTimeout = 15 * time.Minute
 
 func (s *Server) orderTrace(w http.ResponseWriter, r *http.Request) {
 	if s.obs == nil {
@@ -404,10 +409,6 @@ func (s *Server) emitObs(e observability.Event) {
 func (s *Server) writeAdminAudit(r *http.Request, action, targetType, targetID string, brokerID *int64, before, after any) {
 	admin, _ := AdminFromContext(r.Context())
 	ip, _ := s.clientIP(r)
-	_ = s.audit.Write(r.Context(), audit.Entry{
-		ActorType: "admin", ActorID: admin.UserID, BrokerID: brokerID,
-		Action: action, EntityType: targetType, EntityID: targetID, IP: ip, Result: "ok",
-	})
 	var bRaw, aRaw json.RawMessage
 	if before != nil {
 		bRaw = observability.SafeJSON(toMap(before))
@@ -415,12 +416,15 @@ func (s *Server) writeAdminAudit(r *http.Request, action, targetType, targetID s
 	if after != nil {
 		aRaw = observability.SafeJSON(toMap(after))
 	}
-	s.emitObs(observability.Event{
-		Type: observability.TypeAudit, Subtype: action, ActorType: "admin", ActorID: admin.UserID,
-		BrokerID: brokerID, TargetType: targetType, TargetID: targetID, ClientIP: ip,
+	// One AUDIT line in today's log file carries the whole action.
+	if err := s.audit.Write(r.Context(), audit.Entry{
+		ActorType: "admin", ActorID: admin.UserID, BrokerID: brokerID,
+		Action: action, EntityType: targetType, EntityID: targetID, IP: ip, Result: observability.ResultSuccess,
 		RequestID: observability.RequestIDFrom(r.Context()), TraceID: observability.TraceIDFrom(r.Context()),
-		Before: bRaw, After: aRaw, Message: action, Endpoint: r.URL.Path, HTTPMethod: r.Method,
-	})
+		Endpoint: r.URL.Path, HTTPMethod: r.Method, Before: bRaw, After: aRaw,
+	}); err != nil && s.log != nil {
+		s.log.Error("audit log write failed", "action", action, "error", err)
+	}
 }
 
 func toMap(v any) map[string]any {

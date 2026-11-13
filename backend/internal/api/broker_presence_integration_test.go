@@ -45,7 +45,7 @@ func TestReadOnlyBrokerIsOnlineFromTokenUse(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := &Server{pool: pool, brokers: store, hub: realtime.NewHub(), log: slog.New(slog.NewTextHandler(io.Discard, nil)),
-		obs: observability.NewPipeline(observability.NewStore(pool), slog.New(slog.NewTextHandler(io.Discard, nil)), nil, observability.DefaultSettings())}
+		obs: observability.NewPipeline(observability.NewStore(pool, testLogFiles(t)), slog.New(slog.NewTextHandler(io.Discard, nil)), nil, observability.DefaultSettings())}
 	online := func() (observability.ConnectedBroker, bool) {
 		for _, c := range s.connectedBrokers(ctx) {
 			if c.BrokerID == broker.ID {

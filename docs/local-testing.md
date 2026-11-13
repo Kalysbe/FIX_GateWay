@@ -8,8 +8,8 @@ docker compose -f deploy/docker-compose.local.yml up --build -d --wait --wait-ti
 
 Требуется современный Docker Compose с `dockerfile_inline` (2.17+). Сборка скачивает зависимости; gateway, PostgreSQL и FIX simulator используют внутреннюю Docker-сеть без исходящего доступа в LAN/Интернет. UI и фиксированный TCP bridge `access` подключены также к отдельной сети для публикации loopback-портов. Bridge передаёт HTTP, native gRPC и PostgreSQL без завершения TLS; TLS проверяет сам gateway. Стенд имеет имя `fix-gateway-local`, собственные БД и сертификаты. Админка использует привычный порт 5173, остальные опубликованные порты выделены локальному стенду. Освободите порт 5173 перед запуском: одновременно запустить админки локального и UAT стендов на нём нельзя. Штатный UAT Compose и его данные не используются. Не объединяйте эти Compose-файлы через несколько `-f` и не меняйте имя проекта.
 
-Админка: http://localhost:5173 — `admin@localhost` / `admin123`.
-REST API / Swagger: http://localhost:28080/swagger.
+Админка: http://localhost:5173 — `admin` / `admin123`.
+REST API / Swagger: http://localhost:28080/broker-swagger.
 Native TLS gRPC: localhost:28443; клиентский сертификат по умолчанию не требуется.
 PostgreSQL: localhost:25432, БД `fix_gateway_local`, пользователь `gateway`, пароль `local-simulator-only`.
 Все опубликованные порты привязаны к loopback.
@@ -25,9 +25,11 @@ docker compose -f deploy/docker-compose.local.yml ps -a
 node scripts/local-smoke.mjs
 ```
 
+Сценарии администратора в браузере против этого стенда: `cd frontend; npm run test:stand` (Playwright собирает консоль и отдаёт её через `vite preview` на 5180 с проксированием `/api` на `GATEWAY_URL`, по умолчанию `http://localhost:28080`; поэтому занятый порт 5173 не мешает).
+
 Smoke требует Node 22 и проверяет принадлежность endpoint изолированному проекту до записи данных. Он создаёт тестовых брокеров, счета и токены; проверяет идемпотентность, исполнение и сделки, отмену, FIX-отказ, изоляцию брокеров, поток SSE через TLS gRPC, параллельную маршрутизацию через оба адаптера и запрет отключения последнего. В конце токены отзываются, отключённый для проверки адаптер включается обратно. Тестовые записи остаются в локальной БД для просмотра в интерфейсе. Эти же сценарии включены в CI.
 
-`/ready` должен вернуть успешный ответ с доступным адаптером. В админке проверьте, что включены только `adapter-1` и `adapter-2`, а ARQA отключены. Bootstrap создаёт брокера `LOCAL_DEMO` и счёт `LOCAL_ACCOUNT`. В админке создайте для этого брокера токен с правом торговли и firm `LOCAL_FIRM`; сохраните выданный токен. Отправляйте тестовые заявки через [REST API](broker-api-guide.md) на `http://localhost:28080`, передавая токен в `Authorization: Bearer <token>`. Для первой заявки используйте `SBER`, board `TQBR`, счёт `LOCAL_ACCOUNT`, client code `LOCAL_CLIENT`, BUY LIMIT, количество `1`, цену `100`. Simulator обрабатывает заявки локально; это не UAT биржи. Наблюдайте статус и сделки в админке. Повторный `client_order_id` используется для проверки идемпотентности через REST.
+`/ready` должен вернуть успешный ответ с доступным адаптером. В админке проверьте, что включены только `adapter-1` и `adapter-2`, а ARQA отключены. Bootstrap создаёт брокера `LOCAL_DEMO` и счёт `LOCAL_ACCOUNT`. В админке создайте для этого брокера токен с правом торговли и firm `LOCAL_FIRM`; сохраните выданный токен. Отправляйте тестовые заявки через [REST API](broker-api-guide.md) на `http://localhost:28080`, передавая токен в `Authorization: Bearer <token>`. Для первой заявки используйте `{"ClassCode":"TQBR","SecCode":"SBER","Operation":"Купля","Price":100,"Qty":1,"Account":"LOCAL_ACCOUNT","ClientCode":"LOCAL_CLIENT"}`. Simulator обрабатывает заявки локально; это не UAT биржи. Наблюдайте статус и сделки в админке. Каждый POST создаёт новую заявку (заголовок `Idempotency-Key` не читается с 30.10.2026); номер заявки создаёт шлюз.
 
 ## Проверка устойчивости
 
@@ -52,4 +54,4 @@ docker compose -f deploy/docker-compose.local.yml up --build -d --wait --wait-ti
 docker compose -f deploy/docker-compose.local.yml down -v
 ```
 
-Development сертификаты действуют 30 дней; после истечения пересоздайте тестовый PKI. Команда `down -v` также удаляет тестовую БД. Пароли этого стенда предназначены для локальной разработки.
+Development-сертификаты действуют 2 года (CA — 3 года); истёкший PKI `devcerts` при следующем запуске заменяет сам, с новым CA. Команда `down -v` также удаляет тестовую БД. Пароли этого стенда предназначены для локальной разработки.

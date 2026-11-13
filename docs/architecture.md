@@ -14,7 +14,7 @@ Broker → REST API → Order Service → PostgreSQL (+ outbox) → Worker
 1. **Adapter replaceability** — business logic depends only on `adapters.Adapter`.
 2. **No hard-coded adapter count** — pool is loaded from DB/config.
 3. **Consistency first** — order create and outbox insert share one DB transaction.
-4. **No duplicate orders** — unique `(broker_id, client_order_id)`, stable `fix_cl_ord_id`, send guards.
+4. **No duplicate orders** — gateway-generated `client_order_id`, stable `fix_cl_ord_id`, send guards. Since 30.10.2026 the REST API does not read `Idempotency-Key`: every POST is a new order.
 5. **Stateless process** — durable state in PostgreSQL; multiple Gateway instances can share the outbox via `FOR UPDATE SKIP LOCKED`.
 
 ## Components
@@ -23,7 +23,7 @@ Broker → REST API → Order Service → PostgreSQL (+ outbox) → Worker
 |-----------|----------------|
 | API Layer | REST, auth middleware, OpenAPI, native gRPC bidirectional streaming + browser SSE adapter |
 | Broker Auth | Bearer token → hash → broker context |
-| Order Service | validation, idempotency, lifecycle events |
+| Order Service | validation, lifecycle events |
 | Outbox Worker | claim pending events, route, send, retry |
 | Load Balancer | least connections / WRR / RR + health filter |
 | Adapter Manager | start/stop/health/failover pool |
@@ -37,7 +37,7 @@ Broker → REST API → Order Service → PostgreSQL (+ outbox) → Worker
 - Accepted trading requests must never be lost. Persist the request and its queue entry atomically before acknowledging acceptance to the broker; an in-memory queue alone is insufficient.
 - Keep every accepted request durably tracked until a confirmed terminal outcome. Overload, process restarts, database or FIX outages, and retry exhaustion must not silently discard requests. Requests requiring reconciliation or operator action remain durably tracked with an explicit state.
 - An uncertain FIX send outcome requires reconciliation, not blind retransmission. Queue durability must preserve the existing duplicate-send protections.
-- If durable enqueueing is unavailable, do not acknowledge acceptance. Return an explicit retryable failure; the broker must retain the request and retry with the same idempotency key. A rejected or disconnected HTTP request cannot be guaranteed queued by the gateway.
+- If durable enqueueing is unavailable, do not acknowledge acceptance. Return an explicit retryable failure; the broker checks `GET /api/v1/orders` and sends the request again only if it is not there (no idempotency key since 30.10.2026). A rejected or disconnected HTTP request cannot be guaranteed queued by the gateway.
 - Verify these requirements with crash, outage, overload, and recovery tests before claiming the guarantee is implemented.
 
 `outbox.Dispatcher` isolates producers from transport. MVP uses PostgreSQL outbox. A future RabbitMQ/Redis implementation can replace the worker transport without changing Order Service create semantics (same transactional write to an outbound table/bridge).
@@ -53,7 +53,7 @@ Broker → REST API → Order Service → PostgreSQL (+ outbox) → Worker
 
 ## Overload protection
 
-REST API admission reserves separate capacities for reads (32 concurrent requests) and trading submissions (16), before DB authentication. `API_READ_CONCURRENCY`, `API_TRADE_CONCURRENCY`, and `API_REQUEST_TIMEOUT` (15s) configure these limits. Overload returns 503 with `Retry-After`; context deadlines bound database acquisition and query waits. Health, readiness, metrics, and the long-lived SSE stream are excluded from normal request admission; readiness uses a short database timeout. The shared PostgreSQL pool remains a shared resource, so admission reservation does not guarantee trading latency under database saturation.
+REST API admission reserves separate capacities for reads (32 concurrent requests) and trading submissions (16), before DB authentication. `API_READ_CONCURRENCY`, `API_TRADE_CONCURRENCY`, and `API_REQUEST_TIMEOUT` (15s) configure these limits. Overload returns 503 with `Retry-After`; context deadlines bound database acquisition and query waits. Health, readiness, metrics, and the long-lived SSE stream are excluded from normal request admission; readiness uses a short database timeout. `HTTP_WRITE_TIMEOUT` (60s) bounds writing a response to a slow client; the SSE stream sets per-event deadlines and export downloads allow 15 minutes. The shared PostgreSQL pool remains a shared resource, so admission reservation does not guarantee trading latency under database saturation.
 
 Per-token read and trading rate budgets are independent: by default 100 reads/second and 20 trading submissions/second (create and cancel combined). Existing creation limits also apply. Broker rate changes update existing buckets without replenishing exhausted tokens.
 

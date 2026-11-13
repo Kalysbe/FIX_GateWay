@@ -3,9 +3,9 @@
 services:
   gateway:
     environment:
-      TRADE_RECONCILIATION_ENABLED: "true"
-      # Loopback-only unavailable history source exercises Gateway notifications.
-      QUIK_API_BASE_URL: http://127.0.0.1:1
+      # Shorter than the simulator's reconnect, so POST answers 202 before the
+      # retained ACK and the unconfirmed reconciliation case can be observed.
+      ORDER_ANSWER_TIMEOUT: 1s
   access:
     ports: !override
       - "127.0.0.1:38080:8080"

@@ -82,6 +82,11 @@ func (p *Pipeline) HTTPMiddleware(cfg HTTPConfig, next http.Handler) http.Handle
 		}
 		start := time.Now()
 		cw := &captureWriter{ResponseWriter: w, status: 200}
+		var body *bodyRecorder
+		if recordsBody(r) {
+			body = &bodyRecorder{ReadCloser: r.Body}
+			r.Body = body
+		}
 		next.ServeHTTP(cw, r)
 		if cw.status == http.StatusSwitchingProtocols {
 			return
@@ -153,6 +158,11 @@ func (p *Pipeline) HTTPMiddleware(cfg HTTPConfig, next http.Handler) http.Handle
 			}
 			e.FailureStage = "api"
 		}
+		// The broker's own JSON is kept only for failed requests, to show
+		// what was sent when QUIK or the gateway refused it.
+		if body != nil && result == ResultFailure && status >= 400 {
+			e.RequestBody = body.loggedBody()
+		}
 		p.Emit(e)
 		if result == ResultFailure && status >= 400 {
 			p.Emit(Event{
@@ -163,6 +173,7 @@ func (p *Pipeline) HTTPMiddleware(cfg HTTPConfig, next http.Handler) http.Handle
 				StatusCode: &status, OrderID: e.OrderID, ClientOrderID: e.ClientOrderID, AdapterID: e.AdapterID,
 				ErrorCode: firstNonEmpty(e.ErrorCode, strconv.Itoa(status)), ErrorMessage: e.ErrorMessage,
 				FailureStage: firstNonEmpty(e.FailureStage, "api"), Message: e.ErrorMessage,
+				RequestBody: e.RequestBody,
 			})
 		}
 	})

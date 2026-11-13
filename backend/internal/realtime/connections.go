@@ -14,7 +14,7 @@ type ConnectionInfo struct {
 	BrokerID    int64     `json:"broker_id,omitempty"`
 	BrokerCode  string    `json:"broker_code,omitempty"`
 	BrokerName  string    `json:"broker_name,omitempty"`
-	Email       string    `json:"email"`
+	Username    string    `json:"username"`
 	Peer        string    `json:"peer"`
 	Transport   string    `json:"transport"`
 	ConnectedAt time.Time `json:"connected_at"`
@@ -46,10 +46,6 @@ func (h *Hub) Connections() ConnectionsSnapshot {
 			for _, path := range topicPaths[topic] {
 				if c.BrokerID > 0 {
 					path = strings.Replace(path, "/admin/", "/", 1)
-					if topic == "marketdata.tick" {
-						path = "/api/v1/orderbook"
-						paths["/api/v1/market-data"] = true
-					}
 				}
 				paths[path] = true
 			}
@@ -69,7 +65,8 @@ func (h *Hub) notifySubscriptions() { h.Broadcast("subscriptions.updated", h.Con
 var topicPaths = map[string][]string{
 	"order.updated":          {"/api/v1/admin/orders"},
 	"trade.created":          {"/api/v1/admin/trades"},
-	"positions.updated":      {"/api/v1/admin/positions"},
+	MoneyLimitsUpdated:       {"/api/v1/admin/positions"},
+	DepoLimitsUpdated:        {"/api/v1/admin/positions"},
 	"marketdata.tick":        {"/api/v1/admin/market-data"},
 	"adapter.status_changed": {"/api/v1/admin/adapters"},
 	"notification.new":       {"/api/v1/admin/notifications"},

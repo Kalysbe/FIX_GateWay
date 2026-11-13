@@ -14,9 +14,6 @@ import (
 func (s *Server) SetAdmission(store *ratelimit.Store) { s.ratePolicies = store }
 func rateOperation(r *http.Request) (string, string) {
 	path := r.URL.Path
-	if strings.HasPrefix(path, "/api/v1/positions") && r.Method != http.MethodGet {
-		return "Trading", "MaintainPositions"
-	}
 	if tradingRequest(r) {
 		if strings.HasSuffix(path, "/cancel") {
 			return "Trading", "CancelOrder"
@@ -24,13 +21,13 @@ func rateOperation(r *http.Request) (string, string) {
 		return "Trading", "SubmitOrder"
 	}
 	switch path {
-	case "/api/v1/firm":
-		return "System", "GetFirm"
-	case "/api/v1/positions":
+	case "/api/v1/token":
+		return "System", "GetToken"
+	case "/api/v1/positions/moneylimits", "/api/v1/positions/depolimits":
 		return "Queries", "GetPositions"
 	case "/api/v1/instruments":
 		return "Queries", "GetSecurities"
-	case "/api/v1/orders", "/api/v1/orders/active":
+	case "/api/v1/orders", "/api/v1/orders/active", "/api/v1/quotes":
 		return "Queries", "GetOrders"
 	case "/api/v1/accounts":
 		return "Queries", "GetAccounts"
@@ -84,7 +81,7 @@ func (s *Server) listRateLimits(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 500, "cannot read rate limits")
 		return
 	}
-	writeJSON(w, 200, map[string]any{"policies": policies, "usage": s.ratePolicies.Admission.Snapshot(), "operations": []string{"*", "Trading", "Queries", "System", "SubmitOrder", "CancelOrder", "MaintainPositions", "GetOrder", "GetOrders", "GetPositions", "GetSecurities", "GetFirm", "GetAccounts", "GetTrades", "GetOrderBook", "OtherQuery", "Connect", "Subscribe", "Ping"}})
+	writeJSON(w, 200, map[string]any{"policies": policies, "usage": s.ratePolicies.Admission.Snapshot(), "operations": []string{"*", "Trading", "Queries", "System", "SubmitOrder", "CancelOrder", "GetOrder", "GetOrders", "GetPositions", "GetSecurities", "GetToken", "GetAccounts", "GetTrades", "GetOrderBook", "OtherQuery", "Connect", "Subscribe", "Ping"}})
 }
 func (s *Server) updateRateLimit(w http.ResponseWriter, r *http.Request) {
 	var body struct {
@@ -103,7 +100,7 @@ func (s *Server) updateRateLimit(w http.ResponseWriter, r *http.Request) {
 	}
 	valid := map[string]bool{"*": true, "Trading": true, "Queries": true, "System": true}
 	if body.Scope == "broker" {
-		for _, op := range []string{"SubmitOrder", "CancelOrder", "MaintainPositions", "GetOrder", "GetOrders", "GetPositions", "GetSecurities", "GetFirm", "GetAccounts", "GetTrades", "GetOrderBook", "OtherQuery"} {
+		for _, op := range []string{"SubmitOrder", "CancelOrder", "GetOrder", "GetOrders", "GetPositions", "GetSecurities", "GetToken", "GetAccounts", "GetTrades", "GetOrderBook", "OtherQuery"} {
 			valid[op] = true
 		}
 	}

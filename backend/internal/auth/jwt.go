@@ -10,16 +10,16 @@ import (
 
 type AdminClaims struct {
 	UserID      string `json:"uid"`
-	Email       string `json:"email"`
+	Username    string `json:"username"`
 	RoleCode    string `json:"role"`
 	UserVersion int64  `json:"uv"`
 	jwt.RegisteredClaims
 }
 
-func IssueAdminJWT(secret string, userID uuid.UUID, email, role string, ttl time.Duration, version ...int64) (string, error) {
+func IssueAdminJWT(secret string, userID uuid.UUID, username, role string, ttl time.Duration, version ...int64) (string, error) {
 	claims := AdminClaims{
 		UserID:   userID.String(),
-		Email:    email,
+		Username:    username,
 		RoleCode: role,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(ttl)),

@@ -1,10 +1,16 @@
 import { RowActions } from "../components/RowActions";
+import { ActionButton } from "../components/ActionButton";
+import { useConfirm } from "../components/confirm";
+import { useToast } from "../components/Toast";
 import { DataTable } from "../components/DataTable";
 import { dateValue } from "../lib/table";
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { api } from "../api";
+import { api, apiWithHeaders } from "../api";
+import { dbValue, parseDBJSON, type DBOrder } from "../lib/rawOrders";
+import { rawColumns, rawSearchText } from "../components/rawColumns";
+import { FirmSelect } from "../components/FirmSelect";
 import { formatDate, formatDateTime, formatTime } from "../labels";
 import { liveRefetchInterval } from "../lib/poll";
 import { useAdminStream } from "../hooks/useAdminStream";
@@ -13,7 +19,7 @@ import { StatusBadge } from "../components/StatusBadge";
 import { useBreadcrumbs } from "../components/breadcrumbs";
 import { Modal } from "../components/Modal";
 import { ErrorBanner, PageSpinner } from "../components/feedback";
-import { ALL_PERMS, READ_ONLY_PERMS, type APIToken, type AuditRow, type Broker, type BrokerAccount, type IPWhitelistEntry, type ObsLog } from "../types/admin";
+import { ALL_PERMS, READ_ONLY_PERMS, type APIToken, type AuditRow, type Broker, type IPWhitelistEntry, type ObsLog } from "../types/admin";
 import {
   ActivityList,
   BrokerActivity,
@@ -25,6 +31,8 @@ import {
   pctDelta,
   type BrokerAPIStats,
 } from "./broker/widgets";
+import { BrokerEditForm, IPEntryForm } from "./broker/forms";
+import type { IPEntryValues } from "../lib/schemas";
 
 const READ_ONLY = READ_ONLY_PERMS;
 
@@ -61,10 +69,15 @@ export default function BrokerDetailPage() {
     queryKey: ["broker", id],
     queryFn: ({ signal }) => api<{ broker: Broker }>(`/api/v1/admin/brokers/${id}`, { signal }),
   });
+  // Trading accounts of the broker's token firms, rows of QUIK "Trdaccs" as stored.
   const accounts = useQuery({
     queryKey: ["accounts", id],
-    queryFn: ({ signal }) => api<{ accounts: BrokerAccount[] }>(`/api/v1/admin/brokers/${id}/accounts`, { signal }),
+    queryFn: async ({ signal }) => {
+      const { data, headers } = await apiWithHeaders<DBOrder[]>(`/api/v1/admin/brokers/${id}/accounts`, { signal }, parseDBJSON);
+      return { rows: data ?? [], firms: (headers.get("X-Firms") || "").split(",").filter(Boolean) };
+    },
   });
+
   const security = useQuery({
     queryKey: ["security", id],
     queryFn: ({ signal }) =>
@@ -116,13 +129,6 @@ export default function BrokerDetailPage() {
     refetchInterval: liveRefetchInterval(connected, 8000),
   });
 
-  const emptyAccountForm = { trading_account: "", code: "", name: "", quik_firm: "" };
-  const [accountForm, setAccountForm] = useState(emptyAccountForm);
-  const [accountError, setAccountError] = useState("");
-  const [accountListError, setAccountListError] = useState("");
-  const [accountBusy, setAccountBusy] = useState(false);
-  const [showAccountForm, setShowAccountForm] = useState(false);
-  const [editingAccount, setEditingAccount] = useState<BrokerAccount | null>(null);
   const [showCreate, setShowCreate] = useState(false);
   const [tokenName, setTokenName] = useState("Production API");
   const [quikFirm, setQuikFirm] = useState("");
@@ -131,20 +137,22 @@ export default function BrokerDetailPage() {
   const [revealedToken, setRevealedToken] = useState<string | null>(null);
   const [revealTitle, setRevealTitle] = useState("ТОКЕН СОЗДАН");
   const [revealNote, setRevealNote] = useState("");
-  const [confirmRevoke, setConfirmRevoke] = useState<APIToken | null>(null);
+  const [firmSaving, setFirmSaving] = useState(false);
+  const toast = useToast();
+  const confirm = useConfirm();
   const [editFirm, setEditFirm] = useState<APIToken | null>(null);
   const [editFirmValue, setEditFirmValue] = useState("");
-  const [newIP, setNewIP] = useState("");
-  const [newIPNote, setNewIPNote] = useState("");
+  const [editFirmError, setEditFirmError] = useState("");
+
   const [manageIP, setManageIP] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
-  const [editName, setEditName] = useState("");
-  const [editDesc, setEditDesc] = useState("");
+  const [ipDirty, setIpDirty] = useState(false);
+  const [editDirty, setEditDirty] = useState(false);
+
 
   const b = broker.data?.broker;
   const st = security.data?.security;
-  const accountList: BrokerAccount[] = accounts.data?.accounts || [];
-  const activeAccountCount = accountList.filter((a) => (a.status || "").toUpperCase() === "ACTIVE").length;
+  const accountList = accounts.data?.rows ?? [];
   const tokenList = tokens.data?.tokens || [];
   const ipEntries = whitelist.data?.entries || [];
   const wlEnabled = !!(whitelist.data?.ip_whitelist_enabled ?? b?.ip_whitelist_enabled);
@@ -168,76 +176,6 @@ export default function BrokerDetailPage() {
 
   function setTab(next: TabId) {
     setParams({ tab: next });
-  }
-
-  function openAccountCreate() {
-    setEditingAccount(null);
-    setAccountForm(emptyAccountForm);
-    setAccountError("");
-    setShowAccountForm(true);
-  }
-
-  function openAccountEdit(a: BrokerAccount) {
-    setEditingAccount(a);
-    setAccountForm({
-      trading_account: a.trading_account || "",
-      code: a.code || "",
-      name: a.name || "",
-      quik_firm: a.quik_firm || "",
-    });
-    setAccountError("");
-    setShowAccountForm(true);
-  }
-
-  async function saveAccount(e: FormEvent) {
-    e.preventDefault();
-    const trading = accountForm.trading_account.trim();
-    const code = accountForm.code.trim() || trading;
-    if (!trading && !code) {
-      setAccountError("Укажите торговый счёт — его брокер передаёт в account_id заявки");
-      return;
-    }
-    setAccountBusy(true);
-    setAccountError("");
-    try {
-      const body = {
-        trading_account: trading || code,
-        code,
-        name: accountForm.name.trim() || code,
-        quik_firm: accountForm.quik_firm.trim(),
-      };
-      if (editingAccount) {
-        await api(`/api/v1/admin/brokers/${id}/accounts/${editingAccount.id}`, {
-          method: "PATCH",
-          body: JSON.stringify(body),
-        });
-      } else {
-        await api(`/api/v1/admin/brokers/${id}/accounts`, {
-          method: "POST",
-          body: JSON.stringify(body),
-        });
-      }
-      setShowAccountForm(false);
-      setEditingAccount(null);
-      qc.invalidateQueries({ queryKey: ["accounts", id] });
-    } catch (err) {
-      setAccountError((err as Error).message || "Не удалось сохранить счёт");
-    } finally {
-      setAccountBusy(false);
-    }
-  }
-
-  async function setAccountStatus(a: BrokerAccount, status: "ACTIVE" | "DISABLED") {
-    setAccountListError("");
-    try {
-      await api(`/api/v1/admin/brokers/${id}/accounts/${a.id}`, {
-        method: "PATCH",
-        body: JSON.stringify({ status }),
-      });
-      qc.invalidateQueries({ queryKey: ["accounts", id] });
-    } catch (err) {
-      setAccountListError((err as Error).message || "Не удалось изменить статус счёта");
-    }
   }
 
   function openCreate() {
@@ -278,19 +216,29 @@ export default function BrokerDetailPage() {
 
   async function revoke(tokenId: string) {
     await api(`/api/v1/admin/tokens/${tokenId}/revoke`, { method: "POST" });
-    setConfirmRevoke(null);
     qc.invalidateQueries({ queryKey: ["tokens", id] });
     qc.invalidateQueries({ queryKey: ["security", id] });
   }
 
   async function saveFirm() {
     if (!editFirm) return;
-    await api(`/api/v1/admin/tokens/${editFirm.id}`, {
-      method: "PATCH",
-      body: JSON.stringify({ quik_firm: editFirmValue.trim() }),
-    });
+    setEditFirmError("");
+    setFirmSaving(true);
+    try {
+      await api(`/api/v1/admin/tokens/${editFirm.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ quik_firm: editFirmValue.trim() }),
+      });
+    } catch (err) {
+      setEditFirmError((err as Error).message || "Не удалось изменить фирму");
+      return;
+    } finally {
+      setFirmSaving(false);
+    }
+    toast.push(`Фирма токена «${editFirm.name}» изменена`, "ok");
     setEditFirm(null);
     qc.invalidateQueries({ queryKey: ["tokens", id] });
+    qc.invalidateQueries({ queryKey: ["accounts", id] });
   }
 
   async function toggleWhitelist(enabled: boolean) {
@@ -303,14 +251,11 @@ export default function BrokerDetailPage() {
     qc.invalidateQueries({ queryKey: ["security", id] });
   }
 
-  async function addIP(e: FormEvent) {
-    e.preventDefault();
+  async function addIP({ ip, note }: IPEntryValues) {
     await api(`/api/v1/admin/brokers/${id}/ip-whitelist`, {
       method: "POST",
-      body: JSON.stringify({ ip: newIP, note: newIPNote }),
+      body: JSON.stringify({ ip, note }),
     });
-    setNewIP("");
-    setNewIPNote("");
     qc.invalidateQueries({ queryKey: ["ipwl", id] });
     qc.invalidateQueries({ queryKey: ["security", id] });
   }
@@ -326,11 +271,11 @@ export default function BrokerDetailPage() {
   }
 
   function expiresTone(expiresAt?: string) {
-    if (!expiresAt) return "text-slate-600";
+    if (!expiresAt) return "text-muted";
     const days = (new Date(expiresAt).getTime() - Date.now()) / 86400000;
     if (days < 0) return "text-danger font-medium";
     if (days < 30) return "text-warn font-medium";
-    return "text-slate-600";
+    return "text-muted";
   }
 
   if (broker.isLoading) return <PageSpinner />;
@@ -347,20 +292,19 @@ export default function BrokerDetailPage() {
             <h1 className="text-2xl font-semibold tracking-tight">{b?.name}</h1>
             <StatusBadge status={b?.status} />
           </div>
-          <p className="mt-1 text-sm text-slate-500">
+          <p className="mt-1 text-sm text-muted">
             ID: {b?.id} · Создан: {formatDateTime(b?.created_at)}
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-3">
           <SummaryChip label="Токены" value={`${st?.active_tokens ?? 0} активных`} />
-          <SummaryChip label="Счета" value={`${activeAccountCount} активных`} />
+          <SummaryChip label="Счета QUIK" value={accounts.data ? String(accountList.length) : "…"} />
           <SummaryChip label="Заявки сегодня" value={String(ordersToday)} />
           <button
             type="button"
             className="btn gap-1.5"
             onClick={() => {
-              setEditName(b?.name || "");
-              setEditDesc(b?.description || "");
+
               setEditOpen(true);
             }}
           >
@@ -371,7 +315,7 @@ export default function BrokerDetailPage() {
       </div>
 
       {/* Tabs */}
-      <div className="border-b border-slate-200">
+      <div className="border-b border-line">
         <div className="flex gap-1 overflow-x-auto">
           {TABS.map((t) => (
             <button
@@ -381,7 +325,7 @@ export default function BrokerDetailPage() {
               className={`whitespace-nowrap border-b-2 px-3 py-2.5 text-sm font-medium transition-colors ${
                 tab === t.id
                   ? "border-accent text-accent"
-                  : "border-transparent text-slate-500 hover:text-ink"
+                  : "border-transparent text-muted hover:text-ink"
               }`}
             >
               {t.label}
@@ -394,10 +338,10 @@ export default function BrokerDetailPage() {
         <div className="space-y-4">
           {(tab === "tokens" || tab === "overview") && (
             <section className="card !p-0 overflow-hidden">
-              <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-4 py-3">
+              <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line px-4 py-3">
                 <div>
                   <h2 className="font-semibold">Токены</h2>
-                  <p className="text-xs text-slate-500">Управление API-токенами брокера</p>
+                  <p className="text-xs text-muted">Управление API-токенами брокера</p>
                 </div>
                 <button type="button" className="btn gap-1.5" onClick={openCreate}>
                   <Icons.plus size={16} />
@@ -405,53 +349,37 @@ export default function BrokerDetailPage() {
                 </button>
               </div>
               <div className="overflow-x-auto">
-                <DataTable<APIToken> title="Токены брокера" rows={tokenList} columns={[{ id: "c0", header: "Название", value: (t) => t.name },
-{ id: "c1", header: "Статус", value: (t) => t.status },
-{ id: "c2", header: "Права", value: (t) => (t.permissions || []).join(" ") },
-{ id: "c3", header: "Истекает", value: (t) => dateValue(t.expires_at) },
-{ id: "c4", header: "Последнее использование", value: (t) => dateValue(t.last_used_at) },
-{ id: "actions", header: "Действия", value: () => "", sortable: false }]} rowKey={row => row.id} renderRow={(t) => (
-                      <tr key={t.id} className="align-middle">
-                        <td>
-                          <div className="font-medium">{t.name}</div>
-                          <div className="font-mono text-[11px] text-slate-400">{t.token_prefix}…</div>
-                        </td>
-                        <td>
-                          <StatusBadge status={t.status} />
-                        </td>
-                        <td>
-                          <div className="flex items-center gap-1 text-slate-500">
-                            {(t.permissions || []).slice(0, 6).map((p) => {
-                              const Icon = PERM_ICON[p] || Icons.lock;
-                              return (
-                                <span key={p} title={p} className="rounded bg-slate-50 p-1 text-slate-500">
-                                  <Icon size={13} />
-                                </span>
-                              );
-                            })}
-                          </div>
-                        </td>
-                        <td className={expiresTone(t.expires_at)}>
-                          {t.expires_at ? formatDate(t.expires_at) : "Без срока"}
-                        </td>
-                        <td>
-                          <div className="text-sm">{t.last_used_at ? formatDateTime(t.last_used_at) : "—"}</div>
-                          {t.last_used_ip && <div className="font-mono text-[11px] text-slate-400">{t.last_used_ip}</div>}
-                        </td>
-                        <td className="relative">
-                          {t.status === "ACTIVE" && (
-                            <RowActions label={"Действия токена " + t.name} actions={[
-                              { label: "Изменить фирму", run: () => { setEditFirm(t); setEditFirmValue(t.quik_firm || ""); } },
-                              { label: "Ротировать токен", run: () => rotate(t.id) },
-                              { label: "Отозвать токен", danger: true, run: () => setConfirmRevoke(t) },
-                            ]} />
-                          )}
-                        </td>
-                      </tr>
-                    )} emptyTitle="Записей пока нет" />
+                <DataTable<APIToken> title="Токены брокера" rows={tokenList} rowKey={row => row.id} emptyTitle="Записей пока нет"
+                  selection={{
+                    canSelect: (t) => t.status === "ACTIVE",
+                    actions: [{
+                      label: "Отозвать выбранные", danger: true,
+                      run: async (list) => {
+                        const failed: string[] = [];
+                        for (const t of list) { try { await revoke(t.id); } catch { failed.push(t.name); } }
+                        if (failed.length) throw new Error(`Не удалось отозвать: ${failed.join(", ")}. Остальные отозваны.`);
+                      },
+                      confirm: (list) => ({ title: `Отозвать токены: ${list.length}?`, danger: true, confirmLabel: "Отозвать все", description: <>Перестанут работать сразу: <span className="font-medium text-ink">{list.map(t => t.name).join(", ")}</span>. Любой запрос с ними получит HTTP 401.</> }),
+                      success: (list) => `Отозвано токенов: ${list.length}`,
+                    }],
+                  }}
+                  columns={[
+                    { id: "c0", header: "Название", value: (t) => t.name, cell: (t) => <><div className="font-medium">{t.name}</div><div className="font-mono text-[11px] text-faint">{t.token_prefix}…</div></> },
+                    { id: "c1", header: "Статус", value: (t) => t.status, cell: (t) => <StatusBadge status={t.status} /> },
+                    { id: "c2", header: "Права", value: (t) => (t.permissions || []).join(" "), cell: (t) => <div className="flex items-center gap-1 text-muted">{(t.permissions || []).slice(0, 6).map((p) => { const Icon = PERM_ICON[p] || Icons.lock; return <span key={p} title={p} className="rounded bg-subtle p-1 text-muted"><Icon size={13} /></span>; })}</div> },
+                    { id: "c3", header: "Истекает", value: (t) => dateValue(t.expires_at), cell: (t) => <span className={expiresTone(t.expires_at)}>{t.expires_at ? formatDate(t.expires_at) : "Без срока"}</span> },
+                    { id: "c4", header: "Последнее использование", value: (t) => dateValue(t.last_used_at), cell: (t) => <><div className="text-sm">{t.last_used_at ? formatDateTime(t.last_used_at) : "—"}</div>{t.last_used_ip && <div className="font-mono text-[11px] text-faint">{t.last_used_ip}</div>}</> },
+                    { id: "actions", header: "Действия", value: () => "", sortable: false, cell: (t) => t.status === "ACTIVE" ? (
+                      <RowActions label={"Действия токена " + t.name} actions={[
+                        { label: "Изменить фирму", run: () => { setEditFirm(t); setEditFirmValue(t.quik_firm || ""); setEditFirmError(""); } },
+                        { label: "Ротировать токен", run: () => rotate(t.id), success: `Токен «${t.name}» ротирован`, confirm: { title: "Ротировать токен?", description: "Будет выпущен новый токен. Старый продолжит работать, пока вы его не отзовёте.", confirmLabel: "Ротировать" } },
+                        { label: "Отозвать токен", danger: true, run: () => revoke(t.id), success: `Токен «${t.name}» отозван`, confirm: { title: "Отозвать токен?", danger: true, confirmLabel: "Отозвать", description: <><span className="font-medium text-ink">{t.name}</span> перестанет работать сразу. Любой запрос с этим токеном получит HTTP 401.</> } },
+                      ]} />
+                    ) : null },
+                  ]} />
               </div>
-              <div className="m-4 flex gap-2 rounded-lg border border-sky-100 bg-sky-50 px-3 py-2.5 text-sm text-sky-900">
-                <Icons.info size={18} className="mt-0.5 shrink-0 text-sky-600" />
+              <div className="m-4 flex gap-2 rounded-lg border border-info/20 bg-info-soft px-3 py-2.5 text-sm text-info">
+                <Icons.info size={18} className="mt-0.5 shrink-0 text-info" />
                 <p>
                   Полное значение токена показывается только при создании или ротации. Храните секреты в безопасном
                   хранилище — повторно получить значение нельзя.
@@ -462,67 +390,21 @@ export default function BrokerDetailPage() {
 
           {tab === "accounts" && (
             <section className="card !p-0 overflow-hidden">
-              <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-4 py-3">
-                <div>
-                  <h2 className="font-semibold">Торговые счета</h2>
-                  <p className="text-xs text-slate-500">
-                    В заявке брокер передаёт <span className="font-mono">account_id</span> — он должен совпасть с торговым
-                    счётом или кодом активного счёта (FIX tag 1)
-                  </p>
-                </div>
-                <button type="button" className="btn gap-1.5" onClick={openAccountCreate}>
-                  <Icons.plus size={16} />
-                  Добавить счёт
-                </button>
-              </div>
-              {accountListError && <p className="px-4 pt-3 text-sm text-danger">{accountListError}</p>}
-              <div className="overflow-x-auto">
-                <DataTable<BrokerAccount> title="Торговые счета" rows={accountList} columns={[{ id: "c0", header: "Торговый счёт", value: (a) => a.trading_account },
-{ id: "c1", header: "Код", value: (a) => a.code },
-{ id: "c2", header: "Название", value: (a) => a.name },
-{ id: "c3", header: "Статус", value: (a) => a.status },
-{ id: "actions", header: "Действия", value: () => "", sortable: false }]} rowKey={row => row.id} renderRow={(a) => {
-                      const active = (a.status || "").toUpperCase() === "ACTIVE";
-                      return (
-                        <tr key={a.id} className="align-middle">
-                          <td className="font-mono">{a.trading_account}</td>
-                          <td className="font-mono text-slate-600">{a.code}</td>
-                          <td>{a.name || "—"}</td>
-                          <td>
-                            <StatusBadge status={a.status} />
-                          </td>
-                          <td className="whitespace-nowrap">
-                            <button type="button" className="btn-muted mr-2" onClick={() => openAccountEdit(a)}>
-                              Изменить
-                            </button>
-                            {active ? (
-                              <button
-                                type="button"
-                                className="btn-muted"
-                                onClick={() => setAccountStatus(a, "DISABLED")}
-                              >
-                                Отключить
-                              </button>
-                            ) : (
-                              <button
-                                type="button"
-                                className="btn-muted"
-                                onClick={() => setAccountStatus(a, "ACTIVE")}
-                              >
-                                Включить
-                              </button>
-                            )}
-                          </td>
-                        </tr>
-                      );
-                    }} emptyTitle="Записей пока нет" />
-              </div>
-              <div className="m-4 flex gap-2 rounded-lg border border-sky-100 bg-sky-50 px-3 py-2.5 text-sm text-sky-900">
-                <Icons.info size={18} className="mt-0.5 shrink-0 text-sky-600" />
-                <p>
-                  Отключённый счёт остаётся в справочнике, но заявки с его <span className="font-mono">account_id</span>{" "}
-                  будут отклонены с 400.
+              <div className="border-b border-line px-4 py-3">
+                <h2 className="font-semibold">Торговые счета QUIK</h2>
+                <p className="text-xs text-muted">
+                  Строки таблицы QUIK Trdaccs фирм, указанных в активных токенах брокера
+                  {accounts.data?.firms.length ? <> (<span className="font-mono">{accounts.data.firms.join(", ")}</span>)</> : null}.
+                  В заявке брокер передаёт <span className="font-mono">account_id</span> — он должен совпасть с{" "}
+                  <span className="font-mono">TrdAccId</span> фирмы своего токена. Счета заводятся в QUIK, не в Gateway.
                 </p>
+              </div>
+              {accounts.error && <div className="px-4 pt-3"><ErrorBanner error={accounts.error} onRetry={() => accounts.refetch()} /></div>}
+              <div className="overflow-x-auto">
+                <DataTable title="Торговые счета QUIK" rows={accounts.error ? [] : accountList} columns={rawColumns(accountList)}
+                  rowKey={(r) => `${dbValue(r.FirmId)}\u0000${dbValue(r.TrdAccId)}`} getSearchText={rawSearchText(accountList)}
+                  loading={accounts.isLoading} exportName="trdaccs" showTotals={false}
+                  emptyTitle={accounts.error ? "Таблица Trdaccs недоступна" : accounts.data?.firms.length ? "В Trdaccs нет счетов этих фирм" : "У брокера нет активных токенов с фирмой"} />
               </div>
             </section>
           )}
@@ -530,7 +412,7 @@ export default function BrokerDetailPage() {
           {(tab === "ip" || tab === "tokens" || tab === "overview") && (
             <div className={`grid gap-4 ${tab === "ip" ? "" : "lg:grid-cols-2"}`}>
               <section className="card !p-0 overflow-hidden">
-                <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 px-4 py-3">
+                <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line px-4 py-3">
                   <div className="flex items-center gap-2">
                     <h2 className="font-semibold">IP Whitelist</h2>
                     <span className={wlEnabled ? "badge-success" : "badge-muted"}>
@@ -545,7 +427,7 @@ export default function BrokerDetailPage() {
 { id: "c1", header: "Описание", value: (e) => e.note }]} rowKey={row => row.id} renderRow={(e) => (
                       <tr key={e.id}>
                         <td className="font-mono text-sm">{e.ip_cidr}</td>
-                        <td className="text-slate-500">{e.note || "—"}</td>
+                        <td className="text-muted">{e.note || "—"}</td>
                       </tr>
                     )} emptyTitle="Записей пока нет" />
               </section>
@@ -565,7 +447,7 @@ export default function BrokerDetailPage() {
                     </select>
                   </div>
                   <RequestChart series={brokerStats.data?.stats?.series || []} />
-                  <div className="grid grid-cols-3 gap-3 border-t border-slate-100 pt-3">
+                  <div className="grid grid-cols-3 gap-3 border-t border-line pt-3">
                     <Metric
                       label="Заявки"
                       value={String(brokerStats.data?.stats?.period?.orders ?? 0)}
@@ -599,10 +481,10 @@ export default function BrokerDetailPage() {
           {tab === "rights" && (
             <section className="card space-y-3">
               <h2 className="font-semibold">Права API</h2>
-              <p className="text-sm text-slate-500">Права назначаются на уровне каждого токена при создании.</p>
+              <p className="text-sm text-muted">Права назначаются на уровне каждого токена при создании.</p>
               <div className="grid gap-2 sm:grid-cols-2">
                 {ALL_PERMS.map((p) => (
-                  <div key={p} className="flex items-center gap-2 rounded-lg border border-slate-100 bg-slate-50 px-3 py-2 text-sm">
+                  <div key={p} className="flex items-center gap-2 rounded-lg border border-line bg-subtle px-3 py-2 text-sm">
                     {(PERM_ICON[p] || Icons.lock)({ size: 14 })}
                     <span className="font-mono">{p}</span>
                   </div>
@@ -681,13 +563,13 @@ export default function BrokerDetailPage() {
           <section className="card space-y-3">
             <h2 className="font-semibold">Последние ошибки</h2>
             {(brokerErrors.data?.logs || []).length === 0 ? (
-              <p className="text-sm text-slate-400">Ошибок за выбранный период не обнаружено.</p>
+              <p className="text-sm text-faint">Ошибок за выбранный период не обнаружено.</p>
             ) : (
               <ul className="space-y-2">
                 {(brokerErrors.data?.logs || []).slice(0, 4).map((e) => (
                   <li key={e.id} className="text-sm">
                     <div className="font-medium text-danger">{e.error_code || e.subtype}</div>
-                    <div className="text-[11px] text-slate-400">{formatTime(e.timestamp)}</div>
+                    <div className="text-[11px] text-faint">{formatTime(e.timestamp)}</div>
                   </li>
                 ))}
               </ul>
@@ -701,132 +583,52 @@ export default function BrokerDetailPage() {
 
       {/* Modals */}
       {manageIP && (
-        <Modal title="Управление IP Whitelist" onClose={() => setManageIP(false)}>
+        <Modal title="Управление IP Whitelist" dirty={ipDirty} onClose={() => { setManageIP(false); setIpDirty(false); }}>
           <label className="mb-3 flex items-center gap-2 text-sm">
-            <input type="checkbox" checked={wlEnabled} onChange={(e) => toggleWhitelist(e.target.checked)} />
+            <input type="checkbox" checked={wlEnabled} onChange={(e) => {
+              const enabled = e.target.checked;
+              void confirm({
+                title: enabled ? "Включить IP whitelist?" : "Выключить IP whitelist?",
+                description: enabled
+                  ? ipEntries.length ? "Запросы брокера будут приниматься только с адресов из списка." : "Список пуст: после включения брокер не сможет обратиться к API ни с одного адреса."
+                  : "Запросы брокера будут приниматься с любого адреса.",
+                confirmLabel: enabled ? "Включить" : "Выключить",
+                danger: enabled ? !ipEntries.length : true,
+                action: () => toggleWhitelist(enabled),
+                success: enabled ? "IP whitelist включён" : "IP whitelist выключен",
+              });
+            }} />
             Включить whitelist
           </label>
-          <form onSubmit={addIP} className="mb-3 grid gap-2 sm:grid-cols-[1fr_1fr_auto]">
-            <input
-              className="input"
-              placeholder="185.10.10.10 или CIDR"
-              value={newIP}
-              onChange={(e) => setNewIP(e.target.value)}
-              required
-            />
-            <input
-              className="input"
-              placeholder="Описание"
-              value={newIPNote}
-              onChange={(e) => setNewIPNote(e.target.value)}
-            />
-            <button className="btn" type="submit">
-              Добавить
-            </button>
-          </form>
-          <DataTable<IPWhitelistEntry> title="Адреса доступа" rows={ipEntries} columns={[{ id: "c0", header: "IP / CIDR", value: (e) => e.ip_cidr },
-{ id: "c1", header: "Описание", value: (e) => e.note },
-{ id: "actions", header: "Действия", value: () => "", sortable: false }]} rowKey={row => row.id} renderRow={(e) => (
-                <tr key={e.id}>
-                  <td className="font-mono">{e.ip_cidr}</td>
-                  <td>{e.note || "—"}</td>
-                  <td>
-                    <button type="button" className="btn-muted" onClick={() => removeIP(e.id)}>
-                      Удалить
-                    </button>
-                  </td>
-                </tr>
-              )} emptyTitle="Записей пока нет" />
-        </Modal>
-      )}
-
-      {showAccountForm && (
-        <Modal
-          title={editingAccount ? "Изменить счёт" : "Добавить торговый счёт"}
-          onClose={() => {
-            setShowAccountForm(false);
-            setEditingAccount(null);
-          }}
-        >
-          <form onSubmit={saveAccount} className="space-y-3">
-            <label className="block space-y-1 text-sm">
-              <span className="text-slate-500">Торговый счёт (FIX tag 1)</span>
-              <input
-                className="input font-mono"
-                placeholder="например 1-3101-2040"
-                value={accountForm.trading_account}
-                onChange={(e) => setAccountForm((f) => ({ ...f, trading_account: e.target.value }))}
-                required
-              />
-              <span className="text-xs text-slate-400">
-                Значение, которое брокер передаёт в <span className="font-mono">account_id</span> при создании заявки
-              </span>
-            </label>
-            <label className="block space-y-1 text-sm">
-              <span className="text-slate-500">Код</span>
-              <input
-                className="input font-mono"
-                placeholder="по умолчанию = торговый счёт"
-                value={accountForm.code}
-                onChange={(e) => setAccountForm((f) => ({ ...f, code: e.target.value }))}
-              />
-            </label>
-            <label className="block space-y-1 text-sm">
-              <span className="text-slate-500">Название</span>
-              <input
-                className="input"
-                placeholder="необязательно"
-                value={accountForm.name}
-                onChange={(e) => setAccountForm((f) => ({ ...f, name: e.target.value }))}
-              />
-            </label>
-            <label className="block space-y-1 text-sm">
-              <span className="text-slate-500">Код фирмы QUIK</span>
-              <input
-                className="input font-mono"
-                placeholder="необязательно"
-                value={accountForm.quik_firm}
-                onChange={(e) => setAccountForm((f) => ({ ...f, quik_firm: e.target.value }))}
-              />
-            </label>
-            {accountError && <p className="text-sm text-danger">{accountError}</p>}
-            <div className="flex justify-end gap-2 pt-1">
-              <button
-                type="button"
-                className="btn-muted"
-                onClick={() => {
-                  setShowAccountForm(false);
-                  setEditingAccount(null);
-                }}
-              >
-                Отмена
-              </button>
-              <button type="submit" className="btn" disabled={accountBusy}>
-                {accountBusy ? "Сохранение…" : editingAccount ? "Сохранить" : "Добавить"}
-              </button>
-            </div>
-          </form>
+          <IPEntryForm onDirtyChange={setIpDirty} onAdd={async (values) => { await addIP(values); toast.push(`Адрес ${values.ip} добавлен`, "ok"); }} />
+          <DataTable<IPWhitelistEntry> title="Адреса доступа" rows={ipEntries} rowKey={row => row.id} emptyTitle="Записей пока нет"
+            selection={{ actions: [{
+              label: "Удалить выбранные", danger: true,
+              run: async (list) => { for (const e of list) await removeIP(e.id); },
+              confirm: (list) => ({ title: `Удалить адреса: ${list.length}?`, danger: true, confirmLabel: "Удалить", description: `${list.map(e => e.ip_cidr).join(", ")} больше не смогут обращаться к API, пока whitelist включён.` }),
+              success: (list) => `Удалено адресов: ${list.length}`,
+            }] }}
+            columns={[
+              { id: "c0", header: "IP / CIDR", value: (e) => e.ip_cidr, className: "font-mono" },
+              { id: "c1", header: "Описание", value: (e) => e.note, cell: (e) => e.note || "—" },
+              { id: "actions", header: "Действия", value: () => "", sortable: false, cell: (e) => (
+                <ActionButton onAction={() => removeIP(e.id)} success={`Адрес ${e.ip_cidr} удалён`} confirm={{ title: "Удалить адрес?", description: `${e.ip_cidr} больше не сможет обращаться к API, пока whitelist включён.`, confirmLabel: "Удалить", danger: true }}>
+                  Удалить
+                </ActionButton>
+              ) },
+            ]} />
         </Modal>
       )}
 
       {showCreate && (
-        <Modal title="Создать API-токен" onClose={() => setShowCreate(false)}>
+        <Modal title="Создать API-токен" dirty={tokenName !== "Production API" || quikFirm !== (b?.code ? String(b.code) : "") || expiresIn !== 180 || perms.length !== ALL_PERMS.length} onClose={() => setShowCreate(false)}>
           <label className="mb-3 block space-y-1 text-sm">
-            <span className="text-slate-500">Название токена</span>
+            <span className="text-muted">Название токена</span>
             <input className="input" value={tokenName} onChange={(e) => setTokenName(e.target.value)} />
           </label>
+          <FirmSelect value={quikFirm} onChange={setQuikFirm} />
           <label className="mb-3 block space-y-1 text-sm">
-            <span className="text-slate-500">Код фирмы (FIX 5018)</span>
-            <input
-              className="input font-mono"
-              placeholder="например 2040"
-              value={quikFirm}
-              onChange={(e) => setQuikFirm(e.target.value)}
-              required
-            />
-          </label>
-          <label className="mb-3 block space-y-1 text-sm">
-            <span className="text-slate-500">Срок действия</span>
+            <span className="text-muted">Срок действия</span>
             <select className="input" value={expiresIn} onChange={(e) => setExpiresIn(Number(e.target.value))}>
               <option value={30}>30 дней</option>
               <option value={90}>90 дней</option>
@@ -853,6 +655,7 @@ export default function BrokerDetailPage() {
               ))}
             </div>
           </div>
+          {createToken.error && <p className="mb-3 text-sm text-danger">{(createToken.error as Error).message}</p>}
           <div className="flex justify-end gap-2">
             <button type="button" className="btn-muted" onClick={() => setShowCreate(false)}>
               Отмена
@@ -863,29 +666,27 @@ export default function BrokerDetailPage() {
               disabled={createToken.isPending || !tokenName || !quikFirm.trim() || perms.length === 0}
               onClick={() => createToken.mutate()}
             >
-              Создать
+              {createToken.isPending && <Icons.refresh size={14} className="animate-spin" />}
+              {createToken.isPending ? "Создание…" : "Создать"}
             </button>
           </div>
         </Modal>
       )}
 
       {editFirm && (
-        <Modal title="Код фирмы (FIX 5018)" onClose={() => setEditFirm(null)}>
-          <p className="mb-3 text-sm text-slate-600">
+        <Modal title="Код фирмы (FIX 5018)" dirty={editFirmValue !== (editFirm.quik_firm || "")} onClose={() => setEditFirm(null)}>
+          <p className="mb-3 text-sm text-muted">
             Токен <span className="font-medium">{editFirm.name}</span>. Значение уходит в NewOrderSingle tag 5018.
           </p>
-          <input
-            className="input mb-4 font-mono"
-            value={editFirmValue}
-            onChange={(e) => setEditFirmValue(e.target.value)}
-            placeholder="код фирмы"
-          />
+          <FirmSelect value={editFirmValue} onChange={setEditFirmValue} />
+          {editFirmError && <p className="mb-3 text-sm text-danger">{editFirmError}</p>}
           <div className="flex justify-end gap-2">
             <button type="button" className="btn-muted" onClick={() => setEditFirm(null)}>
               Отмена
             </button>
-            <button type="button" className="btn" disabled={!editFirmValue.trim()} onClick={() => saveFirm()}>
-              Сохранить
+            <button type="button" className="btn" disabled={!editFirmValue.trim() || firmSaving} onClick={() => saveFirm()}>
+              {firmSaving && <Icons.refresh size={14} className="animate-spin" />}
+              {firmSaving ? "Сохранение…" : "Сохранить"}
             </button>
           </div>
         </Modal>
@@ -893,12 +694,12 @@ export default function BrokerDetailPage() {
 
       {revealedToken && (
         <Modal title={revealTitle} onClose={() => setRevealedToken(null)}>
-          <p className="mb-3 text-sm text-slate-600">{revealNote}</p>
-          <div className="mb-4 break-all rounded-lg border border-slate-200 bg-surface p-4 font-mono text-sm">
+          <p className="mb-3 text-sm text-muted">{revealNote}</p>
+          <div className="mb-4 break-all rounded-lg border border-line bg-surface p-4 font-mono text-sm">
             {revealedToken}
           </div>
           <div className="flex justify-end gap-2">
-            <button type="button" className="btn" onClick={() => navigator.clipboard.writeText(revealedToken)}>
+            <button type="button" className="btn" onClick={() => navigator.clipboard.writeText(revealedToken).then(() => toast.push("Токен скопирован в буфер обмена", "ok"), () => toast.push("Браузер не дал скопировать: выделите токен вручную"))}>
               Копировать токен
             </button>
             <button type="button" className="btn-muted" onClick={() => setRevealedToken(null)}>
@@ -908,55 +709,22 @@ export default function BrokerDetailPage() {
         </Modal>
       )}
 
-      {confirmRevoke && (
-        <Modal title="Отозвать токен?" onClose={() => setConfirmRevoke(null)}>
-          <p className="mb-4 text-sm text-slate-600">
-            <span className="font-medium">{confirmRevoke.name}</span> перестанет работать сразу. Любой запрос с этим
-            токеном получит HTTP 401.
-          </p>
-          <div className="flex justify-end gap-2">
-            <button type="button" className="btn-muted" onClick={() => setConfirmRevoke(null)}>
-              Отмена
-            </button>
-            <button type="button" className="btn" onClick={() => revoke(confirmRevoke.id)}>
-              Отозвать
-            </button>
-          </div>
-        </Modal>
-      )}
 
       {editOpen && (
-        <Modal title="Редактировать брокера" onClose={() => setEditOpen(false)}>
-          <form
-            className="space-y-3"
-            onSubmit={async (e) => {
-              e.preventDefault();
-              await api(`/api/v1/admin/brokers/${id}`, {
-                method: "PATCH",
-                body: JSON.stringify({ name: editName.trim(), description: editDesc.trim() }),
-              });
+        <Modal title="Редактировать брокера" dirty={editDirty} onClose={() => { setEditOpen(false); setEditDirty(false); }}>
+          <BrokerEditForm
+            initial={{ name: b?.name || "", description: b?.description || "" }}
+            onDirtyChange={setEditDirty}
+            onCancel={() => { setEditOpen(false); setEditDirty(false); }}
+            onSave={async (values) => {
+              await api(`/api/v1/admin/brokers/${id}`, { method: "PATCH", body: JSON.stringify(values) });
               setEditOpen(false);
+              setEditDirty(false);
+              toast.push("Изменения брокера сохранены", "ok");
               qc.invalidateQueries({ queryKey: ["broker", id] });
               qc.invalidateQueries({ queryKey: ["brokers"] });
             }}
-          >
-            <label className="block space-y-1 text-sm">
-              <span className="text-slate-500">Название</span>
-              <input className="input" value={editName} onChange={(e) => setEditName(e.target.value)} required />
-            </label>
-            <label className="block space-y-1 text-sm">
-              <span className="text-slate-500">Описание</span>
-              <textarea className="input min-h-[80px]" value={editDesc} onChange={(e) => setEditDesc(e.target.value)} />
-            </label>
-            <div className="flex justify-end gap-2">
-              <button type="button" className="btn-muted" onClick={() => setEditOpen(false)}>
-                Отмена
-              </button>
-              <button type="submit" className="btn">
-                Сохранить
-              </button>
-            </div>
-          </form>
+          />
         </Modal>
       )}
     </div>
