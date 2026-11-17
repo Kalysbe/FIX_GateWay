@@ -186,6 +186,9 @@ INSERT INTO public."Orders" SELECT n, c, (now() AT TIME ZONE 'Asia/Bishkek')::da
 	if got := get("/api/v1/instruments", 200); !strings.Contains(got, `"ClassCode":"AUCT_GBA"`) || strings.Contains(got, `"ClassCode":"LIST_GBA"`) {
 		t.Fatal("instruments ignore the chosen classes:", got)
 	}
+	if got := get("/api/v1/classes", 200); !strings.Contains(got, `{"ClassCode":"AUCT_GBA","ClassName":"Аукцион ГКО"}`) || strings.Contains(got, `"ClassCode":"LIST_GBA"`) {
+		t.Fatal("broker classes ignore the chosen classes:", got)
+	}
 	// No chosen classes: every class is served, to every consumer.
 	if got := call("PATCH", "/api/v1/admin/market-data/settings", jwt, map[string]any{"classes": []string{}}, 200); got != `{"classes":[]}` {
 		t.Fatal(got)
@@ -195,6 +198,9 @@ INSERT INTO public."Orders" SELECT n, c, (now() AT TIME ZONE 'Asia/Bishkek')::da
 	}
 	if got := get("/api/v1/instruments", 200); !strings.Contains(got, `"ClassCode":"AUCT_GBA"`) || !strings.Contains(got, `"ClassCode":"LIST_GBA"`) {
 		t.Fatal("empty choice must serve every instrument:", got)
+	}
+	if got := get("/api/v1/classes", 200); !strings.Contains(got, `"ClassCode":"AUCT_GBA"`) || !strings.Contains(got, `"ClassCode":"LIST_GBA"`) {
+		t.Fatal("empty choice must serve every broker class:", got)
 	}
 	call("PATCH", "/api/v1/admin/market-data/settings", jwt, map[string]any{"classes": []string{"LIST_GBA"}}, 200)
 

@@ -20,6 +20,7 @@ type quikRefReader interface {
 	ListTradingAccounts(context.Context, string) ([]quikexport.Row, error)
 	ListFirms(context.Context) ([]quikexport.Row, error)
 	ListClasses(context.Context) ([]quikexport.Row, error)
+	ListServedClasses(context.Context) ([]quikexport.Row, error)
 	Firm(context.Context, string) (quikexport.Row, error)
 	ListSecurities(context.Context, quikexport.SecurityFilter) (quikexport.SecurityPage, error)
 	CountOrdersByDay(context.Context, []string, time.Time) ([]quikexport.OrderDayCount, error)
@@ -192,6 +193,22 @@ func (s *Server) listQuikClasses(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rows, err := s.quikRefs.ListClasses(r.Context())
+	if err != nil {
+		s.writeQuikRefError(w, err)
+		return
+	}
+	writeQuikJSON(w, rows)
+}
+
+// listBrokerClasses serves brokers the classes they may trade and read: the
+// administrator-chosen ones (every class when none is chosen), ClassCode and
+// ClassName from QUIK Classes.
+func (s *Server) listBrokerClasses(w http.ResponseWriter, r *http.Request) {
+	if s.quikRefs == nil {
+		s.writeQuikRefError(w, errQuikRefsUnavailable)
+		return
+	}
+	rows, err := s.quikRefs.ListServedClasses(r.Context())
 	if err != nil {
 		s.writeQuikRefError(w, err)
 		return

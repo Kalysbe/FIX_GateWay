@@ -123,3 +123,19 @@ func (s *Store) ListClasses(ctx context.Context) ([]Row, error) {
 SELECT DISTINCT ON (btrim(c."ClassCode"::text)) c."ClassCode", c."ClassName" FROM public."Classes" c
 ORDER BY btrim(c."ClassCode"::text), c."TradeDate" DESC) c ORDER BY c."ClassCode"`)
 }
+
+// ListServedClasses is ListClasses limited to the served classes: the broker
+// reference of the classes it may trade and read.
+func (s *Store) ListServedClasses(ctx context.Context) ([]Row, error) {
+	if s == nil || s.pool == nil {
+		return []Row{}, ErrNotConfigured
+	}
+	classes, err := s.servedClasses(ctx)
+	if err != nil {
+		return []Row{}, err
+	}
+	return s.rows(ctx, `SELECT row_to_json(c) FROM (
+SELECT DISTINCT ON (btrim(c."ClassCode"::text)) c."ClassCode", c."ClassName" FROM public."Classes" c
+WHERE $1::text[] IS NULL OR btrim(c."ClassCode"::text)=ANY($1::text[])
+ORDER BY btrim(c."ClassCode"::text), c."TradeDate" DESC) c ORDER BY c."ClassCode"`, classes)
+}
