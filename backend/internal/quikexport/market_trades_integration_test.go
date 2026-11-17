@@ -74,7 +74,7 @@ INSERT INTO public."Trades" VALUES
 		t.Fatal("instrument and period", page, err)
 	}
 	page, err = s.ListMarketTrades(ctx, MarketTradeFilter{Limit: 2, Offset: 2})
-	if err != nil || len(page.Trades) != 2 || page.HasMore || page.NextOffset != 4 || page.Trades[0].Text("TradeNum") != "15" {
+	if err != nil || len(page.Trades) != 2 || page.HasMore || page.NextOffset != 4 || page.Total != 4 || page.Trades[0].Text("TradeNum") != "15" {
 		t.Fatal("paging", page, err)
 	}
 }

@@ -76,6 +76,8 @@ type ParamPage struct {
 	Params     []Param
 	HasMore    bool
 	NextOffset int
+	// Total is the number of rows matching the filter on every page.
+	Total int
 }
 
 // ListParams pages the table in SQL. Limit=0 is reserved for the change reader.
@@ -88,33 +90,20 @@ func (s *Store) ListParams(ctx context.Context, f ParamFilter) (ParamPage, error
 	if err != nil {
 		return out, err
 	}
-	limit := f.Limit
-	if limit > 0 {
-		limit++
-	}
-	rows, err := s.pool.Query(ctx, `SELECT row_to_json(r) FROM (`+paramRows+`
+	raws, total, err := s.pageRows(ctx, `SELECT row_to_json(r), count(*) OVER () FROM (`+paramRows+`
 AND ($2='' OR btrim(p."ClassCode"::text)=$2) AND ($3='' OR btrim(p."SecCode"::text)=$3)) r
 ORDER BY r."ClassCode", r."SecCode"
-LIMIT NULLIF($4,0) OFFSET $5`, classes, f.ClassCode, f.SecCode, limit, f.Offset)
+LIMIT NULLIF($4,0) OFFSET $5`, func(limit, offset int) []any {
+		return []any{classes, f.ClassCode, f.SecCode, limit, offset}
+	}, f.Limit, f.Offset)
 	if err != nil {
 		return out, err
 	}
-	defer rows.Close()
-	for rows.Next() {
-		var raw []byte
-		if err := rows.Scan(&raw); err != nil {
-			return out, err
-		}
+	for _, raw := range raws {
 		out.Params = append(out.Params, Param{Raw: raw})
 	}
-	if err := rows.Err(); err != nil {
-		return out, err
-	}
-	if f.Limit > 0 && len(out.Params) > f.Limit {
-		out.HasMore = true
-		out.Params = out.Params[:f.Limit]
-	}
-	out.NextOffset = f.Offset + len(out.Params)
+	out.Total = total
+	out.HasMore, out.NextOffset = pageState(f.Offset, len(out.Params), total)
 	return out, nil
 }
 

@@ -23,7 +23,7 @@ const marketTradeRow = `{"TradeNum":26110500000001,"ClassCode":"LIST_GBA","SecCo
 
 func (s *testMarketTrades) ListMarketTrades(_ context.Context, f quikexport.MarketTradeFilter) (quikexport.TradePage, error) {
 	s.filter, s.calls = f, s.calls+1
-	return quikexport.TradePage{Trades: []quikexport.Order{{Raw: json.RawMessage(marketTradeRow)}}, HasMore: true, NextOffset: f.Offset + 1}, s.err
+	return quikexport.TradePage{Trades: []quikexport.Order{{Raw: json.RawMessage(marketTradeRow)}}, Total: 100}, s.err
 }
 
 // Market trades take an instrument and a period (KSE dates or RFC 3339 times);
@@ -40,7 +40,7 @@ func TestMarketTradesEndpoint(t *testing.T) {
 	if !f.From.Equal(time.Date(2026, 11, 1, 0, 0, 0, 0, quikexport.KSETime)) || !f.Before.Equal(time.Date(2026, 11, 6, 0, 0, 0, 0, quikexport.KSETime)) {
 		t.Fatal("dates are whole KSE days, to inclusive", f.From, f.Before)
 	}
-	if strings.TrimSpace(w.Body.String()) != "["+marketTradeRow+"]" || w.Header().Get("X-Has-More") != "true" || w.Header().Get("X-Next-Offset") != "6" {
+	if strings.TrimSpace(w.Body.String()) != "["+marketTradeRow+"]" || w.Header().Get("X-Has-More") != "true" || w.Header().Get("X-Next-Offset") != "6" || w.Header().Get("X-Total-Count") != "100" {
 		t.Fatal("rows as read and paging", w.Body.String(), w.Header())
 	}
 	w = httptest.NewRecorder()

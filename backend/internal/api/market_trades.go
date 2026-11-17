@@ -3,7 +3,6 @@ package api
 import (
 	"context"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
 
@@ -80,7 +79,6 @@ func (s *Server) listMarketTrades(w http.ResponseWriter, r *http.Request) {
 		s.writeTradeReadError(w, err)
 		return
 	}
-	w.Header().Set("X-Has-More", strconv.FormatBool(page.HasMore))
-	w.Header().Set("X-Next-Offset", strconv.Itoa(page.NextOffset))
+	setPageHeaders(w, f.Limit, f.Offset, len(page.Trades), page.Total)
 	writeQuikJSON(w, page.Trades)
 }

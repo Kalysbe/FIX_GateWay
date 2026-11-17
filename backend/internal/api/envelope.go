@@ -16,17 +16,23 @@ import (
 //	 "error_code": null|<QUIK code>, "data": <payload>|null}
 //
 // error_code is QUIK's numeric reason (FIX 103 / 102), listed by GET
-// /api/v1/errors. Lists add has_more and next_offset. Payloads (QUIK rows) are
-// copied byte for byte, so their numbers keep full precision.
+// /api/v1/errors. Lists add page, limit and total (поручение пользователя
+// 17.11.2026). Payloads (QUIK rows) are copied byte for byte, so their numbers
+// keep full precision.
 type brokerEnvelope struct {
-	Success    bool            `json:"success"`
-	Code       string          `json:"code"`
-	Message    *string         `json:"message"`
-	ErrorCode  json.RawMessage `json:"error_code"`
-	Data       json.RawMessage `json:"data"`
-	HasMore    *bool           `json:"has_more,omitempty"`
-	NextOffset *int            `json:"next_offset,omitempty"`
+	Success   bool            `json:"success"`
+	Code      string          `json:"code"`
+	Message   *string         `json:"message"`
+	ErrorCode json.RawMessage `json:"error_code"`
+	Data      json.RawMessage `json:"data"`
+	Page      *int            `json:"page,omitempty"`
+	Limit     *int            `json:"limit,omitempty"`
+	Total     *int            `json:"total,omitempty"`
 }
+
+// pageHeaders carry a list page from the handler to the envelope; brokers get
+// the page in the body only.
+var pageHeaders = []string{"X-Has-More", "X-Next-Offset", "X-Page", "X-Limit", "X-Total-Count"}
 
 // brokerPath selects the broker API: /api/v1/* except the admin API, and /health.
 func brokerPath(path string) bool {
@@ -88,6 +94,9 @@ func (s *Server) brokerEnvelope(next http.Handler) http.Handler {
 			encoded.WriteString(`{"success":false,"code":"INTERNAL_ERROR","message":"internal error","error_code":null,"data":null}` + "\n")
 			status = http.StatusInternalServerError
 		}
+		for _, h := range pageHeaders {
+			w.Header().Del(h)
+		}
 		w.Header().Del("Content-Length")
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(status)
@@ -108,12 +117,11 @@ func envelopeFor(status int, header http.Header, body []byte) brokerEnvelope {
 		if isJSON {
 			out.Data = json.RawMessage(body)
 		}
-		if raw := header.Get("X-Has-More"); raw != "" {
-			more := raw == "true"
-			out.HasMore = &more
-			if next, err := strconv.Atoi(header.Get("X-Next-Offset")); err == nil {
-				out.NextOffset = &next
-			}
+		total, errTotal := strconv.Atoi(header.Get("X-Total-Count"))
+		page, errPage := strconv.Atoi(header.Get("X-Page"))
+		limit, errLimit := strconv.Atoi(header.Get("X-Limit"))
+		if errTotal == nil && errPage == nil && errLimit == nil {
+			out.Page, out.Limit, out.Total = &page, &limit, &total
 		}
 		return out
 	}

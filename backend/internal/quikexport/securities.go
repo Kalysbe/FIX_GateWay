@@ -22,6 +22,8 @@ type SecurityPage struct {
 	Securities []Row
 	HasMore    bool
 	NextOffset int
+	// Total is the number of rows matching the filter on every page.
+	Total int
 }
 
 // ListSecurities pages the current rows of the served classes as stored. Limit=0
@@ -35,22 +37,19 @@ func (s *Store) ListSecurities(ctx context.Context, f SecurityFilter) (SecurityP
 	if err != nil {
 		return out, err
 	}
-	limit := f.Limit
-	if limit > 0 {
-		limit++
-	}
-	rows, err := s.rows(ctx, `SELECT row_to_json(s) FROM public."Securities" s
+	raws, total, err := s.pageRows(ctx, `SELECT row_to_json(s), count(*) OVER () FROM public."Securities" s
 WHERE `+securitiesCurrent+` AND ($1::text[] IS NULL OR btrim(s."ClassCode"::text)=ANY($1::text[]))
-ORDER BY s."ClassCode", s."SecCode" LIMIT NULLIF($2,0) OFFSET $3`, classes, limit, f.Offset)
+ORDER BY s."ClassCode", s."SecCode" LIMIT NULLIF($2,0) OFFSET $3`, func(limit, offset int) []any {
+		return []any{classes, limit, offset}
+	}, f.Limit, f.Offset)
 	if err != nil {
 		return out, err
 	}
-	out.Securities = rows
-	if f.Limit > 0 && len(rows) > f.Limit {
-		out.HasMore = true
-		out.Securities = rows[:f.Limit]
+	for _, raw := range raws {
+		out.Securities = append(out.Securities, Row{Raw: raw})
 	}
-	out.NextOffset = f.Offset + len(out.Securities)
+	out.Total = total
+	out.HasMore, out.NextOffset = pageState(f.Offset, len(out.Securities), total)
 	return out, nil
 }
 

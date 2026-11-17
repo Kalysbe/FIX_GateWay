@@ -98,6 +98,8 @@ type OrderPage struct {
 	Orders     []Order `json:"orders"`
 	HasMore    bool    `json:"has_more"`
 	NextOffset int     `json:"next_offset"`
+	// Total is the number of rows matching the filter on every page.
+	Total int `json:"total"`
 }
 
 func BrokerOrderFirm(brokerCode, tokenFirm string) string {
@@ -118,11 +120,7 @@ func (s *Store) ListOrders(ctx context.Context, f OrderFilter) (OrderPage, error
 	if err != nil {
 		return out, err
 	}
-	limit := f.Limit
-	if limit > 0 {
-		limit++
-	}
-	rows, err := s.pool.Query(ctx, `SELECT row_to_json(o) FROM public."Orders" o
+	raws, total, err := s.pageRows(ctx, `SELECT row_to_json(o), count(*) OVER () FROM public."Orders" o
 WHERE ($1::text IS NULL OR (btrim(o."FirmId")=$1 AND $1<>''))
 AND ($4::text='' OR btrim(o."State"::text)=$4)
 AND ($5::text='' OR btrim(o."ClassCode"::text)=$5) AND ($6::text='' OR btrim(o."SecCode"::text)=$6)
@@ -130,26 +128,17 @@ AND (NOT $7::boolean OR o."TradeDate"::date=(now() AT TIME ZONE 'Asia/Bishkek'):
 AND ($8::text[] IS NULL OR btrim(o."ClassCode"::text)=ANY($8::text[]))
 AND ($9::text='' OR o."TradeDate"::date=NULLIF($9::text,'')::date)
 ORDER BY o."TradeDate" DESC, o."OrderNum" DESC, o."ClassCode"
-LIMIT NULLIF($2,0) OFFSET $3`, f.Firm, limit, f.Offset, f.State, strings.TrimSpace(f.ClassCode), strings.TrimSpace(f.SecCode), f.Today, classes, f.TradeDay)
+LIMIT NULLIF($2,0) OFFSET $3`, func(limit, offset int) []any {
+		return []any{f.Firm, limit, offset, f.State, strings.TrimSpace(f.ClassCode), strings.TrimSpace(f.SecCode), f.Today, classes, f.TradeDay}
+	}, f.Limit, f.Offset)
 	if err != nil {
 		return out, err
 	}
-	defer rows.Close()
-	for rows.Next() {
-		var raw []byte
-		if err := rows.Scan(&raw); err != nil {
-			return out, err
-		}
+	for _, raw := range raws {
 		out.Orders = append(out.Orders, Order{Raw: raw})
 	}
-	if err := rows.Err(); err != nil {
-		return out, err
-	}
-	if f.Limit > 0 && len(out.Orders) > f.Limit {
-		out.HasMore = true
-		out.Orders = out.Orders[:f.Limit]
-	}
-	out.NextOffset = f.Offset + len(out.Orders)
+	out.Total = total
+	out.HasMore, out.NextOffset = pageState(f.Offset, len(out.Orders), total)
 	return out, nil
 }
 

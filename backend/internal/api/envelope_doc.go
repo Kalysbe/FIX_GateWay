@@ -24,6 +24,8 @@ func wrapBrokerResponses(doc *openapi3.T) {
 			if op.Responses == nil {
 				continue
 			}
+			// A list takes the page parameter and answers with page, limit and total.
+			paged := op.Parameters.GetByInAndName(openapi3.ParameterInQuery, "page") != nil
 			for status, ref := range op.Responses.Map() {
 				if ref == nil || ref.Value == nil {
 					continue
@@ -39,7 +41,6 @@ func wrapBrokerResponses(doc *openapi3.T) {
 						data = mt.Schema
 					}
 				}
-				_, paged := ref.Value.Headers["X-Has-More"]
 				mt := openapi3.NewMediaType().WithSchema(envelopeSchema(success, data, paged && success))
 				if example != nil {
 					mt.Example = envelopeExample(success, example, data != nil)
@@ -77,11 +78,13 @@ func envelopeSchema(success bool, data *openapi3.SchemaRef, paged bool) *openapi
 		s = s.WithProperty("data", none)
 	}
 	if paged {
-		more := openapi3.NewBoolSchema()
-		more.Description = "Есть ли следующая страница (как заголовок X-Has-More)"
-		next := openapi3.NewIntegerSchema()
-		next.Description = "offset следующей страницы (как заголовок X-Next-Offset)"
-		s = s.WithProperty("has_more", more).WithProperty("next_offset", next)
+		page := openapi3.NewIntegerSchema()
+		page.Description = "Номер страницы, с 1"
+		limit := openapi3.NewIntegerSchema()
+		limit.Description = "Строк на странице"
+		total := openapi3.NewIntegerSchema()
+		total.Description = "Строк по запросу всего, на всех страницах"
+		s = s.WithProperty("page", page).WithProperty("limit", limit).WithProperty("total", total)
 	}
 	s.Required = []string{"success", "code", "message", "error_code", "data"}
 	return s

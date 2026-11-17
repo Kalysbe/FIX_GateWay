@@ -29,6 +29,8 @@ type TradePage struct {
 	Trades     []Order
 	HasMore    bool
 	NextOffset int
+	// Total is the number of rows matching the filter on every page.
+	Total int
 }
 
 // ListTrades applies the firm predicate in SQL, before pagination. Limit=0 is
@@ -42,37 +44,24 @@ func (s *Store) ListTrades(ctx context.Context, f TradeFilter) (TradePage, error
 	if err != nil {
 		return out, err
 	}
-	limit := f.Limit
-	if limit > 0 {
-		limit++
-	}
-	rows, err := s.pool.Query(ctx, `SELECT row_to_json(t) FROM public."Trades" t
+	raws, total, err := s.pageRows(ctx, `SELECT row_to_json(t), count(*) OVER () FROM public."Trades" t
 WHERE ($1::text IS NULL OR (btrim(t."FirmId")=$1 AND $1<>''))
 AND (NOT $4::boolean OR t."TradeDate"::date=(now() AT TIME ZONE 'Asia/Bishkek')::date)
 AND ($5::text[] IS NULL OR btrim(t."ClassCode"::text)=ANY($5::text[]))
 AND ($6::text='' OR t."TradeDate"::date=NULLIF($6::text,'')::date)
 AND ($7::text='' OR btrim(t."ClassCode"::text)=$7) AND ($8::text='' OR btrim(t."SecCode"::text)=$8)
 ORDER BY t."TradeDate" DESC, t."TradeNum" DESC, t."ClassCode", t."Operation"
-LIMIT NULLIF($2,0) OFFSET $3`, f.Firm, limit, f.Offset, f.Today, classes, f.TradeDay, strings.TrimSpace(f.ClassCode), strings.TrimSpace(f.SecCode))
+LIMIT NULLIF($2,0) OFFSET $3`, func(limit, offset int) []any {
+		return []any{f.Firm, limit, offset, f.Today, classes, f.TradeDay, strings.TrimSpace(f.ClassCode), strings.TrimSpace(f.SecCode)}
+	}, f.Limit, f.Offset)
 	if err != nil {
 		return out, err
 	}
-	defer rows.Close()
-	for rows.Next() {
-		var raw []byte
-		if err := rows.Scan(&raw); err != nil {
-			return out, err
-		}
+	for _, raw := range raws {
 		out.Trades = append(out.Trades, Order{Raw: raw})
 	}
-	if err := rows.Err(); err != nil {
-		return out, err
-	}
-	if f.Limit > 0 && len(out.Trades) > f.Limit {
-		out.HasMore = true
-		out.Trades = out.Trades[:f.Limit]
-	}
-	out.NextOffset = f.Offset + len(out.Trades)
+	out.Total = total
+	out.HasMore, out.NextOffset = pageState(f.Offset, len(out.Trades), total)
 	return out, nil
 }
 

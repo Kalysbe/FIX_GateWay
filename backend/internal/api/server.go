@@ -663,8 +663,7 @@ func (s *Server) listInstruments(w http.ResponseWriter, r *http.Request) {
 		s.writeQuikRefError(w, err)
 		return
 	}
-	w.Header().Set("X-Has-More", strconv.FormatBool(page.HasMore))
-	w.Header().Set("X-Next-Offset", strconv.Itoa(page.NextOffset))
+	setPageHeaders(w, limit, offset, len(page.Securities), page.Total)
 	writeQuikJSON(w, page.Securities)
 }
 
@@ -741,8 +740,7 @@ func (s *Server) listQuikTrades(w http.ResponseWriter, r *http.Request, admin bo
 		s.writeTradeReadError(w, err)
 		return
 	}
-	w.Header().Set("X-Has-More", strconv.FormatBool(page.HasMore))
-	w.Header().Set("X-Next-Offset", strconv.Itoa(page.NextOffset))
+	setPageHeaders(w, limit, offset, len(page.Trades), page.Total)
 	writeQuikJSON(w, page.Trades)
 }
 

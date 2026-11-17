@@ -72,29 +72,21 @@ func (s *Store) ListMarketTrades(ctx context.Context, f MarketTradeFilter) (Trad
 	if err != nil {
 		return out, err
 	}
-	rows, err := s.pool.Query(ctx, `SELECT row_to_json(r) FROM (
-SELECT x."TradeNum", x."ClassCode", x."SecCode", x."TradeDateTime", x."Price", x."Qty", x."SettleCurrency", x."Kind", x."CanceledDateTime"
+	// The window count runs over the de-duplicated trades (x), not Trades sides.
+	raws, total, err := s.pageRows(ctx, `SELECT row_to_json((SELECT r FROM (SELECT x."TradeNum", x."ClassCode", x."SecCode",
+x."TradeDateTime", x."Price", x."Qty", x."SettleCurrency", x."Kind", x."CanceledDateTime") r)), count(*) OVER ()
 FROM (`+marketTradeRows+`) x
 ORDER BY x.sort_time, x."TradeNum", x."ClassCode"
-LIMIT $6 OFFSET $7) r`, classes, strings.TrimSpace(f.ClassCode), strings.TrimSpace(f.SecCode), kseLocal(f.From), kseLocal(f.Before), f.Limit+1, f.Offset)
+LIMIT $6 OFFSET $7`, func(limit, offset int) []any {
+		return []any{classes, strings.TrimSpace(f.ClassCode), strings.TrimSpace(f.SecCode), kseLocal(f.From), kseLocal(f.Before), limit, offset}
+	}, f.Limit, f.Offset)
 	if err != nil {
 		return out, err
 	}
-	defer rows.Close()
-	for rows.Next() {
-		var raw []byte
-		if err := rows.Scan(&raw); err != nil {
-			return out, err
-		}
+	for _, raw := range raws {
 		out.Trades = append(out.Trades, Order{Raw: raw})
 	}
-	if err := rows.Err(); err != nil {
-		return out, err
-	}
-	if len(out.Trades) > f.Limit {
-		out.HasMore = true
-		out.Trades = out.Trades[:f.Limit]
-	}
-	out.NextOffset = f.Offset + len(out.Trades)
+	out.Total = total
+	out.HasMore, out.NextOffset = pageState(f.Offset, len(out.Trades), total)
 	return out, nil
 }

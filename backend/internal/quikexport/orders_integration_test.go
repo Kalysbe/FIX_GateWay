@@ -72,6 +72,13 @@ INSERT INTO public."Orders" VALUES
 	if err != nil || len(second.Orders) != 1 || second.HasMore || second.Orders[0].Text("FirmId") != firm || second.Orders[0].Text("OrderNum") != "9007199254740993121" {
 		t.Fatal(second, err)
 	}
+	// Every page, an empty one past the end too, tells the size of the selection.
+	if first.Total != 2 || second.Total != 2 {
+		t.Fatal("total", first.Total, second.Total)
+	}
+	if past, err := s.ListOrders(ctx, OrderFilter{Firm: &firm, Limit: 1, Offset: 5}); err != nil || len(past.Orders) != 0 || past.Total != 2 || past.HasMore {
+		t.Fatal("past the end", past, err)
+	}
 	other := "9999"
 	if _, err := s.GetOrder(ctx, first.Orders[0].VenueID(), &other); !errors.Is(err, ErrOrderNotFound) {
 		t.Fatal("foreign firm accessed order", err)

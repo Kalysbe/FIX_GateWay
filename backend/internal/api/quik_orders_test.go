@@ -44,7 +44,7 @@ func (s *testOrderSource) CountOrdersByState(context.Context) (map[string]int, e
 }
 func (s *testOrderSource) ListTrades(_ context.Context, f quikexport.TradeFilter) (quikexport.TradePage, error) {
 	s.tradeFilter = f
-	return quikexport.TradePage{Trades: []quikexport.Order{s.order}, HasMore: true, NextOffset: f.Offset + 1}, s.err
+	return quikexport.TradePage{Trades: []quikexport.Order{s.order}, Total: 31}, s.err
 }
 
 // Broker trades are the token firm's raw QUIK Trades rows, paged.
@@ -62,6 +62,12 @@ func TestBrokerTradesAreRawQUIKRowsOfTokenFirm(t *testing.T) {
 	}
 	if w.Header().Get("X-Has-More") != "true" || w.Header().Get("X-Next-Offset") != "11" {
 		t.Fatalf("headers %v", w.Header())
+	}
+	// Brokers page by number: page 3 of 5 rows starts at offset 10.
+	w = httptest.NewRecorder()
+	s.listTrades(w, brokerOrderRequest("/api/v1/trades?limit=5&page=3"))
+	if w.Code != 200 || src.tradeFilter.Offset != 10 || w.Header().Get("X-Page") != "3" || w.Header().Get("X-Limit") != "5" || w.Header().Get("X-Total-Count") != "31" {
+		t.Fatalf("page %d %+v %v", w.Code, src.tradeFilter, w.Header())
 	}
 	src.err = errors.New("down")
 	w = httptest.NewRecorder()
@@ -224,7 +230,7 @@ func TestQUIKOrdersNoFallbackOnMissingRowOrOutage(t *testing.T) {
 
 func TestQUIKOrderReadsValidatePagesAndExternalCancellation(t *testing.T) {
 	s := &Server{quikOrders: &testOrderSource{order: quikexport.Order{Raw: json.RawMessage(`{"State":"Активна"}`)}}}
-	for _, query := range []string{"limit=0", "limit=1001", "offset=-1", "offset=x"} {
+	for _, query := range []string{"limit=0", "limit=1001", "offset=-1", "offset=x", "page=0", "page=x", "page=2&offset=5", "limit=1000&page=10002"} {
 		w := httptest.NewRecorder()
 		s.listBrokerOrders(w, brokerOrderRequest("/api/v1/orders?"+query))
 		if w.Code != 400 {

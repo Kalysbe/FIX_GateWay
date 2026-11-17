@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"net/http"
-	"strconv"
 	"strings"
 
 	"github.com/fix-gateway/backend/internal/quikexport"
@@ -50,20 +49,9 @@ func (s *Server) servedClassSet(ctx context.Context) (map[string]bool, error) {
 // board and symbol filter the raw ClassCode and SecCode columns.
 func (s *Server) listMarketData(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	limit, offset := 1000, 0
-	for _, p := range []struct {
-		key      string
-		dest     *int
-		min, max int
-	}{{"limit", &limit, 1, 5000}, {"offset", &offset, 0, 10000000}} {
-		if raw := q.Get(p.key); raw != "" {
-			n, err := strconv.Atoi(raw)
-			if err != nil || n < p.min || n > p.max {
-				writeErr(w, http.StatusBadRequest, "invalid "+p.key)
-				return
-			}
-			*p.dest = n
-		}
+	limit, offset, ok := pageParamsWithin(w, r, 1000, 5000)
+	if !ok {
+		return
 	}
 	if s.quikParams == nil {
 		s.writeParamReadError(w, quikexport.ErrNotConfigured)
@@ -76,8 +64,7 @@ func (s *Server) listMarketData(w http.ResponseWriter, r *http.Request) {
 		s.writeParamReadError(w, err)
 		return
 	}
-	w.Header().Set("X-Has-More", strconv.FormatBool(page.HasMore))
-	w.Header().Set("X-Next-Offset", strconv.Itoa(page.NextOffset))
+	setPageHeaders(w, limit, offset, len(page.Params), page.Total)
 	writeQuikJSON(w, page.Params)
 }
 

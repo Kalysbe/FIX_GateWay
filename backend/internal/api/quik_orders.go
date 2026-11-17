@@ -120,16 +120,26 @@ func (s *Server) listQuikOrdersMatching(w http.ResponseWriter, r *http.Request, 
 	s.writeQuikOrderPage(w, r, filter, func(rows []quikexport.Order) any { return rows })
 }
 
-// pageParams reads limit (1–1000, default 200) and offset; a bad value is
-// answered with 400 and ok=false.
+// maxPageOffset bounds how deep a list can be paged.
+const maxPageOffset = 10000000
+
+// pageParams reads limit (1–1000, default 200) and the page: page (from 1),
+// as brokers page (поручение пользователя 17.11.2026), or offset, as the
+// console pages. A bad value is answered with 400 and ok=false.
 func pageParams(w http.ResponseWriter, r *http.Request) (limit, offset int, ok bool) {
-	limit = 200
+	return pageParamsWithin(w, r, 200, 1000)
+}
+
+func pageParamsWithin(w http.ResponseWriter, r *http.Request, defaultLimit, maxLimit int) (limit, offset int, ok bool) {
+	q := r.URL.Query()
+	limit = defaultLimit
+	page := 0
 	for _, p := range []struct {
 		key      string
 		dest     *int
 		min, max int
-	}{{"limit", &limit, 1, 1000}, {"offset", &offset, 0, 10000000}} {
-		if raw := r.URL.Query().Get(p.key); raw != "" {
+	}{{"limit", &limit, 1, maxLimit}, {"page", &page, 1, maxPageOffset}, {"offset", &offset, 0, maxPageOffset}} {
+		if raw := q.Get(p.key); raw != "" {
 			n, err := strconv.Atoi(raw)
 			if err != nil || n < p.min || n > p.max {
 				writeErr(w, http.StatusBadRequest, "invalid "+p.key)
@@ -138,7 +148,30 @@ func pageParams(w http.ResponseWriter, r *http.Request) (limit, offset int, ok b
 			*p.dest = n
 		}
 	}
+	if page > 0 {
+		if q.Get("offset") != "" {
+			writeErr(w, http.StatusBadRequest, "page and offset cannot be combined")
+			return 0, 0, false
+		}
+		if page-1 > maxPageOffset/limit {
+			writeErr(w, http.StatusBadRequest, "invalid page")
+			return 0, 0, false
+		}
+		offset = (page - 1) * limit
+	}
 	return limit, offset, true
+}
+
+// setPageHeaders reports a page: X-Has-More and X-Next-Offset for the console,
+// X-Page, X-Limit and X-Total-Count for the broker envelope, which turns them
+// into page, limit and total.
+func setPageHeaders(w http.ResponseWriter, limit, offset, count, total int) {
+	h := w.Header()
+	h.Set("X-Has-More", strconv.FormatBool(offset+count < total))
+	h.Set("X-Next-Offset", strconv.Itoa(offset+count))
+	h.Set("X-Page", strconv.Itoa(offset/limit+1))
+	h.Set("X-Limit", strconv.Itoa(limit))
+	h.Set("X-Total-Count", strconv.Itoa(total))
 }
 
 // writeQuikOrderPage serves one page of the Orders rows matching filter,
@@ -158,8 +191,7 @@ func (s *Server) writeQuikOrderPage(w http.ResponseWriter, r *http.Request, filt
 		s.writeOrderReadError(w, err)
 		return
 	}
-	w.Header().Set("X-Has-More", strconv.FormatBool(page.HasMore))
-	w.Header().Set("X-Next-Offset", strconv.Itoa(page.NextOffset))
+	setPageHeaders(w, limit, offset, len(page.Orders), page.Total)
 	writeQuikJSON(w, view(page.Orders))
 }
 

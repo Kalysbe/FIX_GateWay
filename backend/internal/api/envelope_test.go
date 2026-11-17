@@ -36,10 +36,9 @@ func TestBrokerEnvelopeShapes(t *testing.T) {
 		want string
 	}{
 		{"list keeps raw rows and paging", func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("X-Has-More", "true")
-			w.Header().Set("X-Next-Offset", "200")
+			setPageHeaders(w, 200, 400, 1, 500000)
 			_, _ = w.Write([]byte("[" + row + "]\n"))
-		}, 200, `{"success":true,"code":"OK","message":null,"error_code":null,"data":[` + row + `],"has_more":true,"next_offset":200}`},
+		}, 200, `{"success":true,"code":"OK","message":null,"error_code":null,"data":[` + row + `],"page":3,"limit":200,"total":500000}`},
 		{"created order", func(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, 201, map[string]any{"OrderNum": json.Number("5"), "id": "x"})
 		}, 201, `{"success":true,"code":"OK","message":null,"error_code":null,"data":{"OrderNum":5,"id":"x"}}`},
