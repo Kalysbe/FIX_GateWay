@@ -87,11 +87,11 @@ func TestBrokerListsFilterByDateAndInstrument(t *testing.T) {
 		t.Fatal("active orders stay today's; date is ignored", w.Code, f)
 	}
 	w = httptest.NewRecorder()
-	s.listTrades(w, brokerOrderRequest("/api/v1/trades?date=2026-11-03&symbol=GBA1"))
+	s.listTrades(w, brokerOrderRequest("/api/v1/trades?date=03.11.2026&symbol=GBA1"))
 	if f := src.tradeFilter; w.Code != 200 || f.TradeDay != "2026-11-03" || f.SecCode != "GBA1" || f.Firm == nil || *f.Firm != "2040" {
-		t.Fatal(w.Code, f)
+		t.Fatal("DD.MM.YYYY date as brokers get it", w.Code, f)
 	}
-	for _, path := range []string{"/api/v1/orders?date=03.11.2026", "/api/v1/trades?date=2026-13-01"} {
+	for _, path := range []string{"/api/v1/orders?date=31.02.2026", "/api/v1/orders?date=03/11/2026", "/api/v1/trades?date=2026-13-01"} {
 		src.filter, src.tradeFilter = quikexport.OrderFilter{}, quikexport.TradeFilter{}
 		w = httptest.NewRecorder()
 		if strings.HasPrefix(path, "/api/v1/orders") {
@@ -176,32 +176,6 @@ func TestBrokerOrdersUseAuthenticatedFirmBeforePagination(t *testing.T) {
 	s.listAdminQuotes(w, httptest.NewRequest("GET", "/api/v1/admin/quotes?board=LIST_GBA&symbol=GBA1", nil))
 	if f := source.filter; w.Code != 200 || f.State != "Активна" || !f.Today || f.Firm != nil || f.ClassCode != "LIST_GBA" || f.SecCode != "GBA1" {
 		t.Fatal(w.Code, w.Body.String(), source.filter)
-	}
-	// Broker quotes: every firm's rows of one instrument, reduced to side,
-	// price, remaining quantity and volume; nothing identifies the participant.
-	quote := `{"OrderNum":7412,"FirmId":"SENTI2004","ClientCode":"006","Account":"1-3101-006","Operation":"Продажа","State":"Активна","Price":100.50000000,"Qty":10,"Balance":4,"Value":1005}`
-	brokerSource := &testOrderSource{order: quikexport.Order{Raw: json.RawMessage(quote)}}
-	bs := &Server{quikOrders: brokerSource}
-	w = httptest.NewRecorder()
-	bs.listBrokerQuotes(w, brokerOrderRequest("/api/v1/quotes?board=LIST_GBA&symbol=GBA1&firm_id=9999&broker_id=99&limit=3&offset=6"))
-	if f := brokerSource.filter; w.Code != 200 || f.State != "Активна" || !f.Today || f.Firm != nil || f.ClassCode != "LIST_GBA" || f.SecCode != "GBA1" || f.Limit != 3 || f.Offset != 6 {
-		t.Fatal(w.Code, w.Body.String(), brokerSource.filter)
-	}
-	if got := strings.TrimSpace(w.Body.String()); got != `[{"side":"SELL","price":100.50000000,"quantity":4,"volume":402}]` {
-		t.Fatal("broker quote must carry only side, price, quantity and volume:", got)
-	}
-	brokerSource.order = quikexport.Order{Raw: json.RawMessage(`{"FirmId":"X","Operation":"?","Price":null,"Balance":3}`)}
-	w = httptest.NewRecorder()
-	bs.listBrokerQuotes(w, brokerOrderRequest("/api/v1/quotes?board=LIST_GBA&symbol=GBA1"))
-	if got := strings.TrimSpace(w.Body.String()); got != `[{"side":null,"price":null,"quantity":3,"volume":null}]` {
-		t.Fatal(got)
-	}
-	for _, path := range []string{"/api/v1/quotes", "/api/v1/quotes?board=LIST_GBA", "/api/v1/quotes?symbol=GBA1", "/api/v1/quotes?board=LIST_GBA&symbol=GBA1&limit=1001"} {
-		w = httptest.NewRecorder()
-		bs.listBrokerQuotes(w, brokerOrderRequest(path))
-		if w.Code != http.StatusBadRequest {
-			t.Fatal(path, "must be rejected", w.Code)
-		}
 	}
 	r.SetPathValue("id", "quik-20261022-LIST_GBA-1")
 	w = httptest.NewRecorder()

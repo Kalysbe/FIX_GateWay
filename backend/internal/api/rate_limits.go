@@ -27,7 +27,7 @@ func rateOperation(r *http.Request) (string, string) {
 		return "Queries", "GetPositions"
 	case "/api/v1/instruments", "/api/v1/classes":
 		return "Queries", "GetSecurities"
-	case "/api/v1/orders", "/api/v1/orders/active", "/api/v1/quotes":
+	case "/api/v1/orders", "/api/v1/orders/active":
 		return "Queries", "GetOrders"
 	case "/api/v1/accounts":
 		return "Queries", "GetAccounts"

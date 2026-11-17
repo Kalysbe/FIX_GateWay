@@ -12,7 +12,6 @@ import (
 	"github.com/fix-gateway/backend/internal/orders"
 	"github.com/fix-gateway/backend/internal/quikexport"
 	"github.com/google/uuid"
-	"github.com/shopspring/decimal"
 )
 
 type quikOrderReader interface {
@@ -109,69 +108,6 @@ func (s *Server) listAdminQuotes(w http.ResponseWriter, r *http.Request) {
 // QUIK still exports as "Активна" are not quotes.
 func quotesFilter(board, symbol string) quikexport.OrderFilter {
 	return quikexport.OrderFilter{State: quikActiveState, ClassCode: board, SecCode: symbol, Today: true}
-}
-
-// listBrokerQuotes serves one instrument's quotes of every firm to a broker
-// token. Participants stay hidden: a quote carries only its side, price,
-// remaining quantity (Balance) and volume (price × remaining quantity).
-func (s *Server) listBrokerQuotes(w http.ResponseWriter, r *http.Request) {
-	q := r.URL.Query()
-	board, symbol := strings.TrimSpace(q.Get("board")), strings.TrimSpace(q.Get("symbol"))
-	if board == "" || symbol == "" {
-		writeErr(w, http.StatusBadRequest, "board and symbol are required")
-		return
-	}
-	served, err := s.servedClassSet(r.Context())
-	if err != nil {
-		s.writeParamReadError(w, err)
-		return
-	}
-	if served != nil && !served[board] {
-		_, offset, ok := pageParams(w, r)
-		if !ok {
-			return
-		}
-		w.Header().Set("X-Has-More", "false")
-		w.Header().Set("X-Next-Offset", strconv.Itoa(offset))
-		writeQuikJSON(w, brokerQuotes(nil))
-		return
-	}
-	s.writeQuikOrderPage(w, r, quotesFilter(board, symbol), brokerQuotes)
-}
-
-type brokerQuote struct {
-	Side     *string          `json:"side"`
-	Price    json.RawMessage  `json:"price"`
-	Quantity json.RawMessage  `json:"quantity"`
-	Volume   json.RawMessage  `json:"volume"`
-}
-
-func brokerQuotes(rows []quikexport.Order) any {
-	out := make([]brokerQuote, 0, len(rows))
-	for _, row := range rows {
-		var fields map[string]json.RawMessage
-		_ = json.Unmarshal(row.Raw, &fields)
-		q := brokerQuote{Price: rawOrNull(fields["Price"]), Quantity: rawOrNull(fields["Balance"]), Volume: json.RawMessage("null")}
-		if side := row.Side(); side != "" {
-			q.Side = &side
-		}
-		price, perr := decimal.NewFromString(string(q.Price))
-		qty, qerr := decimal.NewFromString(string(q.Quantity))
-		if perr == nil && qerr == nil {
-			// An exact JSON number, not a string and not a float.
-			q.Volume = json.RawMessage(price.Mul(qty).String())
-		}
-		out = append(out, q)
-	}
-	return out
-}
-
-// rawOrNull keeps a JSON number as stored; anything else becomes null.
-func rawOrNull(v json.RawMessage) json.RawMessage {
-	if _, err := decimal.NewFromString(string(v)); err != nil {
-		return json.RawMessage("null")
-	}
-	return v
 }
 
 func (s *Server) listQuikOrdersMatching(w http.ResponseWriter, r *http.Request, admin bool, filter quikexport.OrderFilter) {

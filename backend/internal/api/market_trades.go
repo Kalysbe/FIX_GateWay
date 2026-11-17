@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/fix-gateway/backend/internal/brokertime"
 	"github.com/fix-gateway/backend/internal/quikexport"
 )
 
@@ -16,11 +17,21 @@ type quikMarketTradeReader interface {
 	ListMarketTrades(context.Context, quikexport.MarketTradeFilter) (quikexport.TradePage, error)
 }
 
-// tradeBound reads a period bound: a KSE date (YYYY-MM-DD, the whole day) or
-// an RFC 3339 time. end=true turns it into the exclusive end of the period.
+// tradeBound reads a period bound: a KSE date (DD.MM.YYYY or YYYY-MM-DD, the
+// whole day), a KSE time as brokers get it (DD.MM.YYYY HH:MM:SS) or an RFC 3339
+// time. end=true turns it into the exclusive end of the period.
 func tradeBound(raw string, end bool) (*time.Time, bool) {
 	if raw == "" {
 		return nil, true
+	}
+	if t, date, ok := brokertime.ParseInput(raw); ok {
+		switch {
+		case date && end:
+			t = t.AddDate(0, 0, 1)
+		case end:
+			t = t.Add(time.Microsecond)
+		}
+		return &t, true
 	}
 	if day, err := time.ParseInLocation("2006-01-02", raw, quikexport.KSETime); err == nil {
 		if end {
@@ -46,11 +57,11 @@ func (s *Server) listMarketTrades(w http.ResponseWriter, r *http.Request) {
 	f := quikexport.MarketTradeFilter{ClassCode: strings.TrimSpace(q.Get("board")), SecCode: strings.TrimSpace(q.Get("symbol"))}
 	var ok bool
 	if f.From, ok = tradeBound(strings.TrimSpace(q.Get("from")), false); !ok {
-		writeErr(w, http.StatusBadRequest, "invalid from: expected YYYY-MM-DD or RFC 3339 time")
+		writeErr(w, http.StatusBadRequest, "invalid from: expected DD.MM.YYYY or DD.MM.YYYY HH:MM:SS")
 		return
 	}
 	if f.Before, ok = tradeBound(strings.TrimSpace(q.Get("to")), true); !ok {
-		writeErr(w, http.StatusBadRequest, "invalid to: expected YYYY-MM-DD or RFC 3339 time")
+		writeErr(w, http.StatusBadRequest, "invalid to: expected DD.MM.YYYY or DD.MM.YYYY HH:MM:SS")
 		return
 	}
 	if f.From != nil && f.Before != nil && !f.From.Before(*f.Before) {

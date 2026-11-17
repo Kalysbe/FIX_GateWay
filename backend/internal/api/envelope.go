@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+
+	"github.com/fix-gateway/backend/internal/brokertime"
 )
 
 // Every broker REST reply has one shape (поручение пользователя 30.10.2026):
@@ -89,7 +91,8 @@ func (s *Server) brokerEnvelope(next http.Handler) http.Handler {
 		w.Header().Del("Content-Length")
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(status)
-		_, _ = w.Write(encoded.Bytes())
+		// Dates and times in one readable form (поручение пользователя 17.11.2026).
+		_, _ = w.Write(brokertime.Format(encoded.Bytes()))
 	})
 }
 

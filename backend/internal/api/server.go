@@ -20,6 +20,7 @@ import (
 	"github.com/fix-gateway/backend/internal/admin"
 	"github.com/fix-gateway/backend/internal/audit"
 	"github.com/fix-gateway/backend/internal/auth"
+	"github.com/fix-gateway/backend/internal/brokertime"
 	"github.com/fix-gateway/backend/internal/brokers"
 	"github.com/fix-gateway/backend/internal/config"
 	"github.com/fix-gateway/backend/internal/domain"
@@ -187,7 +188,6 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/v1/errors", s.brokerAuth(http.HandlerFunc(s.listErrorCodes)))
 	mux.Handle("GET /api/v1/classes", s.brokerAuth(s.requirePermission(auth.PermOrdersRead)(http.HandlerFunc(s.listBrokerClasses))))
 	mux.Handle("GET /api/v1/instruments",s.brokerAuth(s.requirePermission(auth.PermOrdersRead)(http.HandlerFunc(s.listInstruments))))
-	mux.Handle("GET /api/v1/quotes", s.brokerAuth(s.requirePermission(auth.PermOrdersRead)(http.HandlerFunc(s.listBrokerQuotes))))
 	mux.Handle("GET /api/v1/orderbook",s.brokerAuth(s.requirePermission(auth.PermOrdersRead)(http.HandlerFunc(s.listBrokerOrderBook))))
 	mux.Handle("GET /api/v1/market-data", s.brokerAuth(s.requirePermission(auth.PermOrdersRead)(http.HandlerFunc(s.listMarketData))))
 	mux.Handle("GET /api/v1/market-data/{board}/{symbol}", s.brokerAuth(s.requirePermission(auth.PermOrdersRead)(http.HandlerFunc(s.getMarketData))))
@@ -536,15 +536,18 @@ func (s *Server) listBrokerActiveOrders(w http.ResponseWriter, r *http.Request) 
 }
 
 // rowFilterParams reads the optional board and symbol filters of the broker
-// order and trade lists and, when withDate, the date filter (YYYY-MM-DD,
-// TradeDate). A malformed date is answered with 400 and ok=false.
+// order and trade lists and, when withDate, the date filter (TradeDate,
+// DD.MM.YYYY as brokers get dates, or YYYY-MM-DD), returned as YYYY-MM-DD.
+// A malformed date is answered with 400 and ok=false.
 func rowFilterParams(w http.ResponseWriter, r *http.Request, withDate bool) (day, board, symbol string, ok bool) {
 	q := r.URL.Query()
 	if withDate {
 		day = strings.TrimSpace(q.Get("date"))
 		if day != "" {
-			if _, err := time.Parse("2006-01-02", day); err != nil {
-				writeErr(w, http.StatusBadRequest, "invalid date: expected YYYY-MM-DD")
+			if t, err := time.Parse(brokertime.DateLayout, day); err == nil {
+				day = t.Format("2006-01-02")
+			} else if _, err := time.Parse("2006-01-02", day); err != nil {
+				writeErr(w, http.StatusBadRequest, "invalid date: expected DD.MM.YYYY")
 				return "", "", "", false
 			}
 		}

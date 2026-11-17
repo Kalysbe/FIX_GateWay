@@ -48,7 +48,13 @@ func TestMarketTradesEndpoint(t *testing.T) {
 	if f := src.filter; w.Code != 200 || f.ClassCode != "" || f.Before != nil || !f.From.Equal(time.Date(2026, 11, 5, 10, 41, 45, 0, quikexport.KSETime)) || f.Limit != 200 {
 		t.Fatal("time bound, no instrument", w.Code, f)
 	}
-	for _, path := range []string{"?from=05.11.2026", "?to=2026-13-01", "?from=2026-11-05&to=2026-11-04", "?from=2026-11-05T10:00:00%2B06:00&to=2026-11-05T09:00:00%2B06:00", "?limit=0"} {
+	// The form brokers get dates in is accepted back (поручение пользователя 17.11.2026).
+	w = httptest.NewRecorder()
+	s.listMarketTrades(w, httptest.NewRequest("GET", "/api/v1/market-data/trades?from=05.11.2026+10:41:45&to=06.11.2026", nil))
+	if f := src.filter; w.Code != 200 || !f.From.Equal(time.Date(2026, 11, 5, 10, 41, 45, 0, quikexport.KSETime)) || !f.Before.Equal(time.Date(2026, 11, 7, 0, 0, 0, 0, quikexport.KSETime)) {
+		t.Fatal("DD.MM.YYYY bounds", w.Code, f)
+	}
+	for _, path := range []string{"?from=32.11.2026", "?from=05/11/2026", "?to=2026-13-01", "?from=2026-11-05&to=2026-11-04", "?from=2026-11-05T10:00:00%2B06:00&to=2026-11-05T09:00:00%2B06:00", "?limit=0"} {
 		calls := src.calls
 		w = httptest.NewRecorder()
 		s.listMarketTrades(w, httptest.NewRequest("GET", "/api/v1/market-data/trades"+path, nil))

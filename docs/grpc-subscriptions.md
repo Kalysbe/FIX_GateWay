@@ -61,8 +61,8 @@ Unix timestamp, nonce, `POST`, полный RPC-путь выше, пустое 
 - `depolimits.updated` → `GET /api/v1/positions/depolimits` (`positions:read`), позиции по бумагам.
 - `marketdata.tick` → `GET /api/v1/market-data` и `GET /api/v1/market-data/{board}/{symbol}` (`orders:read`), строка текущих торгов (8 полей из QUIK `Params`/`Securities`/`Classes`) в `data_json`.
 
-Стакан (`GET /api/v1/orderbook`) и котировки (`GET /api/v1/quotes`) строятся
-из QUIK `Orders` и gRPC-событий не имеют: перечитывайте их через REST.
+Стакан (`GET /api/v1/orderbook`) строится из QUIK `Orders` и gRPC-событий
+не имеет: перечитывайте его через REST.
 
 REST возвращает текущие данные, gRPC — события изменений. Списки заявок и сделок
 содержат последние 100 записей; REST не воспроизводит пропущенные события gRPC.

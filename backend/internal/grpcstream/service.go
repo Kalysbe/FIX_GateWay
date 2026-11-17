@@ -12,6 +12,7 @@ import (
 	pb "github.com/fix-gateway/backend/gen/realtime/v1"
 	"github.com/fix-gateway/backend/internal/admin"
 	"github.com/fix-gateway/backend/internal/auth"
+	"github.com/fix-gateway/backend/internal/brokertime"
 	"github.com/fix-gateway/backend/internal/brokers"
 	"github.com/fix-gateway/backend/internal/ratelimit"
 	"github.com/fix-gateway/backend/internal/realtime"
@@ -186,7 +187,7 @@ func (s *Service) Stream(stream grpc.BidiStreamingServer[pb.ClientMessage, pb.Se
 			return status.Error(codes.Internal, "positions encoding failed")
 		}
 		// data_json, like Orders: a Struct would turn numeric columns into doubles.
-		copy := &pb.Event{Sequence: event.Sequence, Type: event.Type, DataJson: string(encoded), OccurredAt: event.OccurredAt}
+		copy := &pb.Event{Sequence: event.Sequence, Type: event.Type, DataJson: string(brokertime.Format(encoded)), OccurredAt: event.OccurredAt}
 		return send(&pb.ServerMessage{Response: &pb.ServerMessage_Event{Event: copy}})
 	}
 	if err := ready(sub.Topics()); err != nil {
@@ -282,6 +283,11 @@ func (s *Service) Stream(stream grpc.BidiStreamingServer[pb.ClientMessage, pb.Se
 					return err
 				}
 				continue
+			}
+			if principal.info.BrokerID > 0 && event.DataJson != "" {
+				// Dates and times as in broker REST (поручение пользователя 17.11.2026);
+				// the hub's event is shared with other subscribers, so it is copied.
+				event = &pb.Event{Sequence: event.Sequence, Type: event.Type, Data: event.Data, DataJson: brokertime.FormatString(event.DataJson), Removed: event.Removed, OccurredAt: event.OccurredAt}
 			}
 			if err := send(&pb.ServerMessage{Response: &pb.ServerMessage_Event{Event: event}}); err != nil {
 				return err

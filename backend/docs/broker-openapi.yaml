@@ -9,6 +9,9 @@ info:
 
     Формат ответа: `{"success", "code", "message", "error_code", "data"}`; у списков — ещё `has_more` и `next_offset`.
     Коды ошибок — `GET /api/v1/errors`.
+
+    Даты и время — по времени КФБ (Бишкек, UTC+6): дата — `17.11.2026`, время суток — `16:40:15`,
+    дата и время — `17.11.2026 15:54:45`. Часовой пояс не пишется: всегда время КФБ. Так во всех методах REST и в `data_json` gRPC; в параметрах `date`, `from`, `to` — тот же вид.
   contact:
     name: KSE Gateway Support
 servers:
@@ -57,9 +60,9 @@ paths:
                       status: {type: string, enum: [ACTIVE]}
                       permissions: {type: array, items: {type: string}}
                       firm_id: {type: string, description: "Фирма заявок (FIX 5018)"}
-                      expires_at: {type: string, format: date-time, nullable: true}
-                      created_at: {type: string, format: date-time}
-                      last_used_at: {type: string, format: date-time, nullable: true}
+                      expires_at: {type: string, nullable: true, example: "17.11.2027 15:15:00"}
+                      created_at: {type: string, example: "20.10.2026 15:15:00"}
+                      last_used_at: {type: string, nullable: true, example: "03.11.2026 10:02:11"}
                   broker:
                     type: object
                     properties:
@@ -79,8 +82,8 @@ paths:
                   permissions: [orders:read, orders:create, orders:cancel]
                   firm_id: "2040"
                   expires_at: null
-                  created_at: "2026-10-20T09:15:00Z"
-                  last_used_at: "2026-11-03T04:02:11Z"
+                  created_at: "20.10.2026 15:15:00"
+                  last_used_at: "03.11.2026 10:02:11"
                 broker: {code: SENTI, name: Сенти, status: ACTIVE}
                 firm: {Exchange: KSE, FirmId: "2040", FirmName: Сенти, Status: null, StatusFlag: 1}
         "401":
@@ -213,7 +216,7 @@ paths:
                 items:
                   $ref: "#/components/schemas/MarketDataRow"
               example:
-                - {ClassCode: LIST_GBA, SecCode: GBA02270915, CouponValue: 2.5, status: торгуется, FaceUnit: KGS, SecShortName: "ГКО-2 летние (GBA02270915)", SecFullName: "ГКО-2 летние (GBA02270915)", ClassName: "Листинговые:облигации", lotsize: 1, tradingstatus: открыта, pricemin: 86, pricemax: 100, realminstep: null, bid: 100, biddepth: 16, offer: null, offerdepth: null, last: 95, qty: 15, time: "1900-01-01T16:40:15", open: null, high: 100, low: 95, prevprice: 95, waprice: 95.4, numtrades: 3, voltoday: 125, valtoday: 11925, accruedint: null, yield: 16.92, nextcoupon: "2027-01-31T00:00:00", couponperiod: 184}
+                - {ClassCode: LIST_GBA, SecCode: GBA02270915, CouponValue: 2.5, status: торгуется, FaceUnit: KGS, SecShortName: "ГКО-2 летние (GBA02270915)", SecFullName: "ГКО-2 летние (GBA02270915)", ClassName: "Листинговые:облигации", lotsize: 1, tradingstatus: открыта, pricemin: 86, pricemax: 100, realminstep: null, bid: 100, biddepth: 16, offer: null, offerdepth: null, last: 95, qty: 15, time: "16:40:15", open: null, high: 100, low: 95, prevprice: 95, waprice: 95.4, numtrades: 3, voltoday: 125, valtoday: 11925, accruedint: null, yield: 16.92, nextcoupon: "31.01.2027", couponperiod: 184}
         "400":
           description: Неверные limit/offset
         "401":
@@ -260,7 +263,7 @@ paths:
         в хронологическом порядке (`TradeDateTime`, затем `TradeNum`). Участники не раскрываются.
 
         - `TradeNum` + `ClassCode` — идентификатор сделки;
-        - `TradeDateTime` и `CanceledDateTime` — время КФБ с часовым поясом (+06:00);
+        - `TradeDateTime` и `CanceledDateTime` — время КФБ, `ДД.ММ.ГГГГ ЧЧ:ММ:СС`;
         - `Price` — цена за единицу без комиссий, `SettleCurrency` — валюта расчётов;
         - `Kind` — вид сделки (`Обычная`, `Адресная сделка первой части РЕПО` и др.);
         - `CanceledDateTime` — `null`, если сделка не отменена.
@@ -270,8 +273,8 @@ paths:
       parameters:
         - {in: query, name: board, schema: {type: string}, description: ClassCode}
         - {in: query, name: symbol, schema: {type: string}, description: SecCode}
-        - {in: query, name: from, schema: {type: string}, description: "Начало периода включительно: ГГГГ-ММ-ДД (день КФБ) или RFC 3339"}
-        - {in: query, name: to, schema: {type: string}, description: "Конец периода включительно: ГГГГ-ММ-ДД (весь день КФБ) или RFC 3339"}
+        - {in: query, name: from, schema: {type: string}, description: "Начало периода включительно: ДД.ММ.ГГГГ (день КФБ) или ДД.ММ.ГГГГ ЧЧ:ММ:СС", example: "05.11.2026"}
+        - {in: query, name: to, schema: {type: string}, description: "Конец периода включительно: ДД.ММ.ГГГГ (весь день КФБ) или ДД.ММ.ГГГГ ЧЧ:ММ:СС", example: "17.11.2026"}
         - {in: query, name: limit, schema: {type: integer, minimum: 1, maximum: 1000, default: 200}}
         - {in: query, name: offset, schema: {type: integer, minimum: 0, maximum: 10000000, default: 0}}
       responses:
@@ -292,50 +295,6 @@ paths:
           description: Unauthorized
         "403":
           description: Forbidden
-        "503":
-          description: QUIK недоступен
-  /api/v1/quotes:
-    get:
-      tags: [Рыночные данные]
-      summary: Котировки инструмента
-      security:
-        - bearerAuth: []
-      description: Требует `orders:read`. Активные заявки рынка за сегодня, от новых к старым.
-      parameters:
-        - {in: query, name: board, required: true, schema: {type: string}, description: ClassCode, example: LIST_GBA}
-        - {in: query, name: symbol, required: true, schema: {type: string}, description: SecCode, example: GBA02270915}
-        - {in: query, name: limit, schema: {type: integer, minimum: 1, maximum: 1000, default: 200}}
-        - {in: query, name: offset, schema: {type: integer, minimum: 0, maximum: 10000000, default: 0}}
-      responses:
-        "200":
-          description: Котировки
-          headers:
-            X-Has-More: {schema: {type: boolean}}
-            X-Next-Offset: {schema: {type: integer}}
-          content:
-            application/json:
-              schema:
-                type: array
-                items:
-                  type: object
-                  required: [side, price, quantity, volume]
-                  additionalProperties: false
-                  properties:
-                    side: {type: string, enum: [BUY, SELL], nullable: true}
-                    price: {type: number, nullable: true}
-                    quantity: {type: number, nullable: true, description: Остаток}
-                    volume: {type: number, nullable: true, description: price × quantity}
-              example:
-                - {side: BUY, price: 100, quantity: 10, volume: 1000}
-                - {side: SELL, price: 100.5, quantity: 4, volume: 402}
-        "400":
-          description: Не указаны board и symbol, неверный limit или offset
-        "401":
-          description: Unauthorized
-        "403":
-          description: Forbidden
-        "429":
-          description: Rate limited
         "503":
           description: QUIK недоступен
   /api/v1/orderbook:
@@ -501,7 +460,7 @@ paths:
         Требует `orders:read`. Строки QUIK `Orders` за все даты, по убыванию `TradeDate`, затем `OrderNum`.
         `OrderNum` может иметь 19 знаков. Фильтры применяются до пагинации.
       parameters:
-        - {in: query, name: date, schema: {type: string, format: date}, description: "TradeDate, ГГГГ-ММ-ДД"}
+        - {in: query, name: date, schema: {type: string}, description: "TradeDate, ДД.ММ.ГГГГ"}
         - {in: query, name: board, schema: {type: string}, description: ClassCode}
         - {in: query, name: symbol, schema: {type: string}, description: SecCode}
         - {in: query, name: limit, schema: {type: integer, minimum: 1, maximum: 1000, default: 200}}
@@ -643,7 +602,7 @@ paths:
         Требует `trades:read`. Строки QUIK `Trades` за все даты, по убыванию `TradeDate`, затем `TradeNum`.
         Фильтры применяются до пагинации.
       parameters:
-        - {in: query, name: date, schema: {type: string, format: date}, description: "TradeDate, ГГГГ-ММ-ДД"}
+        - {in: query, name: date, schema: {type: string}, description: "TradeDate, ДД.ММ.ГГГГ"}
         - {in: query, name: board, schema: {type: string}, description: ClassCode}
         - {in: query, name: symbol, schema: {type: string}, description: SecCode}
         - {in: query, name: limit, schema: {type: integer, minimum: 1, maximum: 1000, default: 200}}
@@ -786,7 +745,7 @@ components:
         FirmId: {type: string}
         Operation: {type: string}
         State: {type: string}
-      example: {"OrderNum": 9007199254740993123, "ClassCode": "LIST_GBA", "TradeDate": "2026-10-22T00:00:00", "SecCode": "GBA02280810", "FirmId": "2040", "Operation": "Купля", "State": "Активна", "Qty": 10, "Balance": 8, "Price": 105.12345678}
+      example: {"OrderNum": 9007199254740993123, "ClassCode": "LIST_GBA", "TradeDate": "22.10.2026", "OrderDateTime": "22.10.2026 15:54:45", "SecCode": "GBA02280810", "FirmId": "2040", "Operation": "Купля", "State": "Активна", "Qty": 10, "Balance": 8, "Price": 105.12345678}
     QuikTradingAccountRow:
       type: object
       additionalProperties: true
@@ -815,7 +774,7 @@ components:
         FaceUnit: {type: string, nullable: true, description: Валюта}
         SecShortName: {type: string, nullable: true}
         SecFullName: {type: string, nullable: true}
-      example: {"TradeDate": "2026-11-02T00:00:00", "ClassCode": "LIST_GBA", "SecCode": "GBA02280810", "FaceUnit": "KGS", "SecShortName": "ГКО", "SecFullName": "Государственная бумага"}
+      example: {"TradeDate": "02.11.2026", "ClassCode": "LIST_GBA", "SecCode": "GBA02280810", "FaceUnit": "KGS", "SecShortName": "ГКО", "SecFullName": "Государственная бумага"}
     BookLevel:
       type: object
       required: [price, quantity, volume]
@@ -868,13 +827,13 @@ components:
         TradeNum: {type: number, description: Номер сделки}
         ClassCode: {type: string}
         SecCode: {type: string}
-        TradeDateTime: {type: string, format: date-time, description: "Время исполнения, +06:00"}
+        TradeDateTime: {type: string, description: "Время исполнения (время КФБ)"}
         Price: {type: number, nullable: true, description: Цена за единицу без комиссий}
         Qty: {type: number, nullable: true, description: Количество}
         SettleCurrency: {type: string, nullable: true, description: Валюта расчётов}
         Kind: {type: string, nullable: true, description: Вид сделки}
-        CanceledDateTime: {type: string, format: date-time, nullable: true, description: "Время отмены, +06:00; null — сделка действует"}
-      example: {TradeNum: 4914, ClassCode: LIST_GBA, SecCode: GBA02270915, TradeDateTime: "2026-11-05T14:32:57.000+06:00", Price: 95.00000000, Qty: 10.00000000, SettleCurrency: KGS, Kind: Обычная, CanceledDateTime: null}
+        CanceledDateTime: {type: string, nullable: true, description: "Время отмены (время КФБ); null — сделка действует"}
+      example: {TradeNum: 4914, ClassCode: LIST_GBA, SecCode: GBA02270915, TradeDateTime: "05.11.2026 14:32:57", Price: 95.00000000, Qty: 10.00000000, SettleCurrency: KGS, Kind: Обычная, CanceledDateTime: null}
     OrderBook:
       type: object
       required: [board, symbol, bids, offers]
@@ -908,7 +867,7 @@ components:
         Account: {type: string}
         ClientCode: {type: string}
         CPFirmId: {type: string, description: Фирма контрагента}
-      example: {"TradeNum": 11094, "TradeDate": "2026-10-06T00:00:00", "ClassCode": "LIST_GBA", "SecCode": "GBA02280810", "OrderNum": 22450, "Operation": "Купля", "Price": 99.00000000, "Qty": 201, "FirmId": "2040", "Account": "1-3101-2040", "ClientCode": "Kalys", "CPFirmId": "BAKAI2008"}
+      example: {"TradeNum": 11094, "TradeDate": "06.10.2026", "TradeDateTime": "06.10.2026 14:32:57", "ClassCode": "LIST_GBA", "SecCode": "GBA02280810", "OrderNum": 22450, "Operation": "Купля", "Price": 99.00000000, "Qty": 201, "FirmId": "2040", "Account": "1-3101-2040", "ClientCode": "Kalys", "CPFirmId": "BAKAI2008"}
     MoneyLimitRow:
       type: object
       additionalProperties: true
@@ -922,7 +881,7 @@ components:
         CurrentBal: {type: number, description: Текущий остаток}
         OpenBal: {type: number, description: Входящий остаток}
         Locked: {type: number, description: Заблокировано}
-      example: {"LoadDate": "2026-11-02T00:00:00", "FirmId": "2040", "ClientCode": "Kalys", "Tag": "EQTV", "CurrCode": "KGS", "LimitKind": "T0", "CurrentBal": 1518400.00000000, "OpenBal": 1518400.00000000, "Locked": 0.00000000}
+      example: {"LoadDate": "02.11.2026", "FirmId": "2040", "ClientCode": "Kalys", "Tag": "EQTV", "CurrCode": "KGS", "LimitKind": "T0", "CurrentBal": 1518400.00000000, "OpenBal": 1518400.00000000, "Locked": 0.00000000}
     DepoLimitRow:
       type: object
       additionalProperties: true
@@ -936,4 +895,4 @@ components:
         CurrentBal: {type: number, description: Текущий остаток}
         OpenBal: {type: number, description: Входящий остаток}
         AwgPositionPrice: {type: number, description: Средняя цена}
-      example: {"LoadDate": "2026-11-02T00:00:00", "FirmId": "2040", "ClientCode": "Kalys", "SecCode": "GBA02280810", "Trdacc": "1-3101-2040", "LimitKind": "T0", "CurrentBal": 17.00000000, "OpenBal": 17.00000000, "AwgPositionPrice": 0.00000000}
+      example: {"LoadDate": "02.11.2026", "FirmId": "2040", "ClientCode": "Kalys", "SecCode": "GBA02280810", "Trdacc": "1-3101-2040", "LimitKind": "T0", "CurrentBal": 17.00000000, "OpenBal": 17.00000000, "AwgPositionPrice": 0.00000000}
