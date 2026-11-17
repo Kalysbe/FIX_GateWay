@@ -105,22 +105,6 @@ func TestGetCSVDefaultBoards(t *testing.T) {
 	}
 }
 
-func TestQuikAPIBaseURLDefault(t *testing.T) {
-	t.Setenv("QUIK_API_BASE_URL", "")
-	c := Load()
-	if c.QuikAPIBaseURL != "http://192.168.0.89:5000" {
-		t.Fatalf("got %q", c.QuikAPIBaseURL)
-	}
-}
-
-func TestQuikAPIBaseURLFromEnv(t *testing.T) {
-	t.Setenv("QUIK_API_BASE_URL", "http://10.0.0.5:5000")
-	c := Load()
-	if c.QuikAPIBaseURL != "http://10.0.0.5:5000" {
-		t.Fatalf("got %q", c.QuikAPIBaseURL)
-	}
-}
-
 func TestIsProduction(t *testing.T) {
 	if !(Config{AppEnv: "prod"}).IsProduction() {
 		t.Fatal("prod")

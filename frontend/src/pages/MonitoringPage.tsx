@@ -7,11 +7,11 @@ import { StatusBadge } from "../components/StatusBadge";
 import { useBreadcrumbs } from "../components/breadcrumbs";
 import { ErrorBanner, PageSpinner } from "../components/feedback";
 import { displayAdapterName, isHiddenAdapter } from "../lib/adapters";
+import { CHART_COLORS, CHART_DANGER, TimeSeriesChart, type TimeSeries } from "../components/charts";
 import "./monitoring.css";
 
 type Sample = { timestamp: string; counters: Record<string, number>; adapters: Record<string, Record<string, number>>; heap_bytes: number; goroutines: number; cpu_cores: number; database: { acquired: number; total: number; max: number } | null };
-type Point = { time: string; value: number | null };
-const colors = ["#57b6c0", "#1f8a78", "#c47a00", "#8393ad"];
+const colors = CHART_COLORS;
 const num = (v: number | null | undefined, suffix = "") => v == null || !Number.isFinite(v) ? "—" : `${v.toLocaleString("ru-RU", { maximumFractionDigits: 1 })}${suffix}`;
 function rate(s: Sample, prev: Sample | undefined, key: string) {
   if (!prev) return null;
@@ -22,20 +22,16 @@ function rate(s: Sample, prev: Sample | undefined, key: string) {
 function Panel({ title, note, children, className = "" }: { title: string; note?: string; children: ReactNode; className?: string }) {
   return <section className={`monitor-panel ${className}`}><header><h2>{title}</h2>{note && <span>{note}</span>}</header>{children}</section>;
 }
-function Chart({ series, compact = false }: { series: { label: string; points: Point[]; color: string }[]; compact?: boolean }) {
+function Chart({ series, compact = false }: { series: TimeSeries[]; compact?: boolean }) {
   const points = series.flatMap(s => s.points), valid = points.filter(p => p.value != null);
   if (valid.length < 2 || !series.some(s => s.points.filter(p => p.value != null).length >= 2)) return <div className={compact ? "monitor-spark-empty" : "monitor-chart-empty"}>{compact ? "Ожидание истории" : "Накапливаем замеры…"}</div>;
-  const max = Math.max(1, ...valid.map(p => p.value!)), start = Math.min(...points.map(p => Date.parse(p.time))), end = Math.max(...points.map(p => Date.parse(p.time)));
-  const x = (t: string) => 42 + (Date.parse(t) - start) / Math.max(1, end - start) * 508;
-  const y = (v: number) => 148 - v / max * 125;
-  return <div className={compact ? "monitor-spark" : "monitor-chart"}><svg viewBox={compact ? "40 15 515 138" : "0 0 565 177"} role="img" aria-label={series.map(s => s.label).join(", ")}>
-    {!compact && [0, .25, .5, .75, 1].map(f => <g key={f}><line x1="42" x2="550" y1={y(max*f)} y2={y(max*f)} stroke="#e8eef1"/><text x="0" y={y(max*f)+4} fontSize="10" fill="#64748b">{num(max*f)}</text></g>)}
-    {series.map(s => { let drawing = false; const path = s.points.map(p => { if (p.value == null) { drawing = false; return ""; } const part = `${drawing ? "L" : "M"}${x(p.time)},${y(p.value)}`; drawing = true; return part; }).join(" "); return <g key={s.label}><path d={path} fill="none" stroke={s.color} strokeWidth="2" vectorEffect="non-scaling-stroke"/>{!compact && s.points.filter(p => p.value != null).map(p => <circle key={p.time} cx={x(p.time)} cy={y(p.value!)} r="2" fill={s.color}><title>{new Date(p.time).toLocaleTimeString("ru-RU")} · {num(p.value)}</title></circle>)}</g>; })}
-    {!compact && <><text x="42" y="172" fontSize="10" fill="#64748b">{new Date(start).toLocaleTimeString("ru-RU")}</text><text x="550" y="172" textAnchor="end" fontSize="10" fill="#64748b">{new Date(end).toLocaleTimeString("ru-RU")}</text></>}
-  </svg>{!compact && <div className="monitor-legend">{series.map(s => <span key={s.label}><i style={{ background: s.color }}/>{s.label}</span>)}</div>}</div>;
+  return <div className={compact ? "monitor-spark" : "monitor-chart"}>
+    <TimeSeriesChart series={series} compact={compact} height={compact ? 60 : 160} format={v => num(v)} dots />
+    {!compact && <div className="monitor-legend">{series.map(s => <span key={s.label}><i style={{ background: s.color }}/>{s.label}</span>)}</div>}
+  </div>;
 }
 function Gauge({ label, value, detail, color }: { label: string; value: number | null; detail: string; color: string }) {
-  return <div className="monitor-gauge"><span>{label}</span><div><svg viewBox="0 0 110 110" aria-hidden="true"><circle cx="55" cy="55" r="44" fill="none" stroke="#edf2f4" strokeWidth="9"/><circle cx="55" cy="55" r="44" fill="none" stroke={color} strokeWidth="9" strokeLinecap="round" strokeDasharray={`${Math.max(0, Math.min(100, value ?? 0))*2.765} 276.5`} transform="rotate(-90 55 55)"/></svg><strong>{num(value, "%")}</strong></div><small>{detail}</small></div>;
+  return <div className="monitor-gauge"><span>{label}</span><div><svg viewBox="0 0 110 110" aria-hidden="true"><circle cx="55" cy="55" r="44" fill="none" stroke="var(--chart-grid)" strokeWidth="9"/><circle cx="55" cy="55" r="44" fill="none" stroke={color} strokeWidth="9" strokeLinecap="round" strokeDasharray={`${Math.max(0, Math.min(100, value ?? 0))*2.765} 276.5`} transform="rotate(-90 55 55)"/></svg><strong>{num(value, "%")}</strong></div><small>{detail}</small></div>;
 }
 export default function MonitoringPage() {
   useBreadcrumbs([{ label: "Мониторинг" }]);
@@ -78,14 +74,14 @@ export default function MonitoringPage() {
     { label: "Доступные адаптеры", value: `${d.adapters_available} / ${d.adapters.filter(a => !isHiddenAdapter(a)).length}`, note: "FIX-соединения", chart: null },
   ];
   return <div className="monitoring-page">
-    <div className="monitor-heading"><div><h1>Мониторинг</h1><p>Состояние шлюза в реальном времени</p></div><div className="monitor-controls"><span className="monitor-live"><i style={{ background: paused ? colors[2] : monitoring.error ? "#d6455d" : colors[1] }}/>{paused ? "Пауза" : monitoring.error ? "Нет связи" : "Обновление · 5 с"}</span><select aria-label="Период графиков" value={minutes} onChange={e => setMinutes(Number(e.target.value))}><option value={5}>5 минут</option><option value={10}>10 минут</option><option value={30}>30 минут</option></select><button className="btn-muted" onClick={() => setPaused(p => !p)}>{paused ? "Продолжить" : "Пауза"}</button></div></div>
+    <div className="monitor-heading"><div><h1>Мониторинг</h1><p>Состояние шлюза в реальном времени</p></div><div className="monitor-controls"><span className="monitor-live"><i style={{ background: paused ? colors[2] : monitoring.error ? CHART_DANGER : colors[1] }}/>{paused ? "Пауза" : monitoring.error ? "Нет связи" : "Обновление · 5 с"}</span><select aria-label="Период графиков" value={minutes} onChange={e => setMinutes(Number(e.target.value))}><option value={5}>5 минут</option><option value={10}>10 минут</option><option value={30}>30 минут</option></select><button className="btn-muted" onClick={() => setPaused(p => !p)}>{paused ? "Продолжить" : "Пауза"}</button></div></div>
     {dashboard.error && <ErrorBanner error={dashboard.error} onRetry={() => dashboard.refetch()}/>}
     {adapters.error && <ErrorBanner error={adapters.error} onRetry={() => adapters.refetch()}/>}
     {monitoring.error && <ErrorBanner error={monitoring.error} onRetry={() => monitoring.refetch()}/>}
     <div className="monitor-controls"><button className="btn-muted" disabled={dashboard.isFetching} onClick={() => { if (dailyEnabled) void dashboard.refetch(); else setDailyEnabled(true); }}>{dashboard.isFetching ? "Загрузка суточной статистики…" : "Загрузить суточную статистику"}</button><span>Суточные итоги загружаются отдельно от текущих показателей</span></div>
     <div className="monitor-kpis">{cards.map(c => <section className="monitor-panel monitor-kpi" key={c.label}><span>{c.label}</span><strong>{c.value}</strong><small>{c.note}</small></section>)}</div>
     <div className="monitor-grid">
-      <Panel title="Поток запросов" note="в секунду" className="monitor-wide"><Chart series={[series("HTTP", "gateway_http_requests_total", colors[0]), series("Новые заявки", "orders_received_total", colors[1]), series("Обработано", "orders_processed_total", colors[2]), series("Отклонено", "orders_rejected_total", "#d6455d")]}/></Panel>
+      <Panel title="Поток запросов" note="в секунду" className="monitor-wide"><Chart series={[series("HTTP", "gateway_http_requests_total", colors[0]), series("Новые заявки", "orders_received_total", colors[1]), series("Обработано", "orders_processed_total", colors[2]), series("Отклонено", "orders_rejected_total", CHART_DANGER)]}/></Panel>
       <Panel title="Нагрузка шлюза"><div className="monitor-gauges"><Gauge label="CPU" value={cpuPercent} detail="От всех ядер" color={colors[0]}/><Gauge label="Пул БД" value={db && db.max > 0 ? db.acquired/db.max*100 : null} detail="Занятые соединения" color={colors[1]}/></div><div className="monitor-foot">Память RSS <b>{num(latest?.counters.process_resident_memory_bytes == null ? null : latest.counters.process_resident_memory_bytes/1048576, " МБ")}</b><span>Горутины <b>{num(latest?.goroutines)}</b></span></div></Panel>
       <Panel title="FIX-адаптеры" note="Текущее состояние"><div className="monitor-table-wrap"><table><thead><tr><th>Сервис</th><th>Активные</th><th>Статус</th></tr></thead><tbody>{d.adapters.filter(a => !isHiddenAdapter(a)).map(a => <tr key={a.id}><td><Link to="/adapters">{displayAdapterName(a.name)}</Link></td><td>{num(a.active_orders)}</td><td><StatusBadge status={a.status}/></td></tr>)}</tbody></table>{!d.adapters.filter(a => !isHiddenAdapter(a)).length && <p className="monitor-empty">Адаптеры не настроены</p>}</div></Panel>
       <Panel title="База данных" className="monitor-resource"><div className="monitor-inline-stats"><div><small>Занятые / лимит</small><strong>{db ? `${db.acquired} / ${db.max}` : "—"}</strong></div><div><small>Открыто соединений</small><strong>{num(db?.total)}</strong></div></div><Chart series={[gauges("Занятые", s => s.database?.acquired ?? null, colors[0]), gauges("Открытые", s => s.database?.total ?? null, colors[1])]}/></Panel>

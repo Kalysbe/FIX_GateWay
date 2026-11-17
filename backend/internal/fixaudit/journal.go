@@ -200,6 +200,14 @@ func (f *Factory) append(session, direction string, raw []byte) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.closed {
+		// QuickFIX still reports the socket shutdown ("Disconnected", "use of
+		// closed network connection") after the session stopped and the
+		// journal was closed. Those events carry no message; failing on them
+		// killed the gateway on every adapter stop. A FIX message after close
+		// stays fatal: it must never be handled unjournalled.
+		if direction == "EVENT" {
+			return nil
+		}
 		return fmt.Errorf("FIX audit journal is closed")
 	}
 	if int64(len(line)) > f.max-f.used {

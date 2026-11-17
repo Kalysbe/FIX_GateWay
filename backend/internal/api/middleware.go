@@ -44,7 +44,7 @@ const (
 
 type AdminPrincipal struct {
 	UserID      string
-	Email       string
+	Username       string
 	RoleCode    string
 	UserVersion int64
 	ExpiresAt   time.Time
@@ -332,7 +332,7 @@ func (s *Server) adminAuth(next http.Handler) http.Handler {
 			return
 		}
 		ctx := context.WithValue(r.Context(), ctxAdmin, AdminPrincipal{
-			UserID: claims.UserID, Email: claims.Email, RoleCode: claims.RoleCode, UserVersion: claims.UserVersion, ExpiresAt: claims.ExpiresAt.Time,
+			UserID: claims.UserID, Username: claims.Username, RoleCode: claims.RoleCode, UserVersion: claims.UserVersion, ExpiresAt: claims.ExpiresAt.Time,
 		})
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})

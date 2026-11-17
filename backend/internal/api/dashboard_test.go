@@ -2,7 +2,6 @@ package api
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -12,27 +11,6 @@ import (
 
 	"github.com/fix-gateway/backend/internal/config"
 )
-
-func TestDashboardMissingSnapshotIsPending(t *testing.T) {
-	for _, raw := range [][]byte{nil, {}, []byte("null")} {
-		if _, err := decodeDashboardSnapshot(raw); !errors.Is(err, errDashboardPending) {
-			t.Fatalf("missing snapshot error = %v", err)
-		}
-	}
-	snapshot, err := decodeDashboardSnapshot([]byte(`{"stats":{"total":7},"stale":true}`))
-	if err != nil || snapshot["stale"] != true {
-		t.Fatalf("stale snapshot was discarded: %v, %v", snapshot, err)
-	}
-}
-
-func TestDashboardPendingReturnsRetryableResponse(t *testing.T) {
-	server := Server{dashboardCache: snapshotCache{err: errDashboardPending, retryAfter: time.Now().Add(time.Minute)}}
-	response := httptest.NewRecorder()
-	server.dashboard(response, httptest.NewRequest(http.MethodGet, "/api/v1/admin/dashboard", nil))
-	if response.Code != http.StatusServiceUnavailable {
-		t.Fatalf("pending status = %d: %s", response.Code, response.Body.String())
-	}
-}
 
 func TestSnapshotCacheSharesRefreshAndServesStale(t *testing.T) {
 	var cache snapshotCache

@@ -24,7 +24,6 @@ type principal struct {
 	expires     time.Time
 	info        realtime.ConnectionInfo
 	permissions []string
-	firms       []string
 	validate    func(context.Context) error
 }
 
@@ -82,8 +81,7 @@ func (s *Service) authenticate(ctx context.Context, md metadata.MD, raw string) 
 		p.id = fmt.Sprintf("broker:%d", b.ID)
 		p.role = "BROKER"
 		p.permissions = append([]string(nil), tok.Permissions...)
-		p.firms = []string{b.Code, tok.QuikFirm}
-		p.info.BrokerID = b.ID
+			p.info.BrokerID = b.ID
 		p.info.OrderFirmID = quikexport.BrokerOrderFirm(b.Code, tok.QuikFirm)
 		p.info.BrokerCode = b.Code
 		p.info.BrokerName = b.Name
@@ -114,7 +112,7 @@ func (s *Service) authenticate(ctx context.Context, md metadata.MD, raw string) 
 	p.role = claims.RoleCode
 	p.expires = claims.ExpiresAt.Time
 	p.info.UserID = claims.UserID
-	p.info.Email = claims.Email
+	p.info.Username = claims.Username
 	if len(md.Get("x-browser-bridge")) == 1 && strings.EqualFold(md.Get("x-browser-bridge")[0], "true") {
 		p.info.Transport = "Browser → gRPC"
 	}

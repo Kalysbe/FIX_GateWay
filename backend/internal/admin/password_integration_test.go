@@ -4,6 +4,8 @@ package admin
 
 import (
 	"context"
+	"github.com/fix-gateway/backend/internal/audit"
+	"github.com/fix-gateway/backend/internal/observability"
 	"github.com/fix-gateway/backend/internal/platform/migrate"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -26,17 +28,17 @@ func TestExplicitPasswordRotationRevokesSessions(t *testing.T) {
 	}
 	defer pool.Close()
 	store := NewUserStore(pool)
-	email := uuid.NewString() + "@example.test"
-	if err := store.EnsureAdmin(ctx, email, "admin123"); err != nil {
+	username := "user-" + uuid.NewString()
+	if err := store.EnsureAdmin(ctx, username, "admin123"); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.RefuseDefaultPassword(ctx, email); err == nil {
+	if err := store.RefuseDefaultPassword(ctx, username); err == nil {
 		t.Fatal("existing default password accepted")
 	}
-	if err := store.EnsureAdmin(ctx, email, "bootstrap-change-does-not-rotate"); err != nil {
+	if err := store.EnsureAdmin(ctx, username, "bootstrap-change-does-not-rotate"); err != nil {
 		t.Fatal(err)
 	}
-	user, err := store.Authenticate(ctx, email, "admin123")
+	user, err := store.Authenticate(ctx, username, "admin123")
 	if err != nil {
 		t.Fatal("bootstrap unexpectedly rotated existing account")
 	}
@@ -44,23 +46,35 @@ func TestExplicitPasswordRotationRevokesSessions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.RotatePassword(ctx, email, "new-explicit-password-123"); err != nil {
+	logs, err := observability.OpenFileLog(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer logs.Close()
+	auditLog := audit.NewStore(logs)
+	if err := store.RotatePassword(ctx, auditLog, username, "new-explicit-password-123"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.AuthenticateSession(ctx, "fixture-jwt", token); err == nil {
 		t.Fatal("old session survived password rotation")
 	}
-	if _, err := store.Authenticate(ctx, email, "admin123"); err == nil {
+	if _, err := store.Authenticate(ctx, username, "admin123"); err == nil {
 		t.Fatal("old password survived rotation")
 	}
-	if err := store.RefuseDefaultPassword(ctx, email); err != nil {
+	if err := store.RefuseDefaultPassword(ctx, username); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.Authenticate(ctx, email, "new-explicit-password-123"); err != nil {
+	if _, err := store.Authenticate(ctx, username, "new-explicit-password-123"); err != nil {
 		t.Fatal(err)
 	}
-	var count int
-	if err := pool.QueryRow(ctx, `SELECT count(*) FROM audit_logs WHERE action='ADMIN_PASSWORD_ROTATED' AND entity_id=$1 AND request_payload IS NULL`, user.ID.String()).Scan(&count); err != nil || count != 1 {
+	records, err := auditLog.Records(ctx)
+	count := 0
+	for _, e := range records {
+		if e.Subtype == "ADMIN_PASSWORD_ROTATED" && e.TargetID == user.ID.String() && len(e.Metadata) == 0 {
+			count++
+		}
+	}
+	if err != nil || count != 1 {
 		t.Fatalf("rotation was not safely audited: %d %v", count, err)
 	}
 }

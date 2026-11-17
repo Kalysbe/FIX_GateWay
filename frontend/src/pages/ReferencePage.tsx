@@ -1,119 +1,72 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
-import { api } from "../api";
-import { StatusBadge } from "../components/StatusBadge";
-import { DataTable, type TableColumn } from "../components/DataTable";
+import { apiWithHeaders } from "../api";
+import { dbValue, parseDBJSON, type DBOrder } from "../lib/rawOrders";
+import { rawColumns, rawSearchText } from "../components/rawColumns";
+import { quikColumns, type QuikColumn } from "../components/quikColumns";
+import { DataTable } from "../components/DataTable";
 import { ErrorBanner } from "../components/feedback";
 import { PageHeader } from "../components/PageHeader";
+import { instrumentPath } from "../lib/quotes";
 
-type Instrument = {
-  id: number;
-  internal_symbol: string;
-  quik_symbol: string;
-  board: string;
-  currency: string;
-  security_type: string;
-  status: string;
-};
-
-type Firm = {
-  firm_id: string;
-  exchange: string;
-  firm_name: string;
-  status: string;
-  status_flag?: number;
-};
+// The terms of a bond; option, scale and the other Securities columns are in
+// the column menu.
+const SECURITY_COLUMNS: QuikColumn[] = [
+  { id: "instrument", header: "Инструмент", field: "SecCode", sub: "SecShortName", link: r => instrumentPath(r.ClassCode, r.SecCode) },
+  { id: "class", header: "Класс", field: "ClassCode" },
+  { id: "isin", header: "ISIN", field: "ISINCode" },
+  { id: "regnumber", header: "Рег. номер", field: "RegNumber" },
+  { id: "facevalue", header: "Номинал", field: "FaceValue", kind: "number", frac: 2, sub: "FaceUnit" },
+  { id: "coupon", header: "Купон", field: "CouponValue", kind: "number", frac: 2 },
+  { id: "nextcoupon", header: "След. купон", field: "NextCoupon", kind: "date" },
+  { id: "couponperiod", header: "Период, дн.", field: "CouponPeriod", kind: "number" },
+  { id: "matdate", header: "Погашение", field: "MatDate", kind: "date" },
+  { id: "days", header: "Дней до погаш.", field: "DaysToMatDate", kind: "number" },
+  { id: "minstep", header: "Шаг цены", field: "MinStep", kind: "number" },
+  { id: "lotsize", header: "Лот", field: "LotSize", kind: "number" },
+];
 
 export default function ReferencePage() {
-  const qc = useQueryClient();
   const [tab, setTab] = useState<"instruments" | "firms">("instruments");
 
   const instruments = useQuery({
     queryKey: ["admin-instruments"],
-    queryFn: () => api<{ instruments: Instrument[]; count: number }>("/api/v1/admin/instruments"),
+    // Current rows of QUIK "Securities" of the served classes, as stored.
+    queryFn: async ({ signal }) => (await apiWithHeaders<DBOrder[]>("/api/v1/admin/instruments?limit=1000", { signal }, parseDBJSON)).data ?? [],
   });
   const firms = useQuery({
     queryKey: ["admin-firms"],
-    queryFn: () => api<{ firms: Firm[]; count: number; note?: string }>("/api/v1/admin/firms"),
+    // Rows of QUIK "Firms" as stored.
+    queryFn: async ({ signal }) => (await apiWithHeaders<DBOrder[]>("/api/v1/admin/firms", { signal }, parseDBJSON)).data ?? [],
   });
 
-  const sync = useMutation({
-    mutationFn: () =>
-      api<{
-        result: {
-          instruments_upserted: number;
-          instruments_removed: number;
-          instruments_inactive: number;
-          adapter_id?: string;
-        };
-      }>("/api/v1/admin/instruments/sync", { method: "POST" }),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["admin-instruments"] });
-    },
-  });
-
-  const instrumentColumns: TableColumn<Instrument>[] = [
-    { id: "id", header: "ID", value: i => i.id, numeric: true },
-    { id: "symbol", header: "Инструмент", value: i => i.quik_symbol, className: "font-mono font-medium" },
-    { id: "board", header: "Борд / класс", value: i => i.board, className: "font-mono" },
-    { id: "currency", header: "Валюта", value: i => i.currency },
-    { id: "type", header: "Тип", value: i => i.security_type },
-    { id: "status", header: "Статус", value: i => i.status, cell: i => <StatusBadge status={i.status} /> },
-    { id: "internal", header: "Внутренний код", value: i => i.internal_symbol, className: "font-mono text-[10px]" },
-  ];
-  const firmColumns: TableColumn<Firm>[] = [
-    { id: "id", header: "Код фирмы", value: f => f.firm_id, className: "font-mono" },
-    { id: "name", header: "Название", value: f => f.firm_name },
-    { id: "exchange", header: "Биржа", value: f => f.exchange },
-    { id: "status", header: "Статус", value: f => f.status, cell: f => <StatusBadge status={f.status} /> },
-    { id: "flag", header: "Флаг", value: f => f.status_flag, numeric: true },
-  ];
+  const instrumentRows = instruments.data ?? [];
+  const firmRows = firms.data ?? [];
 
   return (
-    <div className="space-y-6">
-      <PageHeader
-        title="Справочник"
-        subtitle="Инструменты, торговые классы и фирмы · синхронизация с QUIK"
-        actions={
-          <button className="btn" disabled={sync.isPending} onClick={() => sync.mutate()}>
-            {sync.isPending ? "Запрос по FIX…" : "Синхронизировать по FIX"}
-          </button>
-        }
-      />
-
-      {sync.isSuccess && (
-        <div className="text-sm text-accent">
-          Синхронизировано: {sync.data.result.instruments_upserted} активных
-          {sync.data.result.instruments_removed
-            ? `, удалено устаревших ${sync.data.result.instruments_removed}`
-            : ""}
-          {sync.data.result.instruments_inactive
-            ? `, деактивировано (есть заявки) ${sync.data.result.instruments_inactive}`
-            : ""}
-          {sync.data.result.adapter_id ? ` · ${sync.data.result.adapter_id}` : ""}
-        </div>
-      )}
-      {sync.error && <div className="text-danger text-sm">{(sync.error as Error).message}</div>}
+    <div className="raw-orders space-y-6">
+      <PageHeader title="Справочник" subtitle="Инструменты и фирмы из базы QUIK" />
 
       <div className="flex flex-wrap items-center gap-2">
         <button
           className={tab === "instruments" ? "btn" : "btn-muted"}
           onClick={() => setTab("instruments")}
         >
-          Инструменты ({instruments.data?.count ?? "…"})
+          Инструменты ({instruments.data ? instrumentRows.length : "…"})
         </button>
         <button className={tab === "firms" ? "btn" : "btn-muted"} onClick={() => setTab("firms")}>
-          Фирмы ({firms.data?.count ?? "…"})
+          Фирмы ({firms.data ? firmRows.length : "…"})
         </button>
       </div>
 
       {tab === "instruments" ? <>
+        <p className="text-xs text-muted">Таблица QUIK Securities за последнюю дату. Остальные поля — в меню столбцов</p>
         {instruments.error && <ErrorBanner error={instruments.error} onRetry={() => instruments.refetch()} />}
-        <DataTable title="Инструменты" rows={instruments.data?.instruments ?? []} columns={instrumentColumns} rowKey={i => i.id} loading={instruments.isLoading} exportName="instruments" emptyHint="Синхронизируйте справочник по FIX" summary={rows => [{ label: "Инструментов", value: rows.length }, { label: "Классов", value: new Set(rows.map(i => i.board)).size }, { label: "Активны", value: rows.filter(i => i.status === "ACTIVE").length, tone: "success" }]} />
+        <DataTable urlState="i" title="Инструменты" rows={instrumentRows} columns={quikColumns(instrumentRows, SECURITY_COLUMNS)} rowKey={i => `${dbValue(i.ClassCode)}\u0000${dbValue(i.SecCode)}`} getSearchText={rawSearchText(instrumentRows)} loading={instruments.isLoading} exportName="instruments" showTotals={false} emptyTitle={instruments.error ? "Таблица Securities недоступна" : "В Securities нет строк"} />
       </> : <>
-        {firms.data?.note && <p className="text-xs text-muted">{firms.data.note}</p>}
+        <p className="text-xs text-muted">Строки таблицы QUIK Firms в том виде, в каком они хранятся в базе</p>
         {firms.error && <ErrorBanner error={firms.error} onRetry={() => firms.refetch()} />}
-        <DataTable title="Фирмы" rows={firms.data?.firms ?? []} columns={firmColumns} rowKey={f => f.firm_id} loading={firms.isLoading} exportName="firms" emptyHint="Фирмы не передаются в Security Definition" />
+        <DataTable urlState="f" title="Фирмы" rows={firmRows} columns={rawColumns(firmRows)} rowKey={f => `${dbValue(f.FirmId)}\u0000${dbValue(f.Exchange)}`} getSearchText={rawSearchText(firmRows)} loading={firms.isLoading} exportName="firms" showTotals={false} emptyTitle={firms.error ? "Таблица Firms недоступна" : "В Firms нет строк"} />
       </>}
     </div>
   );

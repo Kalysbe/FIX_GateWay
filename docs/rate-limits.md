@@ -37,8 +37,8 @@ IP, token or connection. Rates, bursts and concurrency are independent values.
 Increasing a rate may briefly retain debt accumulated at the previous rate;
 configuration refresh never resets an exhausted bucket.
 
-Broker categories: Trading (SubmitOrder, CancelOrder, MaintainPositions), Queries (GetOrder,
-GetOrders, GetSecurities, GetPositions, GetAccounts, GetTrades, GetOrderBook, OtherQuery), System (GetFirm). Actual HTTP
+Broker categories: Trading (SubmitOrder, CancelOrder), Queries (GetOrder,
+GetOrders, GetSecurities, GetPositions, GetAccounts, GetTrades, GetOrderBook, OtherQuery), System (GetToken). Actual HTTP
 route names are mapped to bounded operation names, never arbitrary URLs. There
 is no ReplaceOrder route to integrate in this repository. Add future route/RPC
 mappings at their authenticated dispatch point and configure a policy; the
@@ -51,7 +51,7 @@ the broker to 20/s.** Edit all relevant parent policies for the intended budget.
 Disabling an operation policy removes only that layer; parents still apply.
 
 System is independent of Queries, so polling order statuses no longer consumes
-the GetFirm category budget. External clients' per-order HealthCheck and interpretation
+the GetToken category budget. External clients' per-order HealthCheck and interpretation
 of 429 as Offline are separate client behavior; this change does not remove those
 checks or silently retry failed real orders.
 

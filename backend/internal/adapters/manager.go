@@ -2,9 +2,11 @@ package adapters
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/fix-gateway/backend/internal/adapters/arqa"
@@ -15,25 +17,19 @@ import (
 type StatusListener func(adapterID string, status domain.AdapterStatus)
 
 type Manager struct {
-	store            *Store
-	log              *slog.Logger
-	balancer         routing.Balancer
-	onExec           ExecutionHandler
-	onStatus         StatusListener
-	onMD             domain.MarketDataHandler
-	onPositions      func(string, string, []domain.FIXPosition) error
-	positionAdapter  string
-	positionMu       sync.Mutex
-	positionOwnerMu  sync.RWMutex
-	positionSnapshot *domain.PositionSubscription
-	mdOwnerMu        sync.RWMutex
-	mdOwner          string
-	mdMaintainMu     sync.Mutex
-	storeDir         string
-	interval         time.Duration
-	hostOverride     string
-	onFIX            func(kind, adapterID, sessionID, msgType, direction, clOrdID, reason string, seq int)
-	onObs            func(eventType, subtype, adapterID, message string)
+	store        *Store
+	log          *slog.Logger
+	balancer     routing.Balancer
+	onExec       ExecutionHandler
+	onStatus     StatusListener
+	storeDir     string
+	interval     time.Duration
+	hostOverride string
+	onFIX        func(kind, adapterID, sessionID, msgType, direction, clOrdID, reason string, seq int)
+	onObs        func(eventType, subtype, adapterID, message string)
+	hours        *SessionHours
+	paused       atomic.Bool // outside the session hours: no adapter runs
+	now          func() time.Time
 
 	mu          sync.RWMutex
 	lifecycleMu sync.Mutex
@@ -52,13 +48,24 @@ func NewManager(store *Store, log *slog.Logger, balancer routing.Balancer, onExe
 
 func (m *Manager) SetHostOverride(host string) { m.hostOverride = host }
 
-func (m *Manager) SetStatusListener(fn StatusListener) { m.onStatus = fn }
+// SetSessionHours limits the FIX sessions to a daily window; nil is always.
+// It is called before StartAll.
+func (m *Manager) SetSessionHours(h *SessionHours) { m.hours = h }
 
-func (m *Manager) SetMarketDataListener(fn domain.MarketDataHandler) { m.onMD = fn }
+// Paused reports a scheduled pause: outside the session hours no adapter runs.
+func (m *Manager) Paused() bool { return m.paused.Load() }
 
-func (m *Manager) SetPositionListener(fn func(string, string, []domain.FIXPosition) error) {
-	m.onPositions = fn
+func (m *Manager) inSession() bool {
+	now := time.Now
+	if m.now != nil {
+		now = m.now
+	}
+	return m.hours.Open(now())
 }
+
+var errOutsideSessionHours = errors.New("FIX adapters are off outside the session hours")
+
+func (m *Manager) SetStatusListener(fn StatusListener) { m.onStatus = fn }
 
 func (m *Manager) SetFIXHandler(fn func(kind, adapterID, sessionID, msgType, direction, clOrdID, reason string, seq int)) {
 	m.onFIX = fn
@@ -69,6 +76,24 @@ func (m *Manager) SetObserver(fn func(eventType, subtype, adapterID, message str
 }
 
 func (m *Manager) StartAll(ctx context.Context) error {
+	if m.inSession() {
+		if err := m.startEnabled(ctx, false); err != nil {
+			return err
+		}
+	} else {
+		m.paused.Store(true)
+		m.log.Info("FIX adapters wait for the session hours", "hours", m.hours.String())
+	}
+	go m.healthLoop(ctx)
+	if m.hours != nil {
+		go m.scheduleLoop(ctx)
+	}
+	return nil
+}
+
+// startEnabled starts the enabled adapters; newDay makes their first Logon
+// reset the sequence numbers.
+func (m *Manager) startEnabled(ctx context.Context, newDay bool) error {
 	list, err := m.store.List(ctx)
 	if err != nil {
 		return err
@@ -77,7 +102,7 @@ func (m *Manager) StartAll(ctx context.Context) error {
 		if !meta.Enabled {
 			continue
 		}
-		if err := m.startOne(ctx, meta); err != nil {
+		if err := m.startAdapter(ctx, meta, newDay); err != nil {
 			m.log.Error("adapter start failed", "adapter_id", meta.ID, "error", err)
 			_ = m.store.UpdateStatus(ctx, meta.ID, domain.AdapterOffline, false)
 			_ = m.store.AddEvent(ctx, meta.ID, "START_FAILED", err.Error())
@@ -86,11 +111,53 @@ func (m *Manager) StartAll(ctx context.Context) error {
 			}
 		}
 	}
-	go m.healthLoop(ctx)
 	return nil
 }
 
+// scheduleLoop starts the enabled adapters when the session hours begin and
+// stops them, with Logout, when they end. The QUIK adapters are switched off
+// outside the hours, so connection attempts then would only fail.
+func (m *Manager) scheduleLoop(ctx context.Context) {
+	t := time.NewTicker(10 * time.Second)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+		open := m.inSession()
+		switch {
+		case open && m.paused.Load():
+			m.log.Info("FIX session hours begin: starting adapters", "hours", m.hours.String())
+			m.paused.Store(false)
+			// The QUIK adapters were restarted overnight and start from 1:
+			// the first Logon of the day resets the numbers on both sides.
+			if err := m.startEnabled(ctx, true); err != nil {
+				m.log.Error("adapter list unavailable; retrying", "error", err)
+				m.paused.Store(true)
+			}
+		case !open && !m.paused.Load():
+			m.log.Info("FIX session hours end: stopping adapters", "hours", m.hours.String())
+			m.paused.Store(true)
+			stopCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+			m.StopAll(stopCtx)
+			cancel()
+			if m.onObs != nil {
+				m.onObs("ADAPTER", "ADAPTER_STOPPED", "", "outside FIX session hours "+m.hours.String())
+			}
+		}
+	}
+}
+
 func (m *Manager) startOne(ctx context.Context, meta domain.Adapter) error {
+	return m.startAdapter(ctx, meta, false)
+}
+
+func (m *Manager) startAdapter(ctx context.Context, meta domain.Adapter, resetSequence bool) error {
+	if !m.inSession() {
+		return errOutsideSessionHours
+	}
 	m.lifecycleMu.Lock()
 	defer m.lifecycleMu.Unlock()
 	m.mu.Lock()
@@ -109,18 +176,20 @@ func (m *Manager) startOne(ctx context.Context, meta domain.Adapter) error {
 	var ad Adapter
 	switch meta.Type {
 	case "arqa", "simulator":
-		ad = arqa.New(meta, m.log, m.onExec, func(quotes []domain.MarketQuote) { m.publishMarketData(meta.ID, quotes) }, m.storeDir)
+		ad = arqa.New(meta, m.log, m.onExec, m.storeDir)
 	default:
 		return fmt.Errorf("unknown adapter type %s", meta.Type)
 	}
-	if impl, ok := ad.(*arqa.Adapter); ok && m.onFIX != nil {
-		id := meta.ID
-		impl.SetFIXHandler(func(kind, sessionID, msgType, direction, clOrdID, reason string, seq int) {
-			m.onFIX(kind, id, sessionID, msgType, direction, clOrdID, reason, seq)
-		})
-	}
 	if impl, ok := ad.(*arqa.Adapter); ok {
-		impl.SetPositionListener(m.publishPositions)
+		if m.onFIX != nil {
+			id := meta.ID
+			impl.SetFIXHandler(func(kind, sessionID, msgType, direction, clOrdID, reason string, seq int) {
+				m.onFIX(kind, id, sessionID, msgType, direction, clOrdID, reason, seq)
+			})
+		}
+		if resetSequence {
+			impl.ResetSequenceAtNextLogon()
+		}
 	}
 	if err := ad.Start(ctx); err != nil {
 		return err
@@ -142,10 +211,18 @@ func (m *Manager) StopAll(ctx context.Context) {
 	list := m.adapters
 	m.adapters = map[string]Adapter{}
 	m.mu.Unlock()
+	// Each session sends Logout and waits for the reply; in parallel, so one
+	// slow venue does not leave the next session to be killed without Logout.
+	var wg sync.WaitGroup
 	for id, ad := range list {
-		_ = ad.Stop(ctx)
-		_ = m.store.UpdateStatus(ctx, id, domain.AdapterOffline, false)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_ = ad.Stop(ctx)
+			_ = m.store.UpdateStatus(ctx, id, domain.AdapterOffline, false)
+		}()
 	}
+	wg.Wait()
 }
 
 func (m *Manager) healthLoop(ctx context.Context) {
@@ -161,6 +238,8 @@ func (m *Manager) healthLoop(ctx context.Context) {
 	}
 }
 
+const healthCheckTimeout = 5 * time.Second
+
 func (m *Manager) checkAll(ctx context.Context) {
 	m.mu.RLock()
 	ids := make([]string, 0, len(m.adapters))
@@ -169,6 +248,11 @@ func (m *Manager) checkAll(ctx context.Context) {
 	}
 	m.mu.RUnlock()
 
+	// The in-memory counter misses orders finished outside an execution
+	// report (reconciliation, expiry, restart); resync it from the orders.
+	countCtx, cancel := context.WithTimeout(ctx, healthCheckTimeout)
+	active, err := m.store.ActiveCounts(countCtx)
+	cancel()
 	for _, id := range ids {
 		m.mu.RLock()
 		ad := m.adapters[id]
@@ -176,27 +260,38 @@ func (m *Manager) checkAll(ctx context.Context) {
 		if ad == nil {
 			continue
 		}
-		prev := ad.Status()
-		h, err := ad.HealthCheck(ctx)
-		status := ad.Status()
-		if err != nil && status != domain.AdapterStarting {
-			status = domain.AdapterOffline
+		if err == nil {
+			ad.IncActive(active[id] - ad.ActiveOrders())
 		}
-		if h.SessionLoggedOn {
-			status = domain.AdapterOnline
-		}
-		_ = m.store.UpdateStatus(ctx, id, status, h.SessionLoggedOn)
-		_ = m.store.UpdateRuntime(ctx, id, ad.ActiveOrders(), ad.Meta().ProcessedOrders, ad.Meta().ErrorCount)
-		if prev != status && m.onStatus != nil {
-			m.onStatus(id, status)
-			_ = m.store.AddEvent(ctx, id, "STATUS_CHANGED", string(status))
-			if m.onObs != nil {
-				sub := "ADAPTER_CONNECTED"
-				if status == domain.AdapterOffline {
-					sub = "ADAPTER_DISCONNECTED"
-				}
-				m.onObs("ADAPTER", sub, id, string(status))
+		m.checkOne(ctx, id, ad)
+	}
+}
+
+// checkOne bounds one adapter's health check and status writes, so a stalled
+// session or database cannot stop health checks of the other adapters.
+func (m *Manager) checkOne(parent context.Context, id string, ad Adapter) {
+	ctx, cancel := context.WithTimeout(parent, healthCheckTimeout)
+	defer cancel()
+	prev := ad.Status()
+	h, err := ad.HealthCheck(ctx)
+	status := ad.Status()
+	if err != nil && status != domain.AdapterStarting {
+		status = domain.AdapterOffline
+	}
+	if h.SessionLoggedOn {
+		status = domain.AdapterOnline
+	}
+	_ = m.store.UpdateStatus(ctx, id, status, h.SessionLoggedOn)
+	_ = m.store.UpdateRuntime(ctx, id, ad.ActiveOrders(), ad.Meta().ProcessedOrders, ad.Meta().ErrorCount)
+	if prev != status && m.onStatus != nil {
+		m.onStatus(id, status)
+		_ = m.store.AddEvent(ctx, id, "STATUS_CHANGED", string(status))
+		if m.onObs != nil {
+			sub := "ADAPTER_CONNECTED"
+			if status == domain.AdapterOffline {
+				sub = "ADAPTER_DISCONNECTED"
 			}
+			m.onObs("ADAPTER", sub, id, string(status))
 		}
 	}
 }
@@ -336,6 +431,10 @@ func (m *Manager) Enable(ctx context.Context, id string) error {
 	meta, err := m.store.Get(ctx, id)
 	if err != nil {
 		return err
+	}
+	if !m.inSession() {
+		// Enabled now, connected when the session hours begin.
+		return nil
 	}
 	return m.startOne(ctx, meta)
 }

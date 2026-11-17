@@ -3,7 +3,9 @@ package grpcstream
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	pb "github.com/fix-gateway/backend/gen/realtime/v1"
 	"github.com/fix-gateway/backend/internal/auth"
 	"github.com/fix-gateway/backend/internal/domain"
@@ -58,7 +60,9 @@ func TestBrokerGRPCSubscribeAndRevocation(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := stream.Send(&pb.ClientMessage{Command: &pb.ClientMessage_Subscribe{Subscribe: &pb.Subscribe{EventTypes: topics}}}); err != nil {
+		// A rejected stream may already be closed: Send then returns io.EOF and
+		// the status is reported by Recv.
+		if err := stream.Send(&pb.ClientMessage{Command: &pb.ClientMessage_Subscribe{Subscribe: &pb.Subscribe{EventTypes: topics}}}); err != nil && !errors.Is(err, io.EOF) {
 			t.Fatal(err)
 		}
 		return stream

@@ -26,7 +26,10 @@ func (p *Pipeline) StartExport(ctx context.Context, adminID, format string, f Fi
 	if err := p.reserveExport(); err != nil {
 		return ExportJob{}, err
 	}
-	if format != "json" {
+	// Format becomes part of the file name, so only constants may reach it.
+	if format == "json" {
+		format = "json"
+	} else {
 		format = "csv"
 	}
 	job := ExportJob{

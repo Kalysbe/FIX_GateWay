@@ -22,18 +22,18 @@ export function RequestJourney({ events }: { events: JourneyEvent[] }) {
     {arrows.length === 0 ? <div className="py-6 text-sm text-muted">События маршрута пока не записаны.</div> : <div className="mt-4 max-h-[520px] overflow-auto">
       <svg viewBox={`0 0 800 ${70 + arrows.length * 54}`} className="min-w-[680px] w-full" role="img" aria-label="Последовательность обмена заявки">
         {["Брокер", "Шлюз", "Адаптер", "Биржа / QUIK"].map((label, i) => <g key={label}>
-          <text x={100 + i * 200} y="20" textAnchor="middle" fontSize="14" fill="#334155">{label}</text>
-          <line x1={100 + i * 200} x2={100 + i * 200} y1="35" y2={65 + arrows.length * 54} stroke="#cbd5e1" strokeDasharray="4 4" />
+          <text x={100 + i * 200} y="20" textAnchor="middle" fontSize="14" fill="var(--chart-label)">{label}</text>
+          <line x1={100 + i * 200} x2={100 + i * 200} y1="35" y2={65 + arrows.length * 54} stroke="var(--chart-axis)" strokeDasharray="4 4" />
         </g>)}
         {arrows.map(({ event: e, route: [from, to, label] }, i) => {
           const x1 = 100 + from * 200, x2 = 100 + to * 200, y = 68 + i * 54;
-          const color = e.subtype === "FIX_REJECT" ? "#e11d48" : to > from ? "#0284c7" : "#059669";
+          const color = e.subtype === "FIX_REJECT" ? "var(--chart-danger)" : to > from ? "var(--chart-in)" : "var(--chart-out)";
           return <g key={e.id}>
             <title>{e.timestamp} · {e.subtype} · {e.adapter_id ?? ""} · {e.message ?? ""}</title>
             <line x1={x1} x2={x2} y1={y} y2={y} stroke={color} strokeWidth="2" />
             <path d={`M${x2 + (to > from ? -8 : 8)},${y - 5} L${x2},${y} L${x2 + (to > from ? -8 : 8)},${y + 5}`} fill="none" stroke={color} strokeWidth="2" />
-            <text x={(x1 + x2) / 2} y={y - 10} textAnchor="middle" fontSize="11" fill="#334155">{label}</text>
-            <text x={(x1 + x2) / 2} y={y + 17} textAnchor="middle" fontSize="10" fill="#64748b">+{Math.max(0, Date.parse(e.timestamp) - baseline)} мс</text>
+            <text x={(x1 + x2) / 2} y={y - 10} textAnchor="middle" fontSize="11" fill="var(--chart-label)">{label}</text>
+            <text x={(x1 + x2) / 2} y={y + 17} textAnchor="middle" fontSize="10" fill="var(--chart-text)">+{Math.max(0, Date.parse(e.timestamp) - baseline)} мс</text>
           </g>;
         })}
       </svg>

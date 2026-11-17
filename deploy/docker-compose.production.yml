@@ -36,7 +36,7 @@ services:
       ADMIN_PASSWORD_FILE: /run/secrets/admin-password
       # Current orders come only from QUIK quik_export2."Orders"; use a SELECT-only role.
       QUIK_EXPORT_DATABASE_URL_FILE: /run/secrets/quik-export-database-url
-      ADMIN_EMAIL: ${ADMIN_EMAIL:?provide the real administrator email}
+      ADMIN_USERNAME: ${ADMIN_USERNAME:?provide the administrator login}
       CORS_ORIGINS: ${PUBLIC_ORIGIN:?provide the HTTPS origin}
       TRUSTED_PROXIES: ${EDGE_IPV4:-10.89.0.10}/32
       FIX_SESSION_DIR: /app/fix-sessions
@@ -56,7 +56,6 @@ services:
       GRPC_TARGET: localhost:8443
       GRPC_SERVER_NAME: ${GRPC_SERVER_NAME:?provide certificate DNS identity}
       PROMETHEUS_URL: http://prometheus:9090
-      QUIK_API_BASE_URL: ${QUIK_API_BASE_URL:-http://172.23.10.84:5000}
       OBS_FIX_RAW_LOGS: "false"
       OBS_SKIP_ORIGINS: ""
       WORKER_ID: gateway-production-1

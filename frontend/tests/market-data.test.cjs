@@ -1,7 +1,7 @@
 const assert = require('node:assert/strict');
 const { readFileSync } = require('node:fs');
 const { resolve } = require('node:path');
-const { test } = require('node:test');
+const { test } = globalThis;
 const vm = require('node:vm');
 const ts = require('typescript');
 const React = require('react');
@@ -11,97 +11,61 @@ function load(file, imports = {}) {
   const source = ts.transpileModule(readFileSync(resolve(__dirname, '../src', file), 'utf8'), {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.ReactJSX },
   }).outputText;
-  const context = { exports: {}, require: name => { if (name in imports) return imports[name]; throw Error(name); } };
+  const context = { exports: {}, JSON, require: name => { if (name in imports) return imports[name]; throw Error(name); } };
   vm.runInNewContext(source, context);
   return context.exports;
 }
-const market = load('lib/marketData.ts');
-const seeds = ['KG0105166315', 'KG0106166315', 'GBA02280810'].map(symbol => ({
-  symbol, security_id: symbol, board: 'LISTEDSTOCKK', trading_status: '',
-  trading_session_id: '', md_req_id: '', last: '', bid: '', offer: '',
-  updated_at: '2026-10-07T04:05:23Z',
-}));
-const totals = rows => Object.fromEntries(market.marketDataSummary(rows).map(s => [s.label, s.value]));
+const raw = load('lib/rawOrders.ts');
 
-test('seeded subscription rows do not prove market data reception or zero trading instruments', () => {
-  assert.equal(market.instrumentStatus('', '').label, 'Нет статуса');
-  assert.equal(market.instrumentStatus('', '').reported, false);
-  assert.equal(seeds.some(market.hasReceivedMarketData), false);
-  assert.equal(totals(seeds)['Данные получены'], 0);
-  assert.equal(totals(seeds)['Торгуются'], '—');
-  assert.equal(totals(seeds)['Без статуса'], 3);
-});
-
-test('ARQA status codes and session identifiers have consistent labels, colours and totals', () => {
-  assert.equal(market.instrumentStatus(' 17 ', 'OPEN').trading, true);
-  assert.equal(market.instrumentStatus('', ' open ').label, 'Идут торги');
-  assert.equal(market.instrumentStatus('18', 'OPEN').label, 'Закрыты');
-  assert.equal(market.instrumentStatus('2').tone, 'badge-warn');
-  assert.equal(market.instrumentStatus('', 'CLOSING_AUCTION').label, 'Аукцион закрытия');
-  assert.equal(market.instrumentStatus('999', 'OPEN').trading, false);
-  assert.equal(market.instrumentStatus('999').label, 'Статус 999');
-  const rows = [
-    { trading_status: '17' }, { trading_session_id: 'OPEN' },
-    { trading_status: '18' }, { trading_status: '2' }, {},
-  ];
-  assert.equal(totals(rows)['Торгуются'], 2);
-  assert.equal(totals(rows)['Без статуса'], 1);
-});
-
-test('a received empty order book and zero values count as data without inventing a status', () => {
-  assert.equal(market.hasReceivedMarketData({ md_req_id: 'MD1', bids: [], offers: [] }), true);
-  assert.equal(market.hasReceivedMarketData({ last: '0', volume: '0' }), true);
-  assert.equal(market.hasReceivedMarketData({ trading_status: '18' }), true);
-  assert.equal(market.instrumentStatus().reported, false);
-});
-
-function renderMarketPage(quotes, subscription) {
+function renderPage(text, error = null) {
+  const rows = raw.parseDBJSON(text);
+  const router = { Link: ({ to, className, children }) => React.createElement('a', { href: to, className }, children) };
+  const jsx = { 'react/jsx-runtime': require('react/jsx-runtime') };
   const imports = {
+    '../components/rawColumns': load('components/rawColumns.tsx', { ...jsx, '../lib/rawOrders': raw }),
+    '../components/quikColumns': load('components/quikColumns.tsx', { ...jsx, 'react-router-dom': router, '../lib/rawOrders': raw, '../lib/quikFormat': load('lib/quikFormat.ts') }),
     react: React,
     'react/jsx-runtime': require('react/jsx-runtime'),
-    '@tanstack/react-query': {
-      useQuery: () => ({ data: { source: 'live', live: true, quotes, subscription, snapshot: { adapter_id: 'quik-fix-1', md_req_id: '', requested_at: '2026-10-07T04:09:57Z', report_count: quotes.length } }, isLoading: false }),
-      useQueryClient: () => ({}),
-    },
-    '../api': { api: () => { throw Error('unexpected network request'); } },
+    'react-router-dom': router,
+    '../lib/quotes': load('lib/quotes.tsx', { 'react/jsx-runtime': require('react/jsx-runtime'), 'react-router-dom': router, './rawOrders': raw }),
+    '@tanstack/react-query': { useQuery: () => ({ data: error ? undefined : rows, error, isLoading: false, isFetching: false, refetch() {} }) },
+    '../api': { apiWithHeaders: () => { throw Error('unexpected network request'); } },
     '../lib/poll': { liveRefetchInterval: () => 2000 },
+    '../lib/rawOrders': raw,
+    '../lib/urlState': { useUrlState: () => ['', () => {}] },
+    '../components/RowDrawer': { RowDrawer: () => null },
     '../hooks/useAdminStream': { useAdminStream: () => ({ connected: true, subscribe: () => () => {} }) },
-    '../components/PageHeader': { PageHeader: ({ title, actions }) => React.createElement('header', null, title, actions) },
-    '../components/feedback': { ErrorBanner: () => null },
-    '../lib/table': { numberValue: value => value === '' ? undefined : Number(value) },
-    '../lib/marketData': market,
-    '../components/DataTable': { DataTable: ({ rows, columns, summary }) => React.createElement('section', null,
-      rows.map((r, i) => React.createElement('div', { key: i }, columns.map(c => React.createElement('span', { key: c.id }, c.cell ? c.cell(r) : c.value(r))))),
-      summary(rows).map(s => React.createElement('p', { key: s.label }, `${s.label}: ${s.value}`))),
-    },
+    '../components/PageHeader': { PageHeader: ({ title }) => React.createElement('header', null, title) },
+    '../components/feedback': { ErrorBanner: () => React.createElement('p', null, 'error-banner') },
+    '../components/DataTable': { DataTable: ({ rows, columns, filters, emptyTitle }) => {
+      const visible = columns.filter(c => !c.defaultHidden);
+      return React.createElement('section', null, filters,
+        React.createElement('div', null, visible.map(c => React.createElement('b', { key: c.id }, c.header))),
+        React.createElement('i', null, columns.filter(c => c.defaultHidden).map(c => c.header).join(',')),
+        rows.length ? rows.map((r, i) => React.createElement('div', { key: i }, visible.map(c => React.createElement('span', { key: c.id }, c.cell(r)), ))) : emptyTitle);
+    } },
   };
   return renderToStaticMarkup(React.createElement(load('pages/MarketDataPage.tsx', imports).default));
 }
 
-test('connected console with seeded quotes shows missing data instead of a green market confirmation', () => {
-  const html = renderMarketPage(seeds);
-  assert.match(html, /Консоль подключена/);
-  assert.match(html, /Рыночные данные не получены по 3 из 3 инструментов/);
-  assert.equal((html.match(/>Нет статуса</g) || []).length, 3);
-  assert.match(html, /Торгуются: —/);
-  assert.match(html, /Без статуса: 3/);
-  assert.match(html, /Подписка и восстановление выполняются автоматически/);
-  assert.doesNotMatch(html, /Проверить подписку|Подписаться по FIX|>Обновить<|Код инструмента|Торговый класс|>Онлайн</);
+test('Params rows show the chosen bond columns with exact values; the rest stay in the column menu', () => {
+  const html = renderPage('[{"ClassCode":"LIST_GBA","SecCode":"GBA02270915","CouponValue":2.500000,"status":"торгуется","FaceUnit":"KGS","SecShortName":"ГКО-2","SecFullName":"ГКО-2 летние","ClassName":"Листинговые:облигации","valtoday":12345678.50000000},{"ClassCode":"TQBR","SecCode":"SBER","CouponValue":9007199254740993,"status":null,"FaceUnit":null,"SecShortName":null,"SecFullName":null,"ClassName":null,"valtoday":null}]');
+  assert.match(html, /<b>Инструмент<\/b><b>Класс \/ валюта<\/b><b>Купон \/ дата<\/b><b>Оборот<\/b><\/div>/);
+  assert.match(html, /<i>status,SecFullName,ClassName<\/i>/, 'other columns are hidden, not dropped');
+  assert.match(html, />2,50</);
+  assert.match(html, />9 007 199 254 740 993,00</, 'long numbers keep every digit');
+  assert.match(html, />12 345 678,50</);
+  assert.match(html, /class="cell-null">—</);
+  // The class choice has its own page.
+  assert.match(html, /<a href="\/classes" class="text-accent">«Классы QUIK»<\/a>/);
+  // Each instrument links to its own page with all of its market data.
+  assert.match(html, /<a href="\/market-data\/LIST_GBA\/GBA02270915" class="text-accent">GBA02270915<\/a><small>ГКО-2<\/small>/);
+  assert.match(html, /<option value="LIST_GBA">LIST_GBA<\/option><option value="TQBR">TQBR<\/option>/);
+  assert.doesNotMatch(html, /Подписка|FIX|Стакан/);
 });
 
-test('subscription rejection shows automatic recovery and the upstream reason without manual controls', () => {
-  const html = renderMarketPage(seeds, { status:'RETRYING', expected:3, confirmed:0, error:'Unknown ExDestination [BOARD]', next_retry_at:'2026-10-07T04:10:00Z' });
-  assert.match(html, /Восстановление потока/);
-  assert.match(html, /Автоматическое восстановление потока/);
-  assert.match(html, /Unknown ExDestination \[BOARD\]/);
-  assert.match(html, /следующая проверка/);
-  assert.doesNotMatch(html, /Проверьте подписку|Проверить подписку|Подписаться/);
-});
-
-test('reported trading status renders even without quotes and removes the missing-status warning', () => {
-  const html = renderMarketPage([{ ...seeds[0], trading_status: '17', md_req_id: 'MD1' }]);
-  assert.match(html, />Идут торги</);
-  assert.match(html, /Торгуются: 1/);
-  assert.match(html, /Без статуса: 0/);
-  assert.doesNotMatch(html, /Статус не передан|Рыночные данные не получены/);
+test('an unavailable source shows an error, not stale or FIX data', () => {
+  const html = renderPage('[]', new Error('market data unavailable'));
+  assert.match(html, /error-banner/);
+  assert.match(html, /Таблица Params недоступна/);
 });

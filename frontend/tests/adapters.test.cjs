@@ -1,7 +1,7 @@
 const assert = require("node:assert/strict");
 const { readFileSync } = require("node:fs");
 const { resolve } = require("node:path");
-const { test } = require("node:test");
+const { test } = globalThis;
 const vm = require("node:vm");
 const ts = require("typescript");
 

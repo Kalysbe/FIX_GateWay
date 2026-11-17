@@ -15,8 +15,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-
-	"github.com/google/uuid"
 )
 
 func main() {
@@ -32,8 +30,6 @@ func main() {
 		fmt.Fprintln(os.Stderr, "valid http(s) -url, -token, -account, -client-code and positive -n/-w required")
 		os.Exit(2)
 	}
-	runPrefix := "LOAD-" + uuid.NewString()
-
 	var ok, fail atomic.Int64
 	jobs := make(chan int, *workers)
 	var wg sync.WaitGroup
@@ -43,10 +39,10 @@ func main() {
 		go func() {
 			defer wg.Done()
 			client := &http.Client{Timeout: 10 * time.Second}
-			for i := range jobs {
+			for range jobs {
 				body, _ := json.Marshal(map[string]any{
-					"account_id": *account, "client_code": *clientCode, "client_order_id": fmt.Sprintf("%s-%d", runPrefix, i),
-					"symbol": "SBER", "board": "TQBR", "side": "BUY", "order_type": "LIMIT", "quantity": "1", "price": "100",
+					"Account": *account, "ClientCode": *clientCode,
+					"SecCode": "SBER", "ClassCode": "TQBR", "Operation": "Купля", "Qty": 1, "Price": 100,
 				})
 				if err := createSmokeOrder(client, base, *token, body); err != nil {
 					fail.Add(1)

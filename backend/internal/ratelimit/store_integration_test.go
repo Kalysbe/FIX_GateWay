@@ -4,6 +4,8 @@ package ratelimit
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"github.com/fix-gateway/backend/internal/platform/migrate"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -35,7 +37,20 @@ func TestPolicyPersistenceAuditAndRestart(t *testing.T) {
 	if err = pool.QueryRow(ctx, `INSERT INTO brokers(code,name) VALUES($1,'Rate test') RETURNING id`, actor).Scan(&broker); err != nil {
 		t.Fatal(err)
 	}
-	s := &Store{Pool: pool, Admission: NewAdmission()}
+	type auditLine struct {
+		actor   string
+		payload map[string]json.RawMessage
+	}
+	var audited []auditLine
+	record := func(_ context.Context, actor string, _ *int64, _ string, payload json.RawMessage) error {
+		var m map[string]json.RawMessage
+		if err := json.Unmarshal(payload, &m); err != nil {
+			return err
+		}
+		audited = append(audited, auditLine{actor, m})
+		return nil
+	}
+	s := &Store{Pool: pool, Admission: NewAdmission(), Audit: record}
 	if err = s.Refresh(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -65,18 +80,16 @@ func TestPolicyPersistenceAuditAndRestart(t *testing.T) {
 	if !ok || got != p {
 		t.Fatal("restart policy", got)
 	}
-	var count int
-	if err = pool.QueryRow(ctx, `SELECT count(*) FROM audit_logs WHERE action='RATE_LIMIT_UPDATED' AND request_payload->>'reason' IS NOT NULL AND actor_id=$1`, actor).Scan(&count); err != nil || count != 2 {
-		t.Fatal("audit", count, err)
+	if len(audited) != 2 || audited[0].actor != actor || audited[1].payload["reason"] == nil {
+		t.Fatal("audit", audited)
 	}
-	var before string
-	if err = pool.QueryRow(ctx, `SELECT request_payload->'before'->>'rate' FROM audit_logs WHERE action='RATE_LIMIT_UPDATED' AND actor_id=$1 ORDER BY id DESC LIMIT 1`, actor).Scan(&before); err != nil || before != "10" {
+	var before struct{ Rate int }
+	if err = json.Unmarshal(audited[1].payload["before"], &before); err != nil || before.Rate != 10 {
 		t.Fatal("before state", before, err)
 	}
-	if _, err = pool.Exec(ctx, `ALTER TABLE audit_logs ADD CONSTRAINT rate_test_reject_audit CHECK(actor_id IS DISTINCT FROM 'rate-test-failure')`); err != nil {
-		t.Fatal(err)
+	s.Audit = func(context.Context, string, *int64, string, json.RawMessage) error {
+		return errors.New("log file unavailable")
 	}
-	defer pool.Exec(ctx, `ALTER TABLE audit_logs DROP CONSTRAINT rate_test_reject_audit`)
 	p.Rate = 99
 	if err = s.Upsert(ctx, p, "rate-test-failure", "audit rollback test"); err == nil {
 		t.Fatal("expected audit rejection")

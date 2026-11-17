@@ -118,28 +118,6 @@ type APIToken struct {
 	RotatedFrom *uuid.UUID  `json:"rotated_from,omitempty"`
 }
 
-type BrokerAccount struct {
-	ID             int64     `json:"id"`
-	BrokerID       int64     `json:"broker_id"`
-	Code           string    `json:"code"`
-	Name           string    `json:"name"`
-	QuikFirm       string    `json:"quik_firm"`
-	TradingAccount string    `json:"trading_account"`
-	Status         string    `json:"status"`
-	CreatedAt      time.Time `json:"created_at"`
-	UpdatedAt      time.Time `json:"updated_at"`
-}
-
-type Instrument struct {
-	ID             int64  `json:"id"`
-	InternalSymbol string `json:"internal_symbol"`
-	QuikSymbol     string `json:"quik_symbol"`
-	Board          string `json:"board"`
-	Currency       string `json:"currency"`
-	SecurityType   string `json:"security_type"`
-	Status         string `json:"status"`
-}
-
 type Adapter struct {
 	ID                  string        `json:"id"`
 	Name                string        `json:"name"`
@@ -172,16 +150,13 @@ type Order struct {
 	ExecutionBecameTerminal bool             `json:"-"`
 	ID                      uuid.UUID        `json:"id"`
 	BrokerID                int64            `json:"broker_id"`
-	AccountID               int64            `json:"account_id"`
 	ClientOrderID           string           `json:"client_order_id"`
-	InstrumentID            int64            `json:"instrument_id"`
 	Side                    Side             `json:"side"`
 	OrderType               OrderType        `json:"order_type"`
 	TimeInForce             string           `json:"time_in_force"`
 	Quantity                decimal.Decimal  `json:"quantity"`
 	Price                   *decimal.Decimal `json:"price,omitempty"`
 	FilledQuantity          decimal.Decimal  `json:"filled_quantity"`
-	AvgPrice                decimal.Decimal  `json:"avg_price"`
 	Status                  OrderStatus      `json:"status"`
 	AdapterID               *string          `json:"adapter_id,omitempty"`
 	FixClOrdID              *string          `json:"fix_cl_ord_id,omitempty"`
@@ -197,7 +172,6 @@ type Order struct {
 	Currency       string `json:"currency,omitempty"`
 	ClientCode     string `json:"client_code,omitempty"` // FIX tag 109
 	QuikFirm       string `json:"quik_firm,omitempty"`   // FIX tag 5018
-	FirmName       string `json:"firm_name,omitempty"`   // from quik_firms
 	RequestID      string `json:"request_id,omitempty"`
 	TraceID        string `json:"trace_id,omitempty"`
 }
@@ -212,48 +186,6 @@ type OrderEvent struct {
 	Message    string    `json:"message"`
 	Payload    []byte    `json:"payload,omitempty"`
 	CreatedAt  time.Time `json:"created_at"`
-}
-
-type Execution struct {
-	ID           uuid.UUID       `json:"id"`
-	OrderID      uuid.UUID       `json:"order_id"`
-	ExecID       string          `json:"exec_id"`
-	TradeMatchID string          `json:"trade_match_id,omitempty"`
-	ContraBroker string          `json:"contra_broker,omitempty"`
-	ContraTrader string          `json:"contra_trader,omitempty"`
-	LastQty      decimal.Decimal `json:"last_qty"`
-	LastPx       decimal.Decimal `json:"last_px"`
-	CumQty       decimal.Decimal `json:"cum_qty"`
-	LeavesQty    decimal.Decimal `json:"leaves_qty"`
-	AdapterID    *string         `json:"adapter_id,omitempty"`
-	CreatedAt    time.Time       `json:"created_at"`
-}
-
-// Trade is an execution enriched with order/FIX context for list APIs.
-type Trade struct {
-	ID            uuid.UUID       `json:"id"`
-	OrderID       uuid.UUID       `json:"order_id"`
-	ExecID        string          `json:"exec_id"`
-	LastQty       decimal.Decimal `json:"last_qty"`
-	LastPx        decimal.Decimal `json:"last_px"`
-	CumQty        decimal.Decimal `json:"cum_qty"`
-	LeavesQty     decimal.Decimal `json:"leaves_qty"`
-	AdapterID     *string         `json:"adapter_id,omitempty"`
-	CreatedAt     time.Time       `json:"created_at"`
-	ExecutionDate string          `json:"execution_date"`
-	TradeMatchID  string          `json:"trade_match_id"`
-	ContraBroker  string          `json:"contra_broker"`
-	ContraTrader  string          `json:"contra_trader"`
-	BrokerID      int64           `json:"broker_id"`
-	ClientOrderID string          `json:"client_order_id"`
-	Symbol        string          `json:"symbol"`
-	Board         string          `json:"board"`
-	Side          string          `json:"side"`
-	ClientCode    string          `json:"client_code"`
-	QuikFirm      string          `json:"quik_firm"`
-	FirmName      string          `json:"firm_name"`
-	FixClOrdID    *string         `json:"fix_cl_ord_id,omitempty"`
-	QuikOrderID   *string         `json:"quik_order_id,omitempty"`
 }
 
 type OutboxEvent struct {
@@ -274,7 +206,7 @@ type OutboxEvent struct {
 
 type User struct {
 	ID           uuid.UUID `json:"id"`
-	Email        string    `json:"email"`
+	Username     string    `json:"username"`
 	PasswordHash string    `json:"-"`
 	FullName     string    `json:"full_name"`
 	RoleCode     string    `json:"role"`
@@ -289,68 +221,6 @@ type HealthDetails struct {
 	SessionLoggedOn bool
 	QuikConnected   *bool
 	Message         string
-}
-
-// PositionQuery filters a FIX Request For Positions (35=AN).
-// ARQA §2.31 / HowTo: parties only when used — then exactly 2 (Client+Firm or Account+Firm).
-// Empty parties = snapshot of all clients.
-type PositionQuery struct {
-	Firm                 string // PartyRole=13
-	ClientCode           string // PartyRole=3 (spot cash/instrument)
-	Account              string // PartyRole=38 on request (futures trading account)
-	SubscriptionType     string // 263: 0=SNAPSHOT (default), 1=SNAPSHOT+UPDATES, 2=DISABLE
-	ClearingBusinessDate string // metadata only — not sent on ARQA AN
-}
-
-// PositionBlock is one ML/DL block for Position Maintenance Request (35=AL),
-// same PosKey/PosItem layout as Position Report (35=AP), ARQA §2.33.
-type PositionBlock struct {
-	PosType      string            // ML | DL
-	UpdateAction string            // 5024: 0 New / 1 Change / 2 Delete
-	Keys         map[string]string // 5026/5027
-	Items        map[string]string // 5029/5030
-	LongQty      decimal.Decimal
-	ShortQty     decimal.Decimal
-}
-
-// PositionMaintainRequest is sent to QUIK via FIX adapter (35=AL).
-type PositionMaintainRequest struct {
-	Firm                 string
-	ClientCode           string
-	Account              string
-	ClearingBusinessDate string
-	Action               string // 712 PosMaintAction: 1 New, 2 Replace, 3 Cancel
-	TransType            string // 709 PosTransType: 3 Position Adjustment
-	Blocks               []PositionBlock
-}
-
-// FIXPosition is one position block from Position Report (35=AP), ARQA §2.33.
-// Spot money = PosType ML; spot instrument = DL; futures limit/pos = FL/FP.
-type FIXPosition struct {
-	AdapterID     string            `json:"adapter_id"`
-	PosMaintRptID string            `json:"pos_maint_rpt_id"`
-	PosReqID      string            `json:"pos_req_id"`
-	ClearingDate  string            `json:"clearing_date"`
-	Kind          string            `json:"kind"` // INSTRUMENT | CASH | FUTURES
-	FirmID        string            `json:"firm_id"`
-	ClientCode    string            `json:"client_code"`
-	AccountCode   string            `json:"account_code"`
-	Symbol        string            `json:"symbol"`
-	SecurityID    string            `json:"security_id"`
-	Board         string            `json:"board"`
-	Currency      string            `json:"currency"`
-	PosType       string            `json:"pos_type"`        // ML | DL | FL | FP
-	UpdateAction  string            `json:"update_action"`   // 5024: 0 New / 1 Change / 2 Delete
-	Keys          map[string]string `json:"keys,omitempty"`  // 5026/5027 PosKey*
-	Items         map[string]string `json:"items,omitempty"` // 5029/5030 PosItem*
-	LongQty       decimal.Decimal   `json:"long_qty"`
-	ShortQty      decimal.Decimal   `json:"short_qty"`
-	NetQty        decimal.Decimal   `json:"net_qty"`
-	PosAmtType    string            `json:"pos_amt_type"`
-	PosAmt        decimal.Decimal   `json:"pos_amt"`
-	SettlPrice    decimal.Decimal   `json:"settl_price"`
-	RawFIX        string            `json:"raw_fix,omitempty"`
-	Source        string            `json:"source,omitempty"` // fix | manual
 }
 
 type ExecutionReport struct {
@@ -381,67 +251,3 @@ type ExecutionReport struct {
 }
 
 type ExecutionHandler func(report ExecutionReport)
-
-// MarketDataQuery filters a FIX Market Data Request (35=V), ARQA §2.19 / HowTo.
-// Empty Symbol+Instruments = snapshot of all quotes the session is allowed to see.
-type MarketDataQuery struct {
-	Symbol           string        // SecurityID (48)
-	Board            string        // ExDestination (100) class code
-	SecurityType     string        // SecurityType (167), e.g. CS / GOVT
-	Boards           []string      // extra class codes; each is a separate 35=V with tag 100
-	Instruments      []SecurityRef // optional list for NoRelatedSym (146)
-	SubscriptionType string        // 263: 0=SNAPSHOT, 1=SNAPSHOT+UPDATES, 2=DISABLE
-}
-
-type MarketDataHandler func(quotes []MarketQuote)
-
-// BookLevel is one aggregated price in the order book (стакан).
-type BookLevel struct {
-	Price string `json:"price"`
-	Size  string `json:"size"`
-}
-
-// MarketQuote is one row of QUIK «Текущие торги», built from Market Data Snapshot (35=W)
-// / Incremental Refresh (35=X). Best bid/offer plus last/OHLC/VWAP and, when the
-// adapter sends depth (264=0), the visible bid/offer book.
-type MarketQuote struct {
-	AdapterID         string            `json:"adapter_id"`
-	MDReqID           string            `json:"md_req_id"`
-	Symbol            string            `json:"symbol"`
-	SecurityID        string            `json:"security_id"`
-	Board             string            `json:"board"`
-	Currency          string            `json:"currency"`
-	Name              string            `json:"name,omitempty"`
-	TradeDate         string            `json:"trade_date"`
-	TradingStatus     string            `json:"trading_status"`      // 326
-	TradingSessionID  string            `json:"trading_session_id"`  // 336
-	TradingSessionSub string            `json:"trading_session_sub"` // 625
-	Bid               string            `json:"bid"`                 // 269=0 best
-	BidSize           string            `json:"bid_size"`
-	Offer             string            `json:"offer"` // 269=1 best
-	OfferSize         string            `json:"offer_size"`
-	Bids              []BookLevel       `json:"bids,omitempty"`   // bid side, best first
-	Offers            []BookLevel       `json:"offers,omitempty"` // offer side, best first
-	Last              string            `json:"last"`             // 269=2
-	LastSize          string            `json:"last_size"`
-	LastTime          string            `json:"last_time"`
-	Open              string            `json:"open"`  // 269=4
-	High              string            `json:"high"`  // 269=7
-	Low               string            `json:"low"`   // 269=8
-	Close             string            `json:"close"` // 269=5
-	WAPR              string            `json:"wapr"`  // 269=9
-	Settle            string            `json:"settle"`
-	CurrentPrice      string            `json:"current_price"`  // 269=o
-	OfficialPrice     string            `json:"official_price"` // 269=O
-	Volume            string            `json:"volume"`         // 387 TotalVolumeTraded
-	Value             string            `json:"value"`          // 6143 TotalValueTraded
-	Entries           map[string]string `json:"entries,omitempty"`
-	RawFIX            string            `json:"raw_fix,omitempty"`
-	UpdatedAt         time.Time         `json:"updated_at,omitempty"`
-	DeltaVolume       string            `json:"-"` // last-trade qty in this FIX message, when 387 absent
-	DeltaValue        string            `json:"-"` // last-trade notional, when 6143 absent
-	ReplaceBids       bool              `json:"-"` // 35=W replaced the bid side
-	ReplaceOffers     bool              `json:"-"` // 35=W replaced the offer side
-	DeletedBids       []string          `json:"-"` // prices removed on 35=X 279=2
-	DeletedOffers     []string          `json:"-"`
-}

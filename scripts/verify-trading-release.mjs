@@ -16,9 +16,12 @@ const containers=JSON.parse(command(['ps','--format','json','access']));
 assert.equal(containers.Project,'fix-gateway-verification');
 assert.ok(containers.Publishers.some(p=>p.PublishedPort===38080 && p.TargetPort===8080));
 function sql(statement){return execFileSync(docker,[...compose,'exec','-T','postgres','psql','-U','gateway','-d','fix_gateway_local','-v','ON_ERROR_STOP=1','-At'],{input:statement,encoding:'utf8',timeout:15000}).trim();}
+// Broker replies are {success, code, message, data}: a success yields data, a
+// failure {code, error, error_code, ...data}.
+const unwrap=(path,v)=>path.startsWith('/api/v1/admin/')||!v||typeof v!=='object'||!('success' in v)?v:v.success?v.data:{...(v.data&&typeof v.data==='object'?v.data:{}),code:v.code,error:v.message,error_code:v.error_code};
 async function call(path,token='',method='GET',body,status=200){
- const response=await fetch(base+path,{method,headers:{...(token?{Authorization:`Bearer ${token}`} : {}),...(body?{'Content-Type':'application/json'}:{})},body:body?JSON.stringify(body):undefined,signal:AbortSignal.timeout(10000)});
- const value=await response.json();assert.equal(response.status,status,`${method} ${path}: ${JSON.stringify(value)}`);return value;
+ const response=await fetch(base+path,{method,headers:{...(token?{Authorization:`Bearer ${token}`} : {}),...(body?{'Content-Type':'application/json'}:{})},body:body?JSON.stringify(body):undefined,signal:AbortSignal.timeout(20000)});
+ const value=unwrap(path,await response.json());assert.ok([].concat(status).includes(response.status),`${method} ${path}: ${JSON.stringify(value)}`);return value;
 }
 async function until(fn){const deadline=Date.now()+45000;while(Date.now()<deadline){try{const value=await fn();if(value)return value;}catch{}await delay(200);}throw Error('Verification timed out');}
 // Every shipped migration must be applied, whichever is the latest.
@@ -27,12 +30,11 @@ assert.equal(sql('SELECT version FROM schema_migrations'),String(latestMigration
 assert.equal(sql('SELECT dirty FROM schema_migrations'),'f');
 // Broker REST returns only QUIK Orders rows; the request lifecycle is the local ledger.
 const localStatus=id=>sql(`SELECT status FROM orders WHERE id='${id}'`);
-const {token:admin}=await call('/api/v1/admin/login','','POST',{email:'admin@localhost',password:'admin123'});
+const {token:admin}=await call('/api/v1/admin/login','','POST',{username:'admin',password:'admin123'});
 const {broker}=await call('/api/v1/admin/brokers',admin,'POST',{code:`VERIFY-${randomUUID()}`,name:'Release verification'},201);
-await call(`/api/v1/admin/brokers/${broker.id}/accounts`,admin,'POST',{code:'VERIFY',name:'Test',quik_firm:'SIM',trading_account:'VERIFY'},201);
 const {token}=await call(`/api/v1/admin/brokers/${broker.id}/tokens`,admin,'POST',{name:'Verification',quik_firm:'SIM',expires_in_days:30,permissions:['orders:create','orders:read']},201);
-const payload={account_id:'VERIFY',client_code:'VERIFY',client_order_id:randomUUID(),symbol:'SBER',board:'TQBR',side:'BUY',order_type:'LIMIT',quantity:'1',price:'100'};
-const {order}=await call('/api/v1/orders',token,'POST',payload,201);
+const payload={ClassCode:'TQBR',SecCode:'SBER',Operation:'Купля',Price:100,Qty:1,Account:'VERIFY',ClientCode:'VERIFY'};
+const order=await call('/api/v1/orders',token,'POST',payload,201);
 await until(async()=>localStatus(order.id)==='ACKNOWLEDGED');
 // Deterministic crash-window injection: venue ACK was received, but queue completion
 // was lost. This models durable PROCESSING state; it is not a socket-loss test.
@@ -42,28 +44,30 @@ await until(async()=>{const value=await call(`/api/v1/admin/reconciliation?order
 assert.equal(sql(`SELECT count(*) FROM outbox_reconciliations WHERE order_id='${order.id}'`),'1');
 assert.equal(sql(`SELECT attempts FROM outbox_events WHERE aggregate_id='${order.id}' AND event_type='ORDER_SEND'`),'1');
 assert.equal(sql(`SELECT fix_send_attempted_at IS NOT NULL FROM orders WHERE id='${order.id}'`),'t');
-const replay=await call('/api/v1/orders',token,'POST',payload);assert.equal(replay.order.id,order.id);assert.equal(replay.idempotent,true);
+// The restart dropped the FIX sessions. An order sent before they log on again is
+// rightly requeued ("no healthy adapters"), which would add an attempt below.
+await until(async()=>{const {adapters}=await call('/api/v1/admin/adapters',admin);const enabled=adapters.filter(a=>a.enabled);return enabled.length>0&&enabled.every(a=>a.status==='ONLINE');});
 // Real socket fault: simulator accepts D, drops the connection before ACK and
 // emits the retained ACK after reconnect. Durable crash-window state is injected
 // separately so both the unconfirmed and confirmed reconciliation paths run.
-sql("INSERT INTO instruments(internal_symbol,quik_symbol,board,currency) VALUES('FAULT_RECOVER','FAULT_RECOVER','TQBR','RUB') ON CONFLICT(internal_symbol) DO NOTHING;");
-const fault=await call('/api/v1/orders',token,'POST',{...payload,symbol:'FAULT_RECOVER',client_order_id:randomUUID()},201);
-const clOrdID=sql(`SELECT fix_cl_ord_id FROM orders WHERE id='${fault.order.id}'`);
+// The ACK may arrive only after reconnect, i.e. after the reply wait (202).
+const fault=await call('/api/v1/orders',token,'POST',{...payload,SecCode:'FAULT_RECOVER'},[201,202]);
+const clOrdID=sql(`SELECT fix_cl_ord_id FROM orders WHERE id='${fault.id}'`);
 await until(()=>command(['logs','--no-color','fixsimulator']).includes(`FAULT_RECEIVED ${clOrdID}`));
-sql(`UPDATE outbox_events SET status='PROCESSING',locked_by='fault-window',locked_at=now()-interval '5 minutes' WHERE aggregate_id='${fault.order.id}' AND event_type='ORDER_SEND';`);
-await until(async()=>{const value=await call(`/api/v1/admin/reconciliation?order_id=${fault.order.id}`,admin);return value.cases.find(c=>!c.resolved_at && !c.evidence_event_id);});
-await until(async()=>{const value=await call(`/api/v1/admin/reconciliation?order_id=${fault.order.id}`,admin);return value.cases.find(c=>c.resolved_at && c.evidence_event_id && c.actor_id==='system:fix-reconciliation');});
-assert.equal(sql(`SELECT attempts FROM outbox_events WHERE aggregate_id='${fault.order.id}' AND event_type='ORDER_SEND'`),'1');
+sql(`UPDATE outbox_events SET status='PROCESSING',locked_by='fault-window',locked_at=now()-interval '5 minutes' WHERE aggregate_id='${fault.id}' AND event_type='ORDER_SEND';`);
+await until(async()=>{const value=await call(`/api/v1/admin/reconciliation?order_id=${fault.id}`,admin);return value.cases.find(c=>!c.resolved_at && !c.evidence_event_id);});
+await until(async()=>{const value=await call(`/api/v1/admin/reconciliation?order_id=${fault.id}`,admin);return value.cases.find(c=>c.resolved_at && c.evidence_event_id && c.actor_id==='system:fix-reconciliation');});
+assert.equal(sql(`SELECT attempts FROM outbox_events WHERE aggregate_id='${fault.id}' AND event_type='ORDER_SEND'`),'1');
 const logs=command(['logs','--no-color','fixsimulator']);
 assert.equal(logs.split(`FAULT_RECEIVED ${clOrdID}`).length-1,1,'uncertain order was transmitted more than once');
 await call('/api/v1/admin/trading-limits',admin,'PUT',{broker_id:broker.id,paused:true,max_quantity:'2',max_open_orders:3,revision:0,reason:'Release verification pause'});
-const rejected=await call('/api/v1/orders',token,'POST',{...payload,client_order_id:randomUUID()},422);assert.equal(rejected.code,'TRADING_PAUSED');
+const rejected=await call('/api/v1/orders',token,'POST',payload,422);assert.equal(rejected.code,'TRADING_PAUSED');
 const history=await call(`/api/v1/admin/trading-limits/history?broker_id=${broker.id}`,admin);assert.equal(history.history[0].after.paused,true);
 command(['restart','gateway']);
 await until(async()=>{const value=await call('/api/v1/admin/trading-limits',admin);return value.policies.some(p=>p.broker_id===broker.id && p.paused);});
 // Restore into a separate disposable database, never overwrite the source.
 command(['stop','gateway']);
-const snapshotSQL=`SELECT json_build_object('orders',(SELECT count(*) FROM orders),'executions',(SELECT count(*) FROM executions),'outbox',(SELECT count(*) FROM outbox_events),'reconciliations',(SELECT count(*) FROM outbox_reconciliations),'history',(SELECT count(*) FROM trading_limit_history),'fences',(SELECT count(*) FROM orders WHERE fix_send_attempted_at IS NOT NULL))::text`;
+const snapshotSQL=`SELECT json_build_object('orders',(SELECT count(*) FROM orders),'outbox',(SELECT count(*) FROM outbox_events),'reconciliations',(SELECT count(*) FROM outbox_reconciliations),'history',(SELECT count(*) FROM trading_limit_history),'fences',(SELECT count(*) FROM orders WHERE fix_send_attempted_at IS NOT NULL))::text`;
 const snapshot=sql(snapshotSQL);
 const restoreDB=`restore_${randomUUID().replaceAll('-','')}`;
 sql(`CREATE DATABASE ${restoreDB}`);
@@ -78,7 +82,7 @@ try {
  command(['run','-d','--no-deps','--name',restoredContainer,'-e',`DATABASE_URL=postgres://gateway:local-simulator-only@postgres:5432/${restoreDB}?sslmode=disable`,'gateway']);
  await until(()=>{try{return execFileSync(docker,['exec',restoredContainer,'wget','-qO-','http://127.0.0.1:8080/ready'],{encoding:'utf8',timeout:5000}).includes('ready');}catch{return false;}});
  assert.equal(command(['exec','-T','postgres','psql','-U','gateway','-d',restoreDB,'-At','-c',`SELECT paused FROM trading_limits WHERE broker_id=${broker.id}`]).trim(),'t');
- assert.equal(command(['exec','-T','postgres','psql','-U','gateway','-d',restoreDB,'-At','-c',`SELECT attempts FROM outbox_events WHERE aggregate_id='${fault.order.id}' AND event_type='ORDER_SEND'`]).trim(),'1');
+ assert.equal(command(['exec','-T','postgres','psql','-U','gateway','-d',restoreDB,'-At','-c',`SELECT attempts FROM outbox_events WHERE aggregate_id='${fault.id}' AND event_type='ORDER_SEND'`]).trim(),'1');
 } finally {
  execFileSync(docker,['rm','-f',restoredContainer],{encoding:'utf8',timeout:15000});
  command(['start','gateway']);

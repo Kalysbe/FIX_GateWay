@@ -1,0 +1,41 @@
+# Торговые счета и фирмы из БД QUIK
+
+Решение пользователя от 26.10.2026: счета и фирмы берутся из таблиц QUIK
+`public."Trdaccs"` и `public."Firms"` того же подключения
+`QUIK_EXPORT_DATABASE_URL` (только чтение), что `Orders` и `Params`.
+Ручное заведение счетов в Gateway убрано.
+
+Используемые колонки (остальные передаются как есть):
+
+- `Trdaccs`: `TrdAccId` — торговый счёт (`Account` заявки, FIX tag 1),
+  `FirmId` — фирма. Также `Type`, `LoadDate`, `Description`, `BankAccId`,
+  `Status`, `DepAccId`, `TrdAccType`, `MainTrdAccId`, `FirmUse`,
+  `FullCoveredSell`, `BankIdT0`, `BankIdTPlus`, `DepUnitId`, `Flags`.
+- `Firms`: `FirmId`, `FirmName`, а также `Exchange`, `Status`, `StatusFlag`.
+
+## Проверка заявки
+
+`Account` принимается, если в `Trdaccs` есть строка с `TrdAccId` = `Account`
+и `FirmId` = `quik_firm` токена (сравнение после обрезки пробелов, с учётом
+регистра). Значение `TrdAccId` из БД уходит в FIX tag 1. Иначе — 400
+`{"error": "счёт … не найден у фирмы …; список счетов — GET /api/v1/accounts"}` (событие
+`ACCOUNT_NOT_ALLOWED`). Недоступность QUIK — 503, заявка не создаётся.
+Колонка `Status` пока не проверяется: значения статусов не согласованы.
+
+## Методы
+
+| Метод | Ответ |
+|---|---|
+| `GET /api/v1/accounts` (брокер) | Строки `Trdaccs` фирмы токена |
+| `GET /api/v1/token` (брокер) | Токен, брокер и в поле `firm` строка `Firms` фирмы токена (или `null`) |
+| `GET /api/v1/admin/brokers/{id}/accounts` | Строки `Trdaccs` фирм активных токенов брокера; фирмы — в заголовке `X-Firms` |
+| `GET /api/v1/admin/firms` | Строки `Firms` |
+
+`quik_firm` при создании и изменении токена должен быть `FirmId` из `Firms`
+(в админке — выбор из списка); иначе 400, при недоступности QUIK — 503.
+Существующие токены не меняются: фирма, которой нет в `Firms`, отмечается в
+форме изменения.
+
+Локальных копий нет: таблица `broker_accounts` удалена 29.10.2026, кеш `quik_firms` —
+02.11.2026 по поручению пользователя. Названия фирм есть в самих строках QUIK
+(`FirmName`). Торговый счёт открытой заявки хранится в `orders.fix_account`.

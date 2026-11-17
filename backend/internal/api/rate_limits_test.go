@@ -46,7 +46,7 @@ func TestBrokerAdmissionSharedTokensAndSeparateSystem(t *testing.T) {
 		}
 		return rec.Code
 	}
-	if call("/api/v1/orders") != 204 || call("/api/v1/orders") != 429 || call("/api/v1/firm") != 204 {
+	if call("/api/v1/orders") != 204 || call("/api/v1/orders") != 429 || call("/api/v1/token") != 204 {
 		t.Fatal("token sharing/system isolation")
 	}
 }

@@ -12,6 +12,7 @@ import (
 	pb "github.com/fix-gateway/backend/gen/realtime/v1"
 	"github.com/fix-gateway/backend/internal/admin"
 	"github.com/fix-gateway/backend/internal/auth"
+	"github.com/fix-gateway/backend/internal/brokertime"
 	"github.com/fix-gateway/backend/internal/brokers"
 	"github.com/fix-gateway/backend/internal/ratelimit"
 	"github.com/fix-gateway/backend/internal/realtime"
@@ -20,9 +21,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
-	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/types/known/durationpb"
-	"google.golang.org/protobuf/types/known/structpb"
 )
 
 type Authorizer interface {
@@ -39,7 +38,7 @@ type Service struct {
 	Brokers           BrokerAuthorizer
 	HMACRequired      bool
 	Nonces            auth.NonceStore
-	PositionsSnapshot func(context.Context, []string) (any, error)
+	PositionsSnapshot func(ctx context.Context, table string, firms []string) (any, error) // "moneylimits" or "depolimits"
 }
 
 func (s *Service) admit(user, operation string) (func(), error) {
@@ -177,7 +176,9 @@ func (s *Service) Stream(stream grpc.BidiStreamingServer[pb.ClientMessage, pb.Se
 			}
 			return status.Error(codes.Unauthenticated, "session revoked")
 		}
-		data, err := s.PositionsSnapshot(check, principal.firms)
+		// "moneylimits.updated" → table "moneylimits", "depolimits.updated" → "depolimits".
+		table := strings.TrimSuffix(event.Type, ".updated")
+		data, err := s.PositionsSnapshot(check, table, []string{principal.info.OrderFirmID})
 		if err != nil {
 			return status.Error(codes.Unavailable, "positions unavailable")
 		}
@@ -185,11 +186,8 @@ func (s *Service) Stream(stream grpc.BidiStreamingServer[pb.ClientMessage, pb.Se
 		if err != nil {
 			return status.Error(codes.Internal, "positions encoding failed")
 		}
-		payload := new(structpb.Struct)
-		if err := protojson.Unmarshal(encoded, payload); err != nil {
-			return status.Error(codes.Internal, "positions encoding failed")
-		}
-		copy := &pb.Event{Sequence: event.Sequence, Type: "positions.updated", Data: payload, OccurredAt: event.OccurredAt}
+		// data_json, like Orders: a Struct would turn numeric columns into doubles.
+		copy := &pb.Event{Sequence: event.Sequence, Type: event.Type, DataJson: string(brokertime.Format(encoded)), OccurredAt: event.OccurredAt}
 		return send(&pb.ServerMessage{Response: &pb.ServerMessage_Event{Event: copy}})
 	}
 	if err := ready(sub.Topics()); err != nil {
@@ -197,8 +195,8 @@ func (s *Service) Stream(stream grpc.BidiStreamingServer[pb.ClientMessage, pb.Se
 	}
 	validate := time.NewTicker(5 * time.Second)
 	defer validate.Stop()
-	// order.updated is firm-scoped, so the token is rechecked before delivery,
-	// but at most once per orderRevalidateEvery: a burst of Orders changes must
+	// order.updated and trade.created are firm-scoped, so the token is rechecked
+	// before delivery, but at most once per orderRevalidateEvery: a burst of changes must
 	// not turn into one database lookup per event per stream.
 	validatedAt := time.Now()
 	heartbeat := time.NewTicker(20 * time.Second)
@@ -268,7 +266,7 @@ func (s *Service) Stream(stream grpc.BidiStreamingServer[pb.ClientMessage, pb.Se
 			if !time.Now().Before(principal.expires) {
 				return status.Error(codes.Unauthenticated, "session expired")
 			}
-			if principal.info.BrokerID > 0 && event.Type == "order.updated" && time.Since(validatedAt) >= orderRevalidateEvery {
+			if principal.info.BrokerID > 0 && (event.Type == "order.updated" || event.Type == "trade.created") && time.Since(validatedAt) >= orderRevalidateEvery {
 				check, cancel := context.WithTimeout(ctx, 2*time.Second)
 				err := principal.validate(check)
 				cancel()
@@ -280,11 +278,16 @@ func (s *Service) Stream(stream grpc.BidiStreamingServer[pb.ClientMessage, pb.Se
 				}
 				validatedAt = time.Now()
 			}
-			if principal.info.BrokerID > 0 && event.Type == "positions.updated" {
+			if principal.info.BrokerID > 0 && realtime.PositionTopic(event.Type) {
 				if err := positionEvent(event); err != nil {
 					return err
 				}
 				continue
+			}
+			if principal.info.BrokerID > 0 && event.DataJson != "" {
+				// Dates and times as in broker REST (поручение пользователя 17.11.2026);
+				// the hub's event is shared with other subscribers, so it is copied.
+				event = &pb.Event{Sequence: event.Sequence, Type: event.Type, Data: event.Data, DataJson: brokertime.FormatString(event.DataJson), Removed: event.Removed, OccurredAt: event.OccurredAt}
 			}
 			if err := send(&pb.ServerMessage{Response: &pb.ServerMessage_Event{Event: event}}); err != nil {
 				return err

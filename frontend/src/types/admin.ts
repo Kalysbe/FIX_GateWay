@@ -1,6 +1,6 @@
 export type SessionUser = {
   id?: string;
-  email?: string;
+  username?: string;
   role?: string;
   full_name?: string;
 };
@@ -17,18 +17,6 @@ export type Broker = {
   last_activity?: string;
   last_ip?: string;
   ip_whitelist_enabled?: boolean;
-};
-
-export type BrokerAccount = {
-  id: number;
-  broker_id: number;
-  code: string;
-  name?: string;
-  quik_firm?: string;
-  trading_account: string;
-  status: string;
-  created_at?: string;
-  updated_at?: string;
 };
 
 export type APIToken = {
@@ -118,46 +106,6 @@ export type OrderEvent = {
   raw_fix?: string;
 };
 
-export type AdminTrade = {
-  id: string;
-  order_id?: string | null;
-  exec_id: string;
-  last_qty: string | number;
-  last_px: string | number;
-  cum_qty?: string | number | null;
-  leaves_qty?: string | number | null;
-  adapter_id?: string | null;
-  created_at: string;
-  execution_date?: string;
-  trade_match_id?: string;
-  contra_broker?: string;
-  contra_trader?: string;
-  client_order_id?: string;
-  symbol?: string;
-  board?: string;
-  side?: string;
-  client_code?: string;
-  quik_firm?: string;
-  firm_name?: string;
-  fix_cl_ord_id?: string | null;
-  quik_order_id?: string | null;
-  quik_order_num?: string;
-  quik_trade_num?: string;
-  ledger_trade_id?: string;
-  execution_id?: string | null;
-  has_fix_report?: boolean;
-  has_quik_record?: boolean;
-  received_at?: string;
-  trade_time_known?: boolean;
-  account?: string;
-};
-
-export type TradeCoverage = {
-  trades: number; sides: number; complete: number; incomplete: number; report_errors: number;
-  last_sync_at?: string; last_sync_records?: number; last_sync_error?: string; sync_running?: boolean;
-  last_success_at?: string; sync_stale?: boolean;
-};
-
 export type Dashboard = {
   generated_at?: string;
   stale?: boolean;
@@ -167,7 +115,6 @@ export type Dashboard = {
   stats: { total: number; filled: number; rejected: number; active: number } | null;
   orders_source_error?: string;
   brokers: number;
-  active_accounts: number;
   adapters_available: number;
   observability?: {
     requests_today: number;
@@ -254,7 +201,6 @@ export const ALL_PERMS = [
   "orders:replace",
   "trades:read",
   "positions:read",
-  "positions:write",
 ] as const;
 
 export const READ_ONLY_PERMS = ["orders:read", "trades:read", "positions:read"];

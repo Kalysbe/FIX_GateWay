@@ -25,35 +25,30 @@ services:
       timeout: 5s
       retries: 10
 
-  fixsimulator:
-    build:
-      context: ../backend
-      dockerfile: Dockerfile
-      target: fixsimulator
-    restart: unless-stopped
-    ports:
-      - "127.0.0.1:5001:5001"
-      - "127.0.0.1:5002:5002"
-
+  # The gateway talks to the real QUIK FIX adapters (quik-fix-1, quik-fix-2);
+  # the FIX simulator lives only in docker-compose.local.yml.
   gateway:
     build:
       context: ../backend
       dockerfile: Dockerfile
       target: gateway
     restart: unless-stopped
+    # Shutdown drains HTTP for up to 5s, then the FIX sessions send Logout;
+    # the default 10s would kill the gateway before Logout goes out.
+    stop_grace_period: 30s
     depends_on:
       devcerts:
         condition: service_completed_successfully
       postgres:
         condition: service_healthy
-      fixsimulator:
-        condition: service_started
     environment:
       HTTP_ADDR: ":8080"
       PROMETHEUS_URL: ${PROMETHEUS_URL:-http://prometheus:9090}
       API_READ_CONCURRENCY: ${API_READ_CONCURRENCY:-32}
       API_TRADE_CONCURRENCY: ${API_TRADE_CONCURRENCY:-16}
       API_REQUEST_TIMEOUT: ${API_REQUEST_TIMEOUT:-15s}
+      ORDER_ANSWER_TIMEOUT: ${ORDER_ANSWER_TIMEOUT:-10s}
+      HTTP_WRITE_TIMEOUT: ${HTTP_WRITE_TIMEOUT:-60s}
       RATE_LIMIT_MAX_STATES: ${RATE_LIMIT_MAX_STATES:-100000}
       GRPC_ADDR: ":8443"
       GRPC_TLS_CERT: /certs/server.crt
@@ -68,7 +63,8 @@ services:
       QUIK_EXPORT_DATABASE_URL: ${QUIK_EXPORT_DATABASE_URL:-}
       JWT_SECRET: ${JWT_SECRET:-dev-jwt-secret-change-me}
       API_TOKEN_PEPPER: ${API_TOKEN_PEPPER:-dev-token-pepper-change-me}
-      ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@localhost}
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin123}
       LB_STRATEGY: ${LB_STRATEGY:-least_connections}
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173,http://localhost:3000}
@@ -77,18 +73,17 @@ services:
       FIX_AUDIT_MAX_BYTES: ${FIX_AUDIT_MAX_BYTES:-4294967296}
       WORKER_ID: gateway-1
 
-      POSITION_STREAM_ENABLED: ${POSITION_STREAM_ENABLED:-true}
-      POSITION_SYNC_INTERVAL: ${POSITION_SYNC_INTERVAL:-30s}
       APP_ENV: ${APP_ENV:-development}
       TRUSTED_PROXIES: ${TRUSTED_PROXIES:-}
       REQUIRE_HTTPS: ${REQUIRE_HTTPS:-false}
       HMAC_REQUIRED: ${HMAC_REQUIRED:-false}
       OPERATIONS_ADDR: ":9080"
-      # Test QUIK is 192.168.0.89; simulator adapters remain disabled in the UAT DB.
+      # QUIK is 172.23.10.84; the server DB has only quik-fix-1 and quik-fix-2
+      # (simulator rows removed 06.11.2026).
       ADAPTER_HOST_OVERRIDE: ${ADAPTER_HOST_OVERRIDE:-}
-      MARKET_DATA_BOARDS: ${MARKET_DATA_BOARDS:-LISTEDSTOCKK,LIST_GBA}
-      QUIK_API_BASE_URL: ${QUIK_API_BASE_URL:-http://192.168.0.89:5000}
-      TRADE_RECONCILIATION_ENABLED: ${TRADE_RECONCILIATION_ENABLED:-true}
+      # The QUIK FIX adapters work 09:05-04:00 Bishkek; the gateway connects
+      # only then and logs out at 03:59.
+      FIX_SESSION_HOURS: ${FIX_SESSION_HOURS-09:05-03:59}
     ports:
       - "127.0.0.1:8080:8080"
       - "127.0.0.1:8443:8443"

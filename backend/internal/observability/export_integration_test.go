@@ -29,10 +29,12 @@ func TestExportRestartRecoveryAndFileExpiry(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer pool.Close()
-	store := NewStore(pool)
-	if err := store.EnsurePartitions(ctx); err != nil {
+	logs, err := OpenFileLog(t.TempDir())
+	if err != nil {
 		t.Fatal(err)
 	}
+	defer logs.Close()
+	store := NewStore(pool, logs)
 	dir := t.TempDir()
 	stale := ExportJob{ID: uuid.New(), Format: "json", Status: "RUNNING", Filter: json.RawMessage(`{}`)}
 	if err := store.CreateExportJob(ctx, stale); err != nil {

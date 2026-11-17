@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "deny": [
+      "Read(./.archify/**)",
+      "Read(./.agents/skills/archify/examples/**)",
+      "Read(./backend/docs/swagger/swagger-ui-bundle.js)",
+      "Read(./**/*.pdf)"
+    ]
+  }
+}

@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-func TestSmokeRejectsFailedAndIdempotentResponses(t *testing.T) {
+func TestSmokeRejectsFailedResponses(t *testing.T) {
 	for _, code := range []int{http.StatusCreated, http.StatusOK, http.StatusBadRequest, http.StatusInternalServerError} {
 		t.Run(http.StatusText(code), func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

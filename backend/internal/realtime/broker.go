@@ -3,10 +3,11 @@ package realtime
 import "github.com/fix-gateway/backend/internal/auth"
 
 var brokerPermissions = map[string]string{
-	"order.updated":     auth.PermOrdersRead,
-	"trade.created":     auth.PermTradesRead,
-	"marketdata.tick":   auth.PermOrdersRead,
-	"positions.updated": auth.PermPositionsRead,
+	"order.updated":    auth.PermOrdersRead,
+	"trade.created":    auth.PermTradesRead,
+	"marketdata.tick":  auth.PermOrdersRead,
+	MoneyLimitsUpdated: auth.PermPositionsRead,
+	DepoLimitsUpdated:  auth.PermPositionsRead,
 }
 
 func allowedBrokerTopics(permissions, types []string) (map[string]bool, error) {

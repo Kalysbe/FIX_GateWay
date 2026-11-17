@@ -54,6 +54,8 @@ func classifyBrokerAPI(method, path string) RouteClass {
 			return RouteClass{TypeAPI, SubTradeRead, "/api/v1/trades/{id}"}
 		}
 		return RouteClass{TypeAPI, SubTradesList, "/api/v1/trades"}
+	case path == "/api/v1/positions/moneylimits" || path == "/api/v1/positions/depolimits":
+		return RouteClass{TypeAPI, SubPositionsList, path}
 	case path == "/api/v1/positions" || strings.HasPrefix(path, "/api/v1/positions/"):
 		if method == http.MethodGet && path != "/api/v1/positions" {
 			return RouteClass{TypeAPI, SubPositionRead, "/api/v1/positions/{id}"}
@@ -61,7 +63,7 @@ func classifyBrokerAPI(method, path string) RouteClass {
 		return RouteClass{TypeAPI, SubPositionsList, "/api/v1/positions"}
 	case strings.HasPrefix(path, "/api/v1/instruments"):
 		return RouteClass{TypeAPI, SubInstrumentRead, "/api/v1/instruments"}
-	case strings.HasPrefix(path, "/api/v1/accounts") || path == "/api/v1/firm":
+	case strings.HasPrefix(path, "/api/v1/accounts") || path == "/api/v1/token":
 		return RouteClass{TypeAPI, SubAccountRead, path}
 	default:
 		return RouteClass{TypeAPI, SubUnknown, path}
@@ -97,7 +99,7 @@ func adminRoute(path string) string {
 
 func SkipHTTPLog(path string) bool {
 	switch path {
-	case "/metrics", "/api/openapi.yaml", "/swagger", "/api/broker-openapi.yaml", "/broker-swagger":
+	case "/metrics", "/api/broker-openapi.yaml", "/broker-swagger":
 		return true
 	}
 	return path == "/api/v1/admin/events/stream"
@@ -111,7 +113,8 @@ func ErrorSubtypeForStatus(status int, apiSubtype string) string {
 		return ErrRateLimit
 	case status == http.StatusRequestTimeout || status == http.StatusGatewayTimeout:
 		return ErrTimeout
-	case status == http.StatusBadRequest:
+	case status == http.StatusBadRequest || status == http.StatusUnprocessableEntity:
+		// 422 is an order refused by the risk checks or by QUIK, not a fault.
 		return ErrValidation
 	case status >= 500:
 		return ErrInternal

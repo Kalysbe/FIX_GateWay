@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 )
@@ -71,7 +72,7 @@ func TestOrderFeedOutageDoesNotDeleteRows(t *testing.T) {
 			cancel()
 			return OrderPage{Orders: []Order{}}, nil
 		}
-	}, time.Millisecond, func(o OrderChange) { changes = append(changes, o) }, func(error) { failures++ })
+	}, time.Millisecond, time.Now, func(o OrderChange) { changes = append(changes, o) }, func(error) { failures++ })
 	// Call 1 is the baseline, the outage keeps it, call 3 is unchanged and only
 	// the real disappearance in call 4 is published.
 	if failures != 1 || len(changes) != 1 || !changes[0].Removed || !bytes.Equal(changes[0].Order.Raw, o.Raw) {
@@ -93,8 +94,80 @@ func TestOrderFeedDoesNotReplayInitialSelection(t *testing.T) {
 		}
 		cancel()
 		return OrderPage{Orders: []Order{a, b}}, nil
-	}, time.Millisecond, func(o OrderChange) { changes = append(changes, o) }, nil)
+	}, time.Millisecond, time.Now, func(o OrderChange) { changes = append(changes, o) }, nil)
 	if len(changes) != 1 || changes[0].Removed || !bytes.Equal(changes[0].Order.Raw, b.Raw) {
 		t.Fatal("only the row added after the baseline must be published", changes)
+	}
+}
+
+func TestOrderFeedReadsTradingDayAndRollsOverWithoutRemovals(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	yesterday := Order{Raw: json.RawMessage(`{"TradeDate":"2026-11-02","ClassCode":"X","OrderNum":1}`)}
+	today := Order{Raw: json.RawMessage(`{"TradeDate":"2026-11-03","ClassCode":"X","OrderNum":2}`)}
+	// 17:59:59 UTC is the last second of 2 November in Bishkek (UTC+6).
+	clock := []time.Time{time.Date(2026, 11, 2, 17, 59, 59, 0, time.UTC), time.Date(2026, 11, 2, 18, 0, 0, 0, time.UTC), time.Date(2026, 11, 2, 18, 0, 1, 0, time.UTC), time.Date(2026, 11, 2, 18, 0, 2, 0, time.UTC)}
+	days := []string{}
+	changes := []OrderChange{}
+	calls := 0
+	runOrderFeed(ctx, func(_ context.Context, f OrderFilter) (OrderPage, error) {
+		days = append(days, f.TradeDay)
+		calls++
+		switch calls {
+		case 1:
+			return OrderPage{Orders: []Order{yesterday}}, nil
+		case 2:
+			return OrderPage{Orders: []Order{}}, nil
+		case 3:
+			return OrderPage{Orders: []Order{today}}, nil
+		}
+		cancel()
+		return OrderPage{Orders: []Order{}}, nil
+	}, time.Millisecond, func() time.Time { return clock[calls] }, func(o OrderChange) { changes = append(changes, o) }, nil)
+	if want := "2026-11-02 2026-11-03 2026-11-03 2026-11-03"; strings.Join(days, " ") != want {
+		t.Fatal(days)
+	}
+	// Yesterday's row is silent at rollover; a today's row that really disappears
+	// is still a removal.
+	if len(changes) != 2 || changes[0].Removed || !bytes.Equal(changes[0].Order.Raw, today.Raw) || !changes[1].Removed || !bytes.Equal(changes[1].Order.Raw, today.Raw) {
+		t.Fatal(changes)
+	}
+}
+
+func TestParamRowsStayVerbatimAndFeedPublishesOnlyChanges(t *testing.T) {
+	raw := json.RawMessage(`{"ClassCode":"LIST_GBA","SecCode":"GBA02280810","Last":123.4567890123456789,"Bid":null,"NumTrades":9007199254740993,"FutureColumn":"  x  "}`)
+	p := Param{Raw: raw}
+	encoded, err := json.Marshal([]Param{p})
+	if err != nil || string(encoded) != "["+string(raw)+"]" {
+		t.Fatalf("row changed: %s %v", encoded, err)
+	}
+	if p.Key() != "LIST_GBA\x00GBA02280810" {
+		t.Fatalf("key %q", p.Key())
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ticked := Param{Raw: json.RawMessage(`{"ClassCode":"LIST_GBA","SecCode":"GBA02280810","Last":124,"Bid":null}`)}
+	other := Param{Raw: json.RawMessage(`{"ClassCode":"TQBR","SecCode":"SBER","Last":1}`)}
+	calls, failures := 0, 0
+	var changes []ParamChange
+	runParamFeed(ctx, func(context.Context, ParamFilter) (ParamPage, error) {
+		calls++
+		switch calls {
+		case 1:
+			return ParamPage{Params: []Param{p, other}}, nil // baseline, not published
+		case 2:
+			return ParamPage{}, errors.New("database offline") // not an empty table
+		case 3:
+			return ParamPage{Params: []Param{ticked, other}}, nil
+		default:
+			cancel()
+			return ParamPage{Params: []Param{ticked}}, nil
+		}
+	}, time.Millisecond, func(c ParamChange) { changes = append(changes, c) }, func(error) { failures++ })
+	if failures != 1 || len(changes) != 2 {
+		t.Fatal(calls, failures, changes)
+	}
+	if changes[0].Removed || !bytes.Equal(changes[0].Param.Raw, ticked.Raw) || !changes[1].Removed || !bytes.Equal(changes[1].Param.Raw, other.Raw) {
+		t.Fatal("unexpected changes", changes)
 	}
 }

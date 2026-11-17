@@ -2,30 +2,11 @@ package orders
 
 import (
 	"context"
-	"fmt"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"time"
 )
 
 type receiptKey struct{}
-type executionDateKey struct{}
-
-func WithExecutionDate(ctx context.Context, date string) context.Context {
-	return context.WithValue(ctx, executionDateKey{}, date)
-}
-
-func executionDateFromContext(ctx context.Context) (any, error) {
-	value, _ := ctx.Value(executionDateKey{}).(string)
-	if value == "" {
-		return nil, nil
-	}
-	t, err := time.Parse("20060102", value)
-	if err != nil {
-		return nil, fmt.Errorf("invalid FIX execution date")
-	}
-	return t.Format("2006-01-02"), nil
-}
 
 // WithExecutionReceipt binds a local inbox delivery to the order transaction.
 // It protects all report types if the process dies after commit but before the

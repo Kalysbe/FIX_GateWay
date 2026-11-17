@@ -20,13 +20,26 @@ var ErrPermission = errors.New("event not permitted")
 var ErrCapacity = errors.New("stream capacity exceeded")
 var ErrBackpressure = errors.New("consumer queue full")
 
-var EventTypes = []string{"obs.event", "notification.new", "order.updated", "trade.created", "positions.updated", "marketdata.tick", "adapter.status_changed", "subscriptions.updated"}
+var EventTypes = []string{"obs.event", "notification.new", "order.updated", "trade.created", MoneyLimitsUpdated, DepoLimitsUpdated, "marketdata.tick", "adapter.status_changed", "subscriptions.updated"}
+
+// Positions are two events, money (QUIK MoneyLimits) and securities (DepoLimits),
+// each a full snapshot of its table (поручение пользователя 04.11.2026). The hub
+// carries only a trigger to brokers; the stream reads the token firm's rows.
+const (
+	MoneyLimitsUpdated = "moneylimits.updated"
+	DepoLimitsUpdated  = "depolimits.updated"
+)
+
+// PositionTopic reports whether the event is a firm-scoped positions snapshot.
+func PositionTopic(event string) bool {
+	return event == MoneyLimitsUpdated || event == DepoLimitsUpdated
+}
 
 func EventAllowed(role, event string) bool {
 	switch event {
 	case "obs.event", "subscriptions.updated":
 		return auth.HasAnyRole(role, auth.RolesAudit...)
-	case "notification.new", "order.updated", "trade.created", "positions.updated", "marketdata.tick", "adapter.status_changed":
+	case "notification.new", "order.updated", "trade.created", MoneyLimitsUpdated, DepoLimitsUpdated, "marketdata.tick", "adapter.status_changed":
 		return auth.HasAnyRole(role, auth.RolesAll...)
 	default:
 		return false
@@ -78,13 +91,11 @@ func (s *Subscription) Topics() []string {
 }
 
 type Hub struct {
-	// Set before serving subscriptions. Returns the current full quote snapshot.
-	MarketDataSnapshot func() any
-	mu                 sync.RWMutex
-	clients            map[*Subscription]bool
-	sequence           atomic.Uint64
-	revision           uint64
-	instanceID         string
+	mu         sync.RWMutex
+	clients    map[*Subscription]bool
+	sequence   atomic.Uint64
+	revision   uint64
+	instanceID string
 }
 
 func NewHub() *Hub { return &Hub{clients: make(map[*Subscription]bool), instanceID: uuid.NewString()} }
@@ -154,34 +165,17 @@ func (h *Hub) subscribe(role string, types []string, info ConnectionInfo, permis
 	return s, nil
 }
 func (h *Hub) enqueueSnapshot(s *Subscription) {
-	if s.info.BrokerID > 0 && s.topics["positions.updated"] {
+	if s.info.BrokerID <= 0 {
+		return
+	}
+	for _, topic := range []string{MoneyLimitsUpdated, DepoLimitsUpdated} {
+		if !s.topics[topic] {
+			continue
+		}
 		select {
-		case s.Events <- &pb.Event{Sequence: h.sequence.Add(1), Type: "positions.updated", OccurredAt: timestamppb.Now()}:
+		case s.Events <- &pb.Event{Sequence: h.sequence.Add(1), Type: topic, OccurredAt: timestamppb.Now()}:
 		default:
 		}
-	}
-	if !s.topics["marketdata.tick"] || h.MarketDataSnapshot == nil {
-		return
-	}
-	data := h.MarketDataSnapshot()
-	if data == nil {
-		return
-	}
-	encoded, err := json.Marshal(data)
-	if err != nil {
-		return
-	}
-	payload := new(structpb.Struct)
-	if protojson.Unmarshal(encoded, payload) != nil {
-		return
-	}
-	if s.info.BrokerID > 0 {
-		payload = brokerMarketDataPayload(payload)
-	}
-	event := &pb.Event{Sequence: h.sequence.Add(1), Type: "marketdata.tick", Data: payload, OccurredAt: timestamppb.Now()}
-	select {
-	case s.Events <- event:
-	default:
 	}
 }
 func (h *Hub) remove(s *Subscription, err error) {
@@ -211,10 +205,22 @@ func (h *Hub) BroadcastOrderForFirm(data json.RawMessage, firm string, removed b
 	h.broadcast("order.updated", data, 0, &firm, removed)
 }
 
+// BroadcastTradeForFirm publishes one QUIK Trades row verbatim to the brokers
+// of its firm; empty firm codes are never delivered to brokers.
+func (h *Hub) BroadcastTradeForFirm(data json.RawMessage, firm string) {
+	h.broadcast("trade.created", data, 0, &firm, false)
+}
+
+// BroadcastMarketData publishes one QUIK Params row verbatim to every
+// subscriber of marketdata.tick; market data is not firm-scoped.
+func (h *Hub) BroadcastMarketData(data json.RawMessage, removed bool) {
+	h.broadcast("marketdata.tick", data, 0, nil, removed)
+}
+
 func (h *Hub) broadcast(eventType string, data any, brokerID int64, firm *string, removed bool) {
 	payload := &structpb.Struct{Fields: make(map[string]*structpb.Value)}
 	rawJSON := ""
-	if firm != nil {
+	if _, raw := data.(json.RawMessage); raw || firm != nil {
 		raw, ok := data.(json.RawMessage)
 		if !ok || !json.Valid(raw) {
 			return
@@ -233,7 +239,6 @@ func (h *Hub) broadcast(eventType string, data any, brokerID int64, firm *string
 	var slow []*Subscription
 	h.mu.Lock()
 	event := &pb.Event{Sequence: h.sequence.Add(1), Type: eventType, Data: payload, DataJson: rawJSON, Removed: removed, OccurredAt: timestamppb.Now()}
-	var brokerMarketEvent *pb.Event
 	for s := range h.clients {
 		if !s.topics[eventType] {
 			continue
@@ -243,20 +248,14 @@ func (h *Hub) broadcast(eventType string, data any, brokerID int64, firm *string
 				if *firm == "" || s.info.OrderFirmID != *firm {
 					continue
 				}
-			} else if eventType != "marketdata.tick" && eventType != "positions.updated" && s.info.BrokerID != brokerID {
+			} else if eventType != "marketdata.tick" && !PositionTopic(eventType) && s.info.BrokerID != brokerID {
 				continue
 			}
 		} else if !EventAllowed(s.role, eventType) {
 			continue
 		}
 		delivery := event
-		if s.info.BrokerID > 0 && eventType == "marketdata.tick" {
-			if brokerMarketEvent == nil {
-				brokerMarketEvent = &pb.Event{Sequence: event.Sequence, Type: event.Type, Data: brokerMarketDataPayload(payload), OccurredAt: event.OccurredAt}
-			}
-			delivery = brokerMarketEvent
-		}
-		if s.info.BrokerID > 0 && eventType == "positions.updated" {
+		if s.info.BrokerID > 0 && PositionTopic(eventType) {
 			// Only a trigger reaches broker streams. The service replaces it with
 			// a snapshot fetched using the authenticated token's firm scope.
 			delivery = &pb.Event{Sequence: event.Sequence, Type: event.Type, OccurredAt: event.OccurredAt}

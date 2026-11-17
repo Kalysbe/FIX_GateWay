@@ -14,10 +14,13 @@ import (
 )
 
 type testOrderSource struct {
-	filter quikexport.OrderFilter
-	firm   *string
-	err    error
-	order  quikexport.Order
+	filter      quikexport.OrderFilter
+	tradeFilter quikexport.TradeFilter
+	firm        *string
+	err         error
+	order       quikexport.Order
+	book        quikexport.OrderBook
+	bookArgs    []string
 }
 
 func (s *testOrderSource) ListOrders(_ context.Context, f quikexport.OrderFilter) (quikexport.OrderPage, error) {
@@ -28,8 +31,89 @@ func (s *testOrderSource) GetOrder(_ context.Context, _ string, firm *string) (q
 	s.firm = firm
 	return s.order, s.err
 }
+func (s *testOrderSource) GetOrderBook(_ context.Context, classCode, secCode, activeState string) (quikexport.OrderBook, error) {
+	s.bookArgs = []string{classCode, secCode, activeState}
+	if s.err != nil {
+		return quikexport.OrderBook{}, s.err
+	}
+	return s.book, nil
+}
+
 func (s *testOrderSource) CountOrdersByState(context.Context) (map[string]int, error) {
 	return map[string]int{s.order.Text("State"): 1}, s.err
+}
+func (s *testOrderSource) ListTrades(_ context.Context, f quikexport.TradeFilter) (quikexport.TradePage, error) {
+	s.tradeFilter = f
+	return quikexport.TradePage{Trades: []quikexport.Order{s.order}, Total: 31}, s.err
+}
+
+// Broker trades are the token firm's raw QUIK Trades rows, paged.
+func TestBrokerTradesAreRawQUIKRowsOfTokenFirm(t *testing.T) {
+	row := `{"TradeNum":11094,"Operation":"Купля","ClassCode":"LIST_GBA","SecCode":"GBA02280810","Price":99.00000000,"Qty":201,"FirmId":"2040","CPFirmId":"BAKAI"}`
+	src := &testOrderSource{order: quikexport.Order{Raw: json.RawMessage(row)}}
+	s := &Server{quikOrders: src}
+	w := httptest.NewRecorder()
+	s.listTrades(w, brokerOrderRequest("/api/v1/trades?limit=5&offset=10"))
+	if w.Code != 200 || strings.TrimSpace(w.Body.String()) != "["+row+"]" {
+		t.Fatalf("%d %s", w.Code, w.Body.String())
+	}
+	if src.tradeFilter.Firm == nil || *src.tradeFilter.Firm != "2040" || src.tradeFilter.Limit != 5 || src.tradeFilter.Offset != 10 {
+		t.Fatalf("filter %+v", src.tradeFilter)
+	}
+	if w.Header().Get("X-Has-More") != "true" || w.Header().Get("X-Next-Offset") != "11" {
+		t.Fatalf("headers %v", w.Header())
+	}
+	// Brokers page by number: page 3 of 5 rows starts at offset 10.
+	w = httptest.NewRecorder()
+	s.listTrades(w, brokerOrderRequest("/api/v1/trades?limit=5&page=3"))
+	if w.Code != 200 || src.tradeFilter.Offset != 10 || w.Header().Get("X-Page") != "3" || w.Header().Get("X-Limit") != "5" || w.Header().Get("X-Total-Count") != "31" {
+		t.Fatalf("page %d %+v %v", w.Code, src.tradeFilter, w.Header())
+	}
+	src.err = errors.New("down")
+	w = httptest.NewRecorder()
+	s.listTrades(w, brokerOrderRequest("/api/v1/trades"))
+	if w.Code != 503 {
+		t.Fatalf("outage must be 503, got %d", w.Code)
+	}
+}
+
+// Broker order and trade lists take date, board and symbol filters; a bad
+// date is a 400 and never reaches QUIK. The admin trades page ignores them.
+func TestBrokerListsFilterByDateAndInstrument(t *testing.T) {
+	src := &testOrderSource{order: quikexport.Order{Raw: json.RawMessage(`{"OrderNum":1}`)}}
+	s := &Server{quikOrders: src}
+	w := httptest.NewRecorder()
+	s.listBrokerOrders(w, brokerOrderRequest("/api/v1/orders?date=2026-11-03&board=LIST_GBA&symbol=GBA1"))
+	if f := src.filter; w.Code != 200 || f.TradeDay != "2026-11-03" || f.ClassCode != "LIST_GBA" || f.SecCode != "GBA1" || f.Today || f.State != "" {
+		t.Fatal(w.Code, f)
+	}
+	w = httptest.NewRecorder()
+	s.listBrokerActiveOrders(w, brokerOrderRequest("/api/v1/orders/active?date=2020-01-01&board=LIST_GD"))
+	if f := src.filter; w.Code != 200 || f.TradeDay != "" || !f.Today || f.ClassCode != "LIST_GD" {
+		t.Fatal("active orders stay today's; date is ignored", w.Code, f)
+	}
+	w = httptest.NewRecorder()
+	s.listTrades(w, brokerOrderRequest("/api/v1/trades?date=03.11.2026&symbol=GBA1"))
+	if f := src.tradeFilter; w.Code != 200 || f.TradeDay != "2026-11-03" || f.SecCode != "GBA1" || f.Firm == nil || *f.Firm != "2040" {
+		t.Fatal("DD.MM.YYYY date as brokers get it", w.Code, f)
+	}
+	for _, path := range []string{"/api/v1/orders?date=31.02.2026", "/api/v1/orders?date=03/11/2026", "/api/v1/trades?date=2026-13-01"} {
+		src.filter, src.tradeFilter = quikexport.OrderFilter{}, quikexport.TradeFilter{}
+		w = httptest.NewRecorder()
+		if strings.HasPrefix(path, "/api/v1/orders") {
+			s.listBrokerOrders(w, brokerOrderRequest(path))
+		} else {
+			s.listTrades(w, brokerOrderRequest(path))
+		}
+		if w.Code != http.StatusBadRequest || src.filter.Limit != 0 || src.tradeFilter.Limit != 0 {
+			t.Fatal(path, "must be rejected before reading", w.Code)
+		}
+	}
+	w = httptest.NewRecorder()
+	s.listAdminTrades(w, httptest.NewRequest("GET", "/api/v1/admin/trades?date=bad&symbol=GBA1", nil))
+	if f := src.tradeFilter; w.Code != 200 || f.TradeDay != "" || f.SecCode != "" {
+		t.Fatal("admin trades take no broker filters", w.Code, f)
+	}
 }
 
 func TestQUIKOrderStatsGroupRawStates(t *testing.T) {
@@ -70,8 +154,8 @@ func TestBrokerOrdersUseAuthenticatedFirmBeforePagination(t *testing.T) {
 	if strings.TrimSpace(w.Body.String()) != "["+raw+"]" {
 		t.Fatal("list added or changed fields", w.Body.String())
 	}
-	if source.filter.State != "" {
-		t.Fatal("full list must not filter by state", source.filter.State)
+	if source.filter.State != "" || source.filter.Today {
+		t.Fatal("full list must not filter by state or date", source.filter)
 	}
 	w = httptest.NewRecorder()
 	s.listBrokerActiveOrders(w, brokerOrderRequest("/api/v1/orders/active?firm_id=9999&limit=5"))
@@ -80,6 +164,24 @@ func TestBrokerOrdersUseAuthenticatedFirmBeforePagination(t *testing.T) {
 	}
 	if strings.TrimSpace(w.Body.String()) != "["+raw+"]" {
 		t.Fatal("active list added or changed fields", w.Body.String())
+	}
+	if !source.filter.Today {
+		t.Fatal("broker active orders must be limited to today")
+	}
+	// Admin orders page: today's active orders only, rows as stored.
+	w = httptest.NewRecorder()
+	s.listAdminOrders(w, httptest.NewRequest("GET", "/api/v1/admin/orders?limit=7", nil))
+	if f := source.filter; w.Code != 200 || f.State != "Активна" || !f.Today || f.Firm != nil || f.Limit != 7 {
+		t.Fatal(w.Code, w.Body.String(), source.filter)
+	}
+	if strings.TrimSpace(w.Body.String()) != "["+raw+"]" {
+		t.Fatal("admin list added or changed fields", w.Body.String())
+	}
+	// Admin quotes: today's active orders of every firm.
+	w = httptest.NewRecorder()
+	s.listAdminQuotes(w, httptest.NewRequest("GET", "/api/v1/admin/quotes?board=LIST_GBA&symbol=GBA1", nil))
+	if f := source.filter; w.Code != 200 || f.State != "Активна" || !f.Today || f.Firm != nil || f.ClassCode != "LIST_GBA" || f.SecCode != "GBA1" {
+		t.Fatal(w.Code, w.Body.String(), source.filter)
 	}
 	r.SetPathValue("id", "quik-20261022-LIST_GBA-1")
 	w = httptest.NewRecorder()
@@ -128,7 +230,7 @@ func TestQUIKOrdersNoFallbackOnMissingRowOrOutage(t *testing.T) {
 
 func TestQUIKOrderReadsValidatePagesAndExternalCancellation(t *testing.T) {
 	s := &Server{quikOrders: &testOrderSource{order: quikexport.Order{Raw: json.RawMessage(`{"State":"Активна"}`)}}}
-	for _, query := range []string{"limit=0", "limit=1001", "offset=-1", "offset=x"} {
+	for _, query := range []string{"limit=0", "limit=1001", "offset=-1", "offset=x", "page=0", "page=x", "page=2&offset=5", "limit=1000&page=10002"} {
 		w := httptest.NewRecorder()
 		s.listBrokerOrders(w, brokerOrderRequest("/api/v1/orders?"+query))
 		if w.Code != 400 {

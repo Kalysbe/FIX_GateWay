@@ -3,6 +3,7 @@ package arqa
 import (
 	"fmt"
 	"log/slog"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -32,40 +33,30 @@ type sessionApp struct {
 	errCount   atomic.Int64
 	pendingRaw map[string]string // ClOrdID → outbound wire (captured in ToApp)
 
+	sentMu   sync.Mutex
+	sent     map[int]sentMessage // outbound MsgSeqNum → type, for 35=3 without 372
+	sentRing []int
+
 	secDefMu   sync.Mutex
 	secDefWait *secDefWaiter
 
-	posMu       sync.Mutex
-	posWait     *posWaiter
-	maintWait   *maintWaiter
-	posStream   *positionStream
-	posRetryAt  time.Time
-	posError    string
-	posAttempts int
-	posReceived time.Time
-	posNow      func() time.Time
-	onPositions func(string, string, []domain.FIXPosition) error
+	// resetNextLogon makes the next Logon carry ResetSeqNumFlag (141=Y): both
+	// sides start again from 1. Set for the first logon of the working day and
+	// after a logon failed on sequence numbers; cleared once logged on.
+	resetNextLogon atomic.Bool
+	// logonsSent counts Logons since the last successful logon.
+	logonsSent atomic.Int32
 
-	mdMu            sync.Mutex
-	mdWait          *mdWaiter
-	mdBook          map[string]domain.MarketQuote
-	mdSubIDs        map[string]struct{}
-	mdSubscriptions map[string]*mdSubscription
-	mdNow           func() time.Time
-	onMD            domain.MarketDataHandler
-	onLogon         func()
-	onFIX           func(kind, sessionID, msgType, direction, clOrdID, reason string, seq int)
+	onFIX func(kind, sessionID, msgType, direction, clOrdID, reason string, seq int)
 }
 
 func newSessionApp(adapterID string, log *slog.Logger, onExec domain.ExecutionHandler) *sessionApp {
 	a := &sessionApp{
-		adapterID:       adapterID,
-		log:             log,
-		onExec:          onExec,
-		pendingRaw:      map[string]string{},
-		mdBook:          map[string]domain.MarketQuote{},
-		mdSubIDs:        map[string]struct{}{},
-		mdSubscriptions: map[string]*mdSubscription{},
+		adapterID:  adapterID,
+		log:        log,
+		onExec:     onExec,
+		pendingRaw: map[string]string{},
+		sent:       map[int]sentMessage{},
 	}
 	a.lastError.Store("")
 	return a
@@ -82,42 +73,106 @@ func (a *sessionApp) OnCreate(sessionID quickfix.SessionID) {
 
 func (a *sessionApp) OnLogon(sessionID quickfix.SessionID) {
 	a.loggedOn.Store(true)
+	a.resetNextLogon.Store(false)
+	a.logonsSent.Store(0)
 	a.log.Info("fix session logon", "adapter_id", a.adapterID, "session", sessionID.String())
 	a.emitFIX("FIX_SESSION_CONNECTED", sessionID.String(), "A", "IN", "", "", 0)
-	if a.onLogon != nil {
-		go a.onLogon()
-	}
 }
 
 func (a *sessionApp) OnLogout(sessionID quickfix.SessionID) {
 	a.loggedOn.Store(false)
-	a.posMu.Lock()
-	a.posStream = nil
-	a.posRetryAt, a.posError, a.posAttempts = time.Time{}, "", 0
-	a.posMu.Unlock()
-	// Quotes from the old session must not suppress background resubscription.
-	a.mdMu.Lock()
-	a.mdBook = map[string]domain.MarketQuote{}
-	a.mdSubIDs = map[string]struct{}{}
-	a.mdSubscriptions = map[string]*mdSubscription{}
-	a.mdMu.Unlock()
 	a.log.Info("fix session logout", "adapter_id", a.adapterID, "session", sessionID.String())
 	a.emitFIX("FIX_SESSION_DISCONNECTED", sessionID.String(), "5", "IN", "", "logout", 0)
 }
 
+// sentMessage identifies an outbound message a session Reject may refer to.
+type sentMessage struct {
+	msgType string
+	clOrdID string
+}
+
+const sentHistory = 8192
+
+// rememberSent records the type of an outbound message by sequence number.
+// quickfixgo assigns MsgSeqNum before ToAdmin/ToApp.
+func (a *sessionApp) rememberSent(msg *quickfix.Message) {
+	seq, err := msg.Header.GetInt(tag.MsgSeqNum)
+	if err != nil {
+		return
+	}
+	msgType, _ := msg.MsgType()
+	clOrdID, _ := msg.Body.GetString(tag.ClOrdID)
+	a.sentMu.Lock()
+	defer a.sentMu.Unlock()
+	if _, ok := a.sent[seq]; !ok {
+		a.sentRing = append(a.sentRing, seq)
+		if len(a.sentRing) > sentHistory {
+			delete(a.sent, a.sentRing[0])
+			a.sentRing = a.sentRing[1:]
+		}
+	}
+	a.sent[seq] = sentMessage{msgType: msgType, clOrdID: clOrdID}
+}
+
+func (a *sessionApp) sentBySeq(raw string) (sentMessage, bool) {
+	seq, err := strconv.Atoi(strings.TrimSpace(raw))
+	if err != nil {
+		return sentMessage{}, false
+	}
+	a.sentMu.Lock()
+	defer a.sentMu.Unlock()
+	m, ok := a.sent[seq]
+	return m, ok
+}
+
 func (a *sessionApp) ToAdmin(msg *quickfix.Message, sessionID quickfix.SessionID) {
-	if kind, _ := msg.MsgType(); kind == "A" {
+	a.rememberSent(msg)
+	switch kind, _ := msg.MsgType(); kind {
+	case "A":
 		if a.username != "" {
 			msg.Body.SetString(tag.Username, a.username)
 		}
 		if a.password != "" {
 			msg.Body.SetString(tag.Password, a.password)
 		}
+		// While waiting for a Logon reply QuickFIX does not pass the venue's
+		// Logout on, so a refusal over numbers is seen only as logons that
+		// never succeed: after three of them the next one resets.
+		if a.logonsSent.Add(1) > maxLogonsBeforeReset {
+			a.requestSequenceReset("logons refused since the last successful one")
+		}
+		// QuickFIX resets its store and renumbers this Logon to 1 when it
+		// carries 141=Y, and does not reset again on the venue's 141=Y reply.
+		if a.resetNextLogon.Load() {
+			msg.Body.SetBool(tag.ResetSeqNumFlag, true)
+			a.log.Info("fix logon with sequence reset", "adapter_id", a.adapterID)
+		}
+	case "5":
+		// The QUIK adapter starts again from 1 when it is restarted (every day
+		// at 09:05): its Logon is then below our expected number and QuickFIX
+		// logs out. Without a reset the session would stay refused until the
+		// venue's counter caught up (36 minutes on 06.11.2026).
+		if text, _ := msg.Body.GetString(tag.Text); !a.loggedOn.Load() && strings.HasPrefix(text, "MsgSeqNum too low") {
+			a.requestSequenceReset("venue restarted its sequence numbers: " + text)
+		}
+	}
+}
+
+// maxLogonsBeforeReset is how many Logons may go unanswered by a successful
+// logon before the next one resets the sequence numbers.
+const maxLogonsBeforeReset = 3
+
+func (a *sessionApp) requestSequenceReset(reason string) {
+	if !a.resetNextLogon.Swap(true) {
+		a.log.Warn("fix sequence numbers out of step; next logon resets them", "adapter_id", a.adapterID, "reason", reason)
 	}
 }
 func (a *sessionApp) ToApp(msg *quickfix.Message, sessionID quickfix.SessionID) error {
+	a.rememberSent(msg)
 	clOrdID, err := msg.Body.GetString(tag.ClOrdID)
-	if err == nil && clOrdID != "" {
+	// Resends (PossDup) are not taken by send(); keep only first transmissions.
+	possDup, _ := msg.Header.GetBool(tag.PossDupFlag)
+	if err == nil && clOrdID != "" && !possDup {
 		a.mu.Lock()
 		a.pendingRaw[clOrdID] = formatWireFIX(msg)
 		a.mu.Unlock()
@@ -181,23 +236,8 @@ func (a *sessionApp) FromApp(msg *quickfix.Message, sessionID quickfix.SessionID
 		a.emitAppFIX("FIX_REJECT", msg, sessionID)
 	case string(enum.MsgType_SECURITY_DEFINITION):
 		a.handleSecurityDefinition(msg)
-	case string(enum.MsgType_POSITION_REPORT):
-		a.handlePositionReport(msg)
-	case string(enum.MsgType_REQUEST_FOR_POSITIONS_ACK):
-		a.handleRequestForPositionsAck(msg)
-	case string(enum.MsgType_POSITION_MAINTENANCE_REPORT):
-		a.handlePositionMaintenanceReport(msg)
-	case string(enum.MsgType_MARKET_DATA_SNAPSHOT_FULL_REFRESH):
-		a.handleMarketDataSnapshot(msg)
-	case string(enum.MsgType_MARKET_DATA_INCREMENTAL_REFRESH):
-		a.handleMarketDataIncremental(msg)
-	case string(enum.MsgType_MARKET_DATA_REQUEST_REJECT):
-		a.handleMarketDataReject(msg)
 	default:
 		a.log.Debug("unhandled fix app message", "adapter_id", a.adapterID, "msg_type", msgType, "wire", sanitizeFIX(msg))
-		if msgType == "AM" {
-			a.handlePositionMaintenanceReport(msg)
-		}
 	}
 	return nil
 }
@@ -213,6 +253,8 @@ func (a *sessionApp) handleExecutionReport(msg *quickfix.Message) {
 		}
 		return v
 	}
+	// QUIK sends display text such as the instrument name (55) in Windows-1251;
+	// reports are kept as JSON in the execution inbox, so text is decoded here.
 	a.onExec(domain.ExecutionReport{
 		AdapterID:     a.adapterID,
 		ClOrdID:       get(tag.ClOrdID),
@@ -230,9 +272,9 @@ func (a *sessionApp) handleExecutionReport(msg *quickfix.Message) {
 		LastPx:        get(tag.LastPx),
 		CumQty:        get(tag.CumQty),
 		LeavesQty:     get(tag.LeavesQty),
-		Text:          get(tag.Text),
+		Text:          decodeFIXText(get(tag.Text)),
 		OrdRejReason:  get(tag.OrdRejReason),
-		RawFIX:        formatWireFIX(msg),
+		RawFIX:        decodeFIXText(formatWireFIX(msg)),
 	})
 }
 
@@ -261,10 +303,10 @@ func (a *sessionApp) handleOrderCancelReject(msg *quickfix.Message) {
 		ClOrdID:      get(tag.ClOrdID),
 		OrigClOrdID:  get(tag.OrigClOrdID),
 		OrderID:      get(tag.OrderID),
-		Text:         get(tag.Text),
+		Text:         decodeFIXText(get(tag.Text)),
 		CxlRejReason: get(tag.CxlRejReason),
 		CancelReject: true,
-		RawFIX:       formatWireFIX(msg),
+		RawFIX:       decodeFIXText(formatWireFIX(msg)),
 	})
 }
 
@@ -277,6 +319,7 @@ func (a *sessionApp) send(msg *quickfix.Message) (string, error) {
 	sid := a.sessionID
 	a.mu.RUnlock()
 	if err := quickfix.SendToTarget(msg, sid); err != nil {
+		a.takeSentRaw(clOrdID)
 		a.errCount.Add(1)
 		a.lastError.Store(err.Error())
 		return "", err

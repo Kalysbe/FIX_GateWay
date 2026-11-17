@@ -3,8 +3,11 @@ package audit
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"time"
 
-	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/fix-gateway/backend/internal/observability"
+	"github.com/google/uuid"
 )
 
 type Entry struct {
@@ -21,75 +24,119 @@ type Entry struct {
 	RequestPayload  any
 	Result          string
 	Error           string
+	// Optional request context and state change of an admin action.
+	RequestID  string
+	TraceID    string
+	Endpoint   string
+	HTTPMethod string
+	Before     json.RawMessage
+	After      json.RawMessage
 }
 
+// Store writes the audit trail into the daily log files (поручение
+// пользователя 06.11.2026), as AUDIT events next to the other logs.
 type Store struct {
-	pool *pgxpool.Pool
+	files *observability.FileLog
 }
 
-func NewStore(pool *pgxpool.Pool) *Store {
-	return &Store{pool: pool}
+func NewStore(files *observability.FileLog) *Store {
+	return &Store{files: files}
 }
 
 func (s *Store) Write(ctx context.Context, e Entry) error {
-	var payload []byte
-	var err error
+	if s == nil || s.files == nil {
+		return errors.New("audit log unavailable")
+	}
+	ev := observability.Event{
+		Type: observability.TypeAudit, Subtype: e.Action, Severity: observability.SeverityInfo,
+		ActorType: e.ActorType, ActorID: e.ActorID, BrokerID: e.BrokerID,
+		TargetType: e.EntityType, TargetID: e.EntityID, ClientIP: e.IP,
+		ClientOrderID: e.ClientOrderID, AdapterID: e.AdapterID,
+		Result: e.Result, ErrorMessage: e.Error, Message: e.Action,
+		RequestID: e.RequestID, TraceID: e.TraceID, Endpoint: e.Endpoint, HTTPMethod: e.HTTPMethod,
+		Before: e.Before, After: e.After,
+	}
+	if ev.Result == "" {
+		ev.Result = observability.ResultSuccess
+	}
+	if id, err := uuid.Parse(e.InternalOrderID); err == nil {
+		ev.OrderID = &id
+	}
 	if e.RequestPayload != nil {
-		payload, err = json.Marshal(e.RequestPayload)
+		payload, err := json.Marshal(e.RequestPayload)
 		if err != nil {
 			return err
 		}
+		ev.Metadata = payload
 	}
-	_, err = s.pool.Exec(ctx, `
-		INSERT INTO audit_logs (
-			actor_type, actor_id, broker_id, action, entity_type, entity_id,
-			ip, client_order_id, internal_order_id, adapter_id, request_payload, result, error
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
-		e.ActorType, nullIfEmpty(e.ActorID), e.BrokerID, e.Action, e.EntityType, nullIfEmpty(e.EntityID),
-		nullIfEmpty(e.IP), nullIfEmpty(e.ClientOrderID), nullIfEmpty(e.InternalOrderID),
-		nullIfEmpty(e.AdapterID), payload, nullIfEmpty(e.Result), nullIfEmpty(e.Error),
-	)
-	return err
+	return s.files.Append(ev)
 }
 
+// RateLimitUpdated is the ratelimit.AuditFunc of this store.
+func (s *Store) RateLimitUpdated(ctx context.Context, actor string, brokerID *int64, policyKey string, payload json.RawMessage) error {
+	return s.Write(ctx, Entry{
+		ActorType: "admin", ActorID: actor, BrokerID: brokerID, Action: "RATE_LIMIT_UPDATED",
+		EntityType: "rate_limit", EntityID: policyKey, RequestPayload: payload, Result: "success",
+	})
+}
+
+// Records returns every audit event still on disk, newest day first.
+func (s *Store) Records(ctx context.Context) ([]observability.Event, error) {
+	var out []observability.Event
+	if s == nil || s.files == nil {
+		return out, nil
+	}
+	days, err := s.files.Events(timeZero, timeZero)
+	if err != nil {
+		return nil, err
+	}
+	for _, events := range days {
+		for i := len(events) - 1; i >= 0; i-- {
+			if events[i].Type == observability.TypeAudit {
+				out = append(out, events[i])
+			}
+		}
+	}
+	return out, nil
+}
+
+// List returns the newest audit records in the shape of the former audit_logs rows.
 func (s *Store) List(ctx context.Context, limit int) ([]map[string]any, error) {
 	if limit <= 0 || limit > 500 {
 		limit = 100
 	}
-	rows, err := s.pool.Query(ctx, `
-		SELECT id, actor_type, actor_id, broker_id, action, entity_type, entity_id,
-		       ip, client_order_id, internal_order_id, adapter_id, result, error, created_at
-		FROM audit_logs ORDER BY created_at DESC LIMIT $1`, limit)
+	out := []map[string]any{}
+	if s == nil || s.files == nil {
+		return out, nil
+	}
+	days, err := s.files.Events(timeZero, timeZero)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-
-	var out []map[string]any
-	for rows.Next() {
-		var (
-			id                                                int64
-			actorType, action, entityType                     string
-			actorID, entityID, ip, coid, ioid, adapterID      *string
-			brokerID                                          *int64
-			result, errMsg                                    *string
-			createdAt                                         any
-		)
-		if err := rows.Scan(&id, &actorType, &actorID, &brokerID, &action, &entityType, &entityID,
-			&ip, &coid, &ioid, &adapterID, &result, &errMsg, &createdAt); err != nil {
-			return nil, err
+	for _, events := range days {
+		for i := len(events) - 1; i >= 0 && len(out) < limit; i-- {
+			e := events[i]
+			if e.Type != observability.TypeAudit {
+				continue
+			}
+			var orderID any
+			if e.OrderID != nil {
+				orderID = e.OrderID.String()
+			}
+			out = append(out, map[string]any{
+				"id": e.ID, "actor_type": e.ActorType, "actor_id": nullable(e.ActorID), "broker_id": e.BrokerID,
+				"action": e.Subtype, "entity_type": e.TargetType, "entity_id": nullable(e.TargetID), "ip": nullable(e.ClientIP),
+				"client_order_id": nullable(e.ClientOrderID), "internal_order_id": orderID, "adapter_id": nullable(e.AdapterID),
+				"result": nullable(e.Result), "error": nullable(e.ErrorMessage), "created_at": e.Timestamp,
+			})
 		}
-		out = append(out, map[string]any{
-			"id": id, "actor_type": actorType, "actor_id": actorID, "broker_id": brokerID,
-			"action": action, "entity_type": entityType, "entity_id": entityID, "ip": ip,
-			"client_order_id": coid, "internal_order_id": ioid, "adapter_id": adapterID,
-			"result": result, "error": errMsg, "created_at": createdAt,
-		})
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
-func nullIfEmpty(s string) any {
+var timeZero time.Time
+
+func nullable(s string) any {
 	if s == "" {
 		return nil
 	}

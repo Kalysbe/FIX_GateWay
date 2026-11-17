@@ -1,0 +1,1112 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>REST API для брокеров — Кыргызская фондовая биржа</title>
+<style>
+:root {
+  --ink: #000;
+  --muted: #444;
+  --line: #9a9a9a;
+  --accent: #4f9ea6;
+  --plate: #e6e9ea;
+  --code-bg: #f2f2f2;
+}
+
+/* Плашка внизу страницы собрана из двух полей @page: слева значок и название,
+   справа номер. Поля лежат в нижнем отступе листа и не перекрывают текст. */
+@page {
+  size: A4;
+  margin: 20mm 20mm 30mm 20mm;
+  @bottom-left {
+    content: "Описание REST API\A Программного интерфейса для брокеров";
+    white-space: pre;
+    font: 700 10pt/1.3 Verdana, Tahoma, sans-serif;
+    color: #000;
+    text-align: left;
+    vertical-align: middle;
+    width: 125mm;
+    margin: 8mm 0 6mm 0;
+    padding-left: 6mm;
+    background: #e6e9ea;
+    border-radius: 3mm 0 0 3mm;
+  }
+  @bottom-center { content: none; }
+  @bottom-right {
+    content: counter(page);
+    font: 700 16pt Verdana, Tahoma, sans-serif;
+    color: #000;
+    text-align: right;
+    vertical-align: middle;
+    width: 21mm;
+    margin: 8mm 0 6mm 0;
+    padding-right: 6mm;
+    background: #e6e9ea;
+    border-radius: 0 3mm 3mm 0;
+  }
+}
+@page :first {
+  margin: 0;
+  @bottom-left { content: none; background: none; }
+  @bottom-right { content: none; background: none; }
+}
+
+* { box-sizing: border-box; }
+html { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+body {
+  margin: 0;
+  background: #fff;
+  color: var(--ink);
+  font: 400 10pt/1.6 Verdana, Tahoma, sans-serif;
+}
+p { margin: 0 0 8pt; }
+code, pre { font-family: Consolas, "Courier New", monospace; }
+code { font-size: 0.95em; }
+a { color: var(--accent); }
+
+/* ---------- Обложка ---------- */
+.cover {
+  position: relative;
+  width: 210mm; height: 297mm;
+  overflow: hidden;
+  break-after: page;
+  background: #fff;
+}
+/* Логотип и заголовок выровнены по одной левой линии; бирюзовая черта
+   отделяет название от подзаголовка, низ листа остаётся свободным. */
+.cover-logo { position: absolute; top: 28mm; left: 24mm; height: 24mm; }
+.cover h1 {
+  position: absolute; left: 24mm; top: 112mm; width: 170mm;
+  margin: 0; font: 700 44pt/1.12 Verdana, Tahoma, sans-serif; letter-spacing: -0.01em;
+}
+.cover-rule { position: absolute; left: 24mm; top: 192mm; width: 36mm; height: 2.5mm; background: var(--accent); }
+.cover-sub { position: absolute; left: 24mm; top: 200mm; font: 700 13pt Verdana, Tahoma, sans-serif; }
+
+/* ---------- Заголовки ---------- */
+h2, h3, h4 { font-weight: 700; break-after: avoid; }
+h2 { font-size: 15pt; margin: 0 0 12pt; text-transform: uppercase; }
+h3 { font-size: 12pt; margin: 22pt 0 8pt; }
+h4 { font-size: 10.5pt; margin: 18pt 0 6pt; }
+h2 .n, h3 .n, h4 .n { display: inline-block; min-width: 14mm; }
+section.chapter { break-before: page; }
+.caption { margin: 10pt 0 4pt; break-after: avoid; }
+
+/* ---------- Таблицы ---------- */
+table { width: 100%; border-collapse: collapse; margin: 4pt 0 12pt; }
+thead { display: table-header-group; }
+tr { break-inside: avoid; }
+th {
+  text-align: left; font-weight: 700; font-size: 10.5pt;
+  padding: 0 6pt 7pt 3pt;
+  border-bottom: 3.5pt solid #000;
+}
+td {
+  padding: 7pt 6pt 7pt 3pt;
+  border-bottom: 0.75pt solid var(--line);
+  vertical-align: top;
+}
+td:first-child { white-space: nowrap; }
+td.wrap { white-space: normal; }
+sup.req { color: var(--accent); font-weight: 700; font-size: 9pt; margin-left: 1pt; }
+.arrow { color: var(--muted); margin-right: 3pt; }
+ul.vals { list-style: none; margin: 2pt 0 0 14mm; padding: 0; }
+ul.vals li { position: relative; padding-left: 6mm; margin: 0 0 1pt; }
+ul.vals li::before { content: "–"; position: absolute; left: 0; }
+ul.plain { margin: 0 0 8pt; padding-left: 16pt; }
+ul.plain li { margin-bottom: 3pt; }
+
+/* ---------- Примеры ---------- */
+pre {
+  margin: 2pt 0 12pt; padding: 8pt 10pt;
+  background: var(--code-bg); border: 0.75pt solid #d4d4d4;
+  font-size: 8.6pt; line-height: 1.45;
+  white-space: pre-wrap; word-break: break-word;
+  break-inside: avoid;
+}
+pre.long { break-inside: auto; }
+
+.end { margin-top: 24pt; }
+</style>
+</head>
+<body>
+
+<!-- ================= ОБЛОЖКА ================= -->
+<div class="cover">
+  <img class="cover-logo" src="../../backend/docs/logo_KSE.png" alt="Кыргызская фондовая биржа">
+  <h1>Программный<br>интерфейс<br>REST API<br>для брокеров</h1>
+  <div class="cover-rule"></div>
+  <div class="cover-sub">Описание REST API</div>
+</div>
+
+<!-- ================= 1. СПИСОК МЕТОДОВ ================= -->
+<section class="chapter" id="s1">
+  <h2><span class="n">1.</span>Список поддерживаемых методов</h2>
+
+  <h3><span class="n">1.1</span>Служебные методы</h3>
+  <table>
+    <thead><tr><th style="width: 18%">Метод</th><th>Путь</th></tr></thead>
+    <tbody>
+      <tr><td>GET</td><td><a href="#s3-1">/health</a></td></tr>
+      <tr><td>GET</td><td><a href="#s3-2">/api/v1/token</a></td></tr>
+      <tr><td>GET</td><td><a href="#s3-3">/api/v1/accounts</a></td></tr>
+      <tr><td>GET</td><td><a href="#s8-3">/api/v1/errors</a></td></tr>
+    </tbody>
+  </table>
+
+  <h3><span class="n">1.2</span>Инструменты и рыночные данные</h3>
+  <table>
+    <thead><tr><th style="width: 18%">Метод</th><th>Путь</th></tr></thead>
+    <tbody>
+      <tr><td>GET</td><td><a href="#s4-0">/api/v1/classes</a></td></tr>
+      <tr><td>GET</td><td><a href="#s4-1">/api/v1/instruments</a></td></tr>
+      <tr><td>GET</td><td><a href="#s4-2">/api/v1/market-data</a></td></tr>
+      <tr><td>GET</td><td><a href="#s4-3">/api/v1/market-data/{board}/{symbol}</a></td></tr>
+      <tr><td>GET</td><td><a href="#s4-5">/api/v1/orderbook</a></td></tr>
+      <tr><td>GET</td><td><a href="#s4-6">/api/v1/market-data/trades</a></td></tr>
+    </tbody>
+  </table>
+
+  <h3><span class="n">1.3</span>Заявки, сделки и позиции</h3>
+  <table>
+    <thead><tr><th style="width: 18%">Метод</th><th>Путь</th></tr></thead>
+    <tbody>
+      <tr><td>POST</td><td><a href="#s5-1">/api/v1/orders</a></td></tr>
+      <tr><td>GET</td><td><a href="#s5-2">/api/v1/orders</a></td></tr>
+      <tr><td>GET</td><td><a href="#s5-3">/api/v1/orders/active</a></td></tr>
+      <tr><td>GET</td><td><a href="#s5-4">/api/v1/orders/{id}</a></td></tr>
+      <tr><td>POST</td><td><a href="#s5-5">/api/v1/orders/{id}/cancel</a></td></tr>
+      <tr><td>GET</td><td><a href="#s6-1">/api/v1/trades</a></td></tr>
+      <tr><td>GET</td><td><a href="#s7-1">/api/v1/positions/moneylimits</a></td></tr>
+      <tr><td>GET</td><td><a href="#s7-2">/api/v1/positions/depolimits</a></td></tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- ================= 2. ФОРМАТ ================= -->
+<section class="chapter" id="s2">
+  <h2><span class="n">2.</span>Формат запросов и ответов</h2>
+  <ul class="plain" style="list-style: decimal">
+    <li>Параметры и поля, обязательные для заполнения, отмечены символом «<sup class="req">*</sup>».</li>
+    <li>Поля, входящие во вложенный объект или в элемент массива, отмечены символом «→».</li>
+  </ul>
+
+  <h3 id="s2-1"><span class="n">2.1</span>Авторизация</h3>
+  <p>Bearer-токен в заголовке Authorization. Токен определяет брокера и FirmId QUIK. Фильтр по фирме применяется на стороне шлюза и параметрами запроса не расширяется.</p>
+
+  <h3 id="s2-2"><span class="n">2.2</span>Формат ответа</h3>
+  <p>application/json; charset=utf-8. Тело запроса разбирается строго: неизвестное поле — 400. Все методы, включая /health, отвечают в едином конверте:</p>
+  <table>
+    <thead><tr><th>Наименование</th><th>Тип</th><th>Комментарий</th></tr></thead>
+    <tbody>
+      <tr><td>success<sup class="req">*</sup></td><td>логический</td><td>«true» только для HTTP 200 и 201. Ответ 202 (QUIK ещё не ответил) приходит со значением «false»</td></tr>
+      <tr><td>code<sup class="req">*</sup></td><td>строка</td><td>«OK» или код ошибки, см. п. <a href="#s8-1">8.1</a></td></tr>
+      <tr><td>message<sup class="req">*</sup></td><td>строка</td><td>Причина ошибки. При успехе — null</td></tr>
+      <tr><td>error_code<sup class="req">*</sup></td><td>число</td><td>Числовой код причины от QUIK при отказе в заявке или снятии, см. п. <a href="#s8-3">8.2</a>. В остальных случаях — null</td></tr>
+      <tr><td>data<sup class="req">*</sup></td><td>объект, массив</td><td>Результат: объект, массив строк QUIK или null. При ошибке, как правило, null. Заявка в data возвращается, если ответ касается её состояния в QUIK (раздел <a href="#s5">5</a>)</td></tr>
+      <tr><td>page</td><td>число</td><td>Только у списков. Номер страницы, с 1</td></tr>
+      <tr><td>limit</td><td>число</td><td>Только у списков. Строк на странице</td></tr>
+      <tr><td>total</td><td>число</td><td>Только у списков. Строк по запросу всего, на всех страницах. Последняя страница — page × limit ≥ total</td></tr>
+    </tbody>
+  </table>
+  <p>Ветвление — по code; message — человекочитаемый текст QUIK или шлюза, его формулировка не стабильна.</p>
+  <p>Даты и время — по времени КФБ (UTC+6), часовой пояс не указывается: дата — «17.11.2026», время суток — «16:40:15», дата и время — «17.11.2026 15:54:45». Параметры date, from и to принимаются в том же виде.</p>
+
+  <h3 id="s2-3"><span class="n">2.3</span>Отслеживание изменений</h3>
+  <p>В REST API изменения отслеживаются опросом. Строка Orders появляется в QUIK обычно не позже 0,5 с после отправки заявки.</p>
+  <table>
+    <thead><tr><th>Данные</th><th>Комментарий</th></tr></thead>
+    <tbody>
+      <tr><td>Свои заявки</td><td>GET /api/v1/orders/{id} для заявок в ожидании ответа QUIK; GET /api/v1/orders/active — книга заявок фирмы</td></tr>
+      <tr><td>Сделки</td><td>Первая страница GET /api/v1/trades?date=&lt;сегодня&gt;; новые строки — с номером TradeNum больше последнего обработанного</td></tr>
+      <tr><td>Позиции</td><td>GET /api/v1/positions/moneylimits и /depolimits, полный снимок</td></tr>
+      <tr><td>Рынок</td><td>GET /api/v1/market-data, GET /api/v1/orderbook, GET /api/v1/market-data/trades</td></tr>
+    </tbody>
+  </table>
+  <p>Частота опроса ограничена лимитами п. <a href="#s8-5">8.4</a>.</p>
+</section>
+
+<!-- ================= 3. СЛУЖЕБНЫЕ МЕТОДЫ ================= -->
+<section class="chapter" id="s3">
+  <h2><span class="n">3.</span>Служебные методы</h2>
+
+  <h3 id="s3-1"><span class="n">3.1</span>GET /health</h3>
+  <p>Проверка работы шлюза. Токен не требуется. Связь шлюза с QUIK метод не проверяет.</p>
+  <p class="caption">Пример запроса:</p>
+<pre>curl http://&lt;адрес-шлюза&gt;/health</pre>
+  <p class="caption">Пример ответа:</p>
+<pre>{
+  "success": true,
+  "code": "OK",
+  "message": null,
+  "error_code": null,
+  "data": {
+    "status": "ok"
+  }
+}</pre>
+
+  <h3 id="s3-2"><span class="n">3.2</span>GET /api/v1/token</h3>
+  <p>Сведения о токене запроса: параметры токена, брокер и фирма (строка Firms).</p>
+  <p class="caption">Список полей ответа:</p>
+  <table>
+    <thead><tr><th>Наименование</th><th>Тип</th><th>Комментарий</th></tr></thead>
+    <tbody>
+      <tr><td>token<sup class="req">*</sup></td><td>объект</td><td>Параметры токена</td></tr>
+      <tr><td><span class="arrow">→</span>id</td><td>строка</td><td>Идентификатор токена (UUID)</td></tr>
+      <tr><td><span class="arrow">→</span>name</td><td>строка</td><td>Название токена</td></tr>
+      <tr><td><span class="arrow">→</span>status</td><td>строка</td><td>Статус токена: «ACTIVE»</td></tr>
+      <tr><td><span class="arrow">→</span>permissions</td><td>массив</td><td>Права токена</td></tr>
+      <tr><td><span class="arrow">→</span>firm_id</td><td>строка</td><td>Код фирмы QUIK, от имени которой подаются заявки и по которой фильтруются данные</td></tr>
+      <tr><td><span class="arrow">→</span>expires_at</td><td>строка</td><td>Срок действия, «ДД.ММ.ГГГГ ЧЧ:ММ:СС». null — бессрочный</td></tr>
+      <tr><td>broker<sup class="req">*</sup></td><td>объект</td><td>Брокер — владелец токена</td></tr>
+      <tr><td><span class="arrow">→</span>code</td><td>строка</td><td>Код брокера</td></tr>
+      <tr><td><span class="arrow">→</span>name</td><td>строка</td><td>Наименование брокера</td></tr>
+      <tr><td><span class="arrow">→</span>status</td><td>строка</td><td>Статус брокера: «ACTIVE»</td></tr>
+      <tr><td>firm<sup class="req">*</sup></td><td>объект</td><td>Строка Firms фирмы firm_id как есть (FirmId, FirmName и др.). null — фирмы нет в Firms</td></tr>
+    </tbody>
+  </table>
+  <p class="caption">Пример запроса:</p>
+<pre>curl http://&lt;адрес-шлюза&gt;/api/v1/token \
+  -H "Authorization: Bearer &lt;API-токен&gt;"</pre>
+  <p class="caption">Пример ответа:</p>
+<pre>{
+  "success": true,
+  "code": "OK",
+  "message": null,
+  "error_code": null,
+  "data": {
+    "token": {
+      "id": "3f0c2a5e-6b1d-4c8e-9a7f-2d4b6e8f1a3c",
+      "name": "trader",
+      "status": "ACTIVE",
+      "permissions": ["orders:read", "orders:create", "orders:cancel"],
+      "firm_id": "BROKER",
+      "expires_at": null
+    },
+    "broker": {
+      "code": "BROKER",
+      "name": "ОсОО «Брокер»",
+      "status": "ACTIVE"
+    },
+    "firm": {
+      "FirmId": "BROKER",
+      "FirmName": "ОсОО «Брокер»"
+    }
+  }
+}</pre>
+  <p>503 — БД QUIK недоступна.</p>
+
+  <h3 id="s3-3"><span class="n">3.3</span>GET /api/v1/accounts</h3>
+  <p>Торговые счета фирмы токена: строки Trdaccs по FirmId.</p>
+  <p class="caption">Список основных полей ответа:</p>
+  <table>
+    <thead><tr><th>Наименование</th><th>Тип</th><th>Комментарий</th></tr></thead>
+    <tbody>
+      <tr><td>TrdAccId</td><td>строка</td><td>Торговый счёт. Передаётся в поле Account заявки</td></tr>
+      <tr><td>FirmId</td><td>строка</td><td>Код фирмы QUIK</td></tr>
+    </tbody>
+  </table>
+  <p class="caption">Пример ответа:</p>
+<pre>{
+  "success": true,
+  "code": "OK",
+  "message": null,
+  "error_code": null,
+  "data": [
+    {
+      "TrdAccId": "1-0001-001",
+      "FirmId": "BROKER"
+    }
+  ]
+}</pre>
+  <p>Account заявки проверяется по этому списку; несовпадение — 400 без передачи в QUIK.</p>
+</section>
+
+<!-- ================= 4. ИНСТРУМЕНТЫ ================= -->
+<section class="chapter" id="s4">
+  <h2><span class="n">4.</span>Инструменты и рыночные данные</h2>
+  <p>Фильтр по фирме не применяется.</p>
+
+  <h3 id="s4-0"><span class="n">4.1</span>GET /api/v1/classes</h3>
+  <p>Классы QUIK, доступные брокеру: выбранные биржей, а если ничего не выбрано — все. Этими классами ограничены данные раздела 4, сделки и приём заявок. Упорядочены по ClassCode. Пагинации нет.</p>
+  <p class="caption">Список полей строки:</p>
+  <table>
+    <thead><tr><th>Наименование</th><th>Тип</th><th>Комментарий</th></tr></thead>
+    <tbody>
+      <tr><td>ClassCode</td><td>строка</td><td>Код класса. Значение параметра board и поля ClassCode заявки</td></tr>
+      <tr><td>ClassName</td><td>строка</td><td>Наименование класса. Может быть null</td></tr>
+    </tbody>
+  </table>
+  <p class="caption">Пример ответа:</p>
+<pre>{
+  "success": true,
+  "code": "OK",
+  "message": null,
+  "error_code": null,
+  "data": [
+    {
+      "ClassCode": "LIST_GBA",
+      "ClassName": "Листинговые:облигации"
+    }
+  ]
+}</pre>
+
+  <h3 id="s4-1"><span class="n">4.2</span>GET /api/v1/instruments</h3>
+  <p>Справочник инструментов: строки Securities за последнюю TradeDate, упорядочены по ClassCode, SecCode. По этому же справочнику проверяются ClassCode и SecCode новой заявки (п. <a href="#s5">5.1</a>).</p>
+  <p class="caption">Список поддерживаемых параметров:</p>
+  <table>
+    <thead><tr><th>Наименование</th><th>Тип</th><th>Комментарий</th></tr></thead>
+    <tbody>
+      <tr><td>limit</td><td>число</td><td>От 1 до 1000. По умолчанию 200</td></tr>
+      <tr><td>page</td><td>число</td><td>Номер страницы, с 1. По умолчанию 1</td></tr>
+    </tbody>
+  </table>
+  <p class="caption">Список основных полей строки:</p>
+  <table>
+    <thead><tr><th>Наименование</th><th>Тип</th><th>Комментарий</th></tr></thead>
+    <tbody>
+      <tr><td>TradeDate</td><td>строка</td><td>Дата справочника</td></tr>
+      <tr><td>ClassCode</td><td>строка</td><td>Код класса. Передаётся в поле ClassCode заявки</td></tr>
+      <tr><td>SecCode</td><td>строка</td><td>Код инструмента. Передаётся в поле SecCode заявки</td></tr>
+      <tr><td>FaceUnit</td><td>строка</td><td>Валюта</td></tr>
+      <tr><td>SecShortName</td><td>строка</td><td>Краткое наименование</td></tr>
+      <tr><td>SecFullName</td><td>строка</td><td>Полное наименование</td></tr>
+    </tbody>
+  </table>
+  <p class="caption">Пример ответа:</p>
+<pre>{
+  "success": true,
+  "code": "OK",
+  "message": null,
+  "error_code": null,
+  "data": [
+    {
+      "TradeDate": "02.11.2026",
+      "ClassCode": "LIST_GBA",
+      "SecCode": "GBA02270915",
+      "FaceUnit": "KGS",
+      "SecShortName": "ГКО-2 летние (GBA02270915)",
+      "SecFullName": "ГКО-2 летние (GBA02270915)"
+    }
+  ],
+  "page": 1,
+  "limit": 200,
+  "total": 1
+}</pre>
+
+  <h3 id="s4-2"><span class="n">4.3</span>GET /api/v1/market-data</h3>
+  <p>Текущие торги: инструменты текущего торгового дня из классов, выбранных биржей; если классы не выбраны — всех классов. Строки упорядочены по ClassCode, затем по SecCode.</p>
+  <p class="caption">Список поддерживаемых параметров:</p>
+  <table>
+    <thead><tr><th>Наименование</th><th>Тип</th><th>Комментарий</th></tr></thead>
+    <tbody>
+      <tr><td>board</td><td>строка</td><td>Код класса (ClassCode)</td></tr>
+      <tr><td>symbol</td><td>строка</td><td>Код инструмента (SecCode)</td></tr>
+      <tr><td>limit</td><td>число</td><td>От 1 до 5000. По умолчанию 1000</td></tr>
+      <tr><td>page</td><td>число</td><td>Номер страницы, с 1. По умолчанию 1</td></tr>
+    </tbody>
+  </table>
+  <p class="caption">Список полей строки:</p>
+  <table>
+    <thead><tr><th>Наименование</th><th>Тип</th><th>Комментарий</th></tr></thead>
+    <tbody>
+      <tr><td>ClassCode</td><td>строка</td><td>Код класса</td></tr>
+      <tr><td>SecCode</td><td>строка</td><td>Код инструмента</td></tr>
+      <tr><td>CouponValue</td><td>число</td><td>Размер купона</td></tr>
+      <tr><td>status</td><td>строка</td><td>Состояние торгов по инструменту</td></tr>
+      <tr><td>FaceUnit</td><td>строка</td><td>Валюта номинала</td></tr>
+      <tr><td>SecShortName</td><td>строка</td><td>Краткое наименование инструмента</td></tr>
+      <tr><td>SecFullName</td><td>строка</td><td>Полное наименование инструмента</td></tr>
+      <tr><td>ClassName</td><td>строка</td><td>Наименование класса</td></tr>
+      <tr><td>lotsize</td><td>число</td><td>Размер лота</td></tr>
+      <tr><td>tradingstatus</td><td>строка</td><td>Состояние сессии</td></tr>
+      <tr><td>pricemin, pricemax</td><td>число</td><td>Минимально и максимально возможная цена</td></tr>
+      <tr><td>realminstep</td><td>число</td><td>Минимальный шаг цены</td></tr>
+      <tr><td>bid, biddepth</td><td>число</td><td>Лучшая цена спроса и спрос по ней</td></tr>
+      <tr><td>offer, offerdepth</td><td>число</td><td>Лучшая цена предложения и предложение по ней</td></tr>
+      <tr><td>last, qty, time</td><td>число, строка</td><td>Цена, количество и время последней сделки</td></tr>
+      <tr><td>open, high, low</td><td>число</td><td>Цена открытия, максимальная и минимальная цена сделки</td></tr>
+      <tr><td>prevprice</td><td>число</td><td>Цена закрытия</td></tr>
+      <tr><td>waprice</td><td>число</td><td>Средневзвешенная цена</td></tr>
+      <tr><td>numtrades</td><td>число</td><td>Количество сделок за сегодня</td></tr>
+      <tr><td>voltoday, valtoday</td><td>число</td><td>Количество во всех сделках и оборот в деньгах</td></tr>
+      <tr><td>accruedint</td><td>число</td><td>Накопленный купонный доход</td></tr>
+      <tr><td>yield</td><td>число</td><td>Доходность последней сделки</td></tr>
+      <tr><td>nextcoupon</td><td>строка</td><td>Дата выплаты купона</td></tr>
+      <tr><td>couponperiod</td><td>число</td><td>Длительность купона</td></tr>
+    </tbody>
+  </table>
+  <p>Состав и порядок полей фиксированы. CouponValue, FaceUnit, SecShortName, SecFullName — из Securities, ClassName — из Classes, остальные — из Params. Нет записи в справочнике или пустое значение — null.</p>
+  <p class="caption">Пример запроса:</p>
+<pre>curl "http://&lt;адрес-шлюза&gt;/api/v1/market-data?board=LIST_GBA" \
+  -H "Authorization: Bearer &lt;API-токен&gt;"</pre>
+  <p class="caption">Пример ответа:</p>
+<pre>{
+  "success": true,
+  "code": "OK",
+  "message": null,
+  "error_code": null,
+  "data": [
+    {
+      "ClassCode": "LIST_GBA",
+      "SecCode": "GBA02270915",
+      "CouponValue": 2.5,
+      "status": "торгуется",
+      "FaceUnit": "KGS",
+      "SecShortName": "ГКО-2 летние (GBA02270915)",
+      "SecFullName": "ГКО-2 летние (GBA02270915)",
+      "ClassName": "Государственные казначейские облигации",
+      "lotsize": 1,
+      "tradingstatus": "открыта",
+      "pricemin": 86,
+      "pricemax": 100,
+      "realminstep": null,
+      "bid": 100,
+      "biddepth": 16,
+      "offer": null,
+      "offerdepth": null,
+      "last": 95,
+      "qty": 15,
+      "time": "16:40:15",
+      "open": null,
+      "high": 100,
+      "low": 95,
+      "prevprice": 95,
+      "waprice": 95.4,
+      "numtrades": 3,
+      "voltoday": 125,
+      "valtoday": 11925,
+      "accruedint": null,
+      "yield": 16.92,
+      "nextcoupon": "31.01.2027",
+      "couponperiod": 184
+    }
+  ],
+  "page": 1,
+  "limit": 1000,
+  "total": 1
+}</pre>
+
+  <h3 id="s4-3"><span class="n">4.4</span>GET /api/v1/market-data/{board}/{symbol}</h3>
+  <p>Один инструмент текущих торгов по коду класса и коду инструмента.</p>
+  <p class="caption">Список поддерживаемых параметров:</p>
+  <table>
+    <thead><tr><th>Наименование</th><th>Тип</th><th>Комментарий</th></tr></thead>
+    <tbody>
+      <tr><td>board<sup class="req">*</sup></td><td>строка</td><td>Код класса (ClassCode), часть пути</td></tr>
+      <tr><td>symbol<sup class="req">*</sup></td><td>строка</td><td>Код инструмента (SecCode), часть пути</td></tr>
+    </tbody>
+  </table>
+  <p>В data — одна строка формата п. <a href="#s4-2">4.3</a>. 404 — инструмента нет в текущем торговом дне или его класс не выбран биржей.</p>
+  <p class="caption">Пример запроса:</p>
+<pre>curl http://&lt;адрес-шлюза&gt;/api/v1/market-data/LIST_GBA/GBA02270915 \
+  -H "Authorization: Bearer &lt;API-токен&gt;"</pre>
+  <p class="caption">Пример ответа:</p>
+<pre>{
+  "success": true,
+  "code": "OK",
+  "message": null,
+  "error_code": null,
+  "data": {
+    "ClassCode": "LIST_GBA",
+    "SecCode": "GBA02270915",
+    "CouponValue": 2.5,
+    "status": "торгуется",
+    "FaceUnit": "KGS",
+    "SecShortName": "ГКО-2 летние (GBA02270915)",
+    "SecFullName": "ГКО-2 летние (GBA02270915)",
+    "ClassName": "Государственные казначейские облигации",
+    "lotsize": 1,
+    "tradingstatus": "открыта",
+    "pricemin": 86,
+    "pricemax": 100,
+    "realminstep": null,
+    "bid": 100,
+    "biddepth": 16,
+    "offer": null,
+    "offerdepth": null,
+    "last": 95,
+    "qty": 15,
+    "time": "16:40:15",
+    "open": null,
+    "high": 100,
+    "low": 95,
+    "prevprice": 95,
+    "waprice": 95.4,
+    "numtrades": 3,
+    "voltoday": 125,
+    "valtoday": 11925,
+    "accruedint": null,
+    "yield": 16.92,
+    "nextcoupon": "31.01.2027",
+    "couponperiod": 184
+  }
+}</pre>
+
+  <h3 id="s4-5"><span class="n">4.5</span>GET /api/v1/orderbook</h3>
+  <p>Стакан инструмента: активные заявки всех участников рынка за текущий торговый день (State = «Активна»), сложенные по стороне и цене; заявки без цены или с нулевым Balance не входят. Участник, подавший заявку, не раскрывается.</p>
+  <p class="caption">Список поддерживаемых параметров:</p>
+  <table>
+    <thead><tr><th>Наименование</th><th>Тип</th><th>Комментарий</th></tr></thead>
+    <tbody>
+      <tr><td>board<sup class="req">*</sup></td><td>строка</td><td>Код класса (ClassCode)</td></tr>
+      <tr><td>symbol<sup class="req">*</sup></td><td>строка</td><td>Код инструмента (SecCode)</td></tr>
+    </tbody>
+  </table>
+  <p class="caption">Список полей ответа:</p>
+  <table>
+    <thead><tr><th>Наименование</th><th>Тип</th><th>Комментарий</th></tr></thead>
+    <tbody>
+      <tr><td>board</td><td>строка</td><td>Код класса</td></tr>
+      <tr><td>symbol</td><td>строка</td><td>Код инструмента</td></tr>
+      <tr><td>bids</td><td>массив</td><td>Покупка: от высокой цены к низкой</td></tr>
+      <tr><td>offers</td><td>массив</td><td>Продажа: от низкой цены к высокой</td></tr>
+      <tr><td><span class="arrow">→</span>price</td><td>число</td><td>Цена</td></tr>
+      <tr><td><span class="arrow">→</span>quantity</td><td>число</td><td>Сумма неисполненных остатков заявок по цене</td></tr>
+      <tr><td><span class="arrow">→</span>volume</td><td>число</td><td>Объём: price × quantity</td></tr>
+    </tbody>
+  </table>
+  <p>Число заявок по цене и отдельные заявки не передаются. Массивы присутствуют всегда, в том числе пустые. Без board или symbol — 400. Класс вне <a href="#s4-0">GET /api/v1/classes</a> — пустой стакан.</p>
+  <p class="caption">Пример запроса:</p>
+<pre>curl "http://&lt;адрес-шлюза&gt;/api/v1/orderbook?board=LIST_GBA&amp;symbol=GBA02270915" \
+  -H "Authorization: Bearer &lt;API-токен&gt;"</pre>
+  <p class="caption">Пример ответа:</p>
+<pre>{
+  "success": true,
+  "code": "OK",
+  "message": null,
+  "error_code": null,
+  "data": {
+    "board": "LIST_GBA",
+    "symbol": "GBA02270915",
+    "bids": [
+      {
+        "price": 90.00000000,
+        "quantity": 18.00000000,
+        "volume": 1620
+      }
+    ],
+    "offers": [
+      {
+        "price": 95.00000000,
+        "quantity": 5878.00000000,
+        "volume": 558410
+      },
+      {
+        "price": 96.00000000,
+        "quantity": 1.00000000,
+        "volume": 96
+      }
+    ]
+  }
+}</pre>
+
+  <h3 id="s4-6"><span class="n">4.6</span>GET /api/v1/market-data/trades</h3>
+  <p>Исполненные сделки рынка всех участников для графика цен: одна строка на сделку, участники не раскрываются. Порядок — по возрастанию TradeDateTime, затем TradeNum. История — с 01.07.2026.</p>
+  <p class="caption">Список поддерживаемых параметров:</p>
+  <table>
+    <thead><tr><th>Наименование</th><th>Тип</th><th>Комментарий</th></tr></thead>
+    <tbody>
+      <tr><td>board</td><td>строка</td><td>Код класса (ClassCode)</td></tr>
+      <tr><td>symbol</td><td>строка</td><td>Код инструмента (SecCode)</td></tr>
+      <tr><td>from</td><td>строка</td><td>Начало периода включительно: «ДД.ММ.ГГГГ» (с начала дня) или «ДД.ММ.ГГГГ ЧЧ:ММ:СС»</td></tr>
+      <tr><td>to</td><td>строка</td><td>Конец периода включительно: «ДД.ММ.ГГГГ» (весь день) или «ДД.ММ.ГГГГ ЧЧ:ММ:СС»</td></tr>
+      <tr><td>limit</td><td>число</td><td>От 1 до 1000. По умолчанию 200</td></tr>
+      <tr><td>page</td><td>число</td><td>Номер страницы, с 1. По умолчанию 1</td></tr>
+    </tbody>
+  </table>
+  <p class="caption">Список полей строки:</p>
+  <table>
+    <thead><tr><th>Наименование</th><th>Тип</th><th>Комментарий</th></tr></thead>
+    <tbody>
+      <tr><td>TradeNum</td><td>число</td><td>Номер сделки. Вместе с ClassCode — идентификатор сделки</td></tr>
+      <tr><td>ClassCode</td><td>строка</td><td>Код класса</td></tr>
+      <tr><td>SecCode</td><td>строка</td><td>Код инструмента</td></tr>
+      <tr><td>TradeDateTime</td><td>строка</td><td>Время исполнения, «ДД.ММ.ГГГГ ЧЧ:ММ:СС»</td></tr>
+      <tr><td>Price</td><td>число</td><td>Цена за единицу без комиссий</td></tr>
+      <tr><td>Qty</td><td>число</td><td>Количество</td></tr>
+      <tr><td>SettleCurrency</td><td>строка</td><td>Валюта расчётов</td></tr>
+      <tr><td>Kind</td><td>строка</td><td>Вид сделки: «Обычная», «Адресная сделка первой части РЕПО» и др.</td></tr>
+      <tr><td>CanceledDateTime</td><td>строка</td><td>Время отмены сделки, «ДД.ММ.ГГГГ ЧЧ:ММ:СС». null — сделка не отменена</td></tr>
+    </tbody>
+  </table>
+  <p class="caption">Пример запроса:</p>
+<pre>curl "http://&lt;адрес-шлюза&gt;/api/v1/market-data/trades?board=LIST_GBA&amp;symbol=GBA02270915&amp;from=05.11.2026" \
+  -H "Authorization: Bearer &lt;API-токен&gt;"</pre>
+  <p class="caption">Пример ответа:</p>
+<pre>{
+  "success": true,
+  "code": "OK",
+  "message": null,
+  "error_code": null,
+  "data": [
+    {
+      "TradeNum": 4914,
+      "ClassCode": "LIST_GBA",
+      "SecCode": "GBA02270915",
+      "TradeDateTime": "05.11.2026 14:32:57",
+      "Price": 95.00000000,
+      "Qty": 10.00000000,
+      "SettleCurrency": "KGS",
+      "Kind": "Обычная",
+      "CanceledDateTime": null
+    }
+  ],
+  "page": 1,
+  "limit": 200,
+  "total": 1
+}</pre>
+  <p>Новые сделки запрашиваются с from = TradeDateTime последней полученной сделки; уже полученные TradeNum + ClassCode отбрасываются. Неверный from или to, from позже to — 400.</p>
+</section>
+
+<!-- ================= 5. ЗАЯВКИ ================= -->
+<section class="chapter" id="s5">
+  <h2><span class="n">5.</span>Заявки</h2>
+  <p>Создание и снятие синхронны: шлюз отвечает после ответа QUIK. Состояние заявок читается из Orders по FirmId токена.</p>
+
+  <h3 id="s5-1"><span class="n">5.1</span>POST /api/v1/orders</h3>
+  <p>Выставление заявки. Имена полей — колонки Orders. Таймаут ожидания ответа QUIK — 10 с.</p>
+  <p class="caption">Список поддерживаемых полей запроса:</p>
+  <table>
+    <thead><tr><th>Наименование</th><th>Тип</th><th>Комментарий</th></tr></thead>
+    <tbody>
+      <tr><td>ClassCode<sup class="req">*</sup></td><td>строка</td><td>Код класса. Значение ClassCode из GET /api/v1/instruments</td></tr>
+      <tr><td>SecCode<sup class="req">*</sup></td><td>строка</td><td>Код инструмента. Значение SecCode из GET /api/v1/instruments</td></tr>
+      <tr><td>Operation<sup class="req">*</sup></td><td>строка</td><td class="wrap">Направление. Возможные значения:
+        <ul class="vals"><li>«Купля»;</li><li>«Продажа»</li></ul></td></tr>
+      <tr><td>Price</td><td>число</td><td>Цена, больше 0. С ценой заявка лимитная, без цены — рыночная</td></tr>
+      <tr><td>Qty<sup class="req">*</sup></td><td>число</td><td>Количество, больше 0</td></tr>
+      <tr><td>Account<sup class="req">*</sup></td><td>строка</td><td>Торговый счёт. Значение TrdAccId из GET /api/v1/accounts</td></tr>
+      <tr><td>ClientCode<sup class="req">*</sup></td><td>строка</td><td>Код клиента</td></tr>
+    </tbody>
+  </table>
+  <p>Срок действия — день. FirmId берётся из токена; FirmId в теле — 400. Пара ClassCode + SecCode, которой нет в GET /api/v1/instruments (в том числе класс, не выбранный биржей), — 400.</p>
+  <p class="caption">Пример запроса:</p>
+<pre>curl -X POST http://&lt;адрес-шлюза&gt;/api/v1/orders \
+  -H "Authorization: Bearer &lt;API-токен&gt;" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "ClassCode": "LIST_GBA",
+    "SecCode": "GBA02270915",
+    "Operation": "Купля",
+    "Price": 99.5,
+    "Qty": 1,
+    "Account": "1-0001-001",
+    "ClientCode": "Иван"
+  }'</pre>
+  <p class="caption">Список полей заявки в ответе:</p>
+  <table>
+    <thead><tr><th>Наименование</th><th>Тип</th><th>Комментарий</th></tr></thead>
+    <tbody>
+      <tr><td>id</td><td>строка</td><td>Идентификатор заявки в шлюзе. По нему заявка находится и снимается, пока OrderNum неизвестен</td></tr>
+      <tr><td>OrderNum</td><td>число</td><td>Номер заявки в QUIK. У отклонённой заявки — null</td></tr>
+      <tr><td>State</td><td>строка</td><td class="wrap">Состояние заявки. Возможные значения:
+        <ul class="vals"><li>«Активна»;</li><li>«Исполнена»;</li><li>«Снята»;</li><li>«Отклонена»;</li><li>null – QUIK ещё не ответил</li></ul></td></tr>
+      <tr><td>RejectReason</td><td>строка</td><td>Причина отказа QUIK</td></tr>
+      <tr><td>Balance</td><td>число</td><td>Неисполненный остаток</td></tr>
+      <tr><td>FirmId</td><td>строка</td><td>Код фирмы токена</td></tr>
+      <tr><td class="wrap">Account, ClassCode,<br>ClientCode, Operation,<br>Price, Qty, SecCode</td><td>—</td><td>Значения из запроса</td></tr>
+    </tbody>
+  </table>
+  <p class="caption">Пример ответа 201 (QUIK принял заявку):</p>
+<pre>{
+  "success": true,
+  "code": "OK",
+  "message": null,
+  "error_code": null,
+  "data": {
+    "Account": "1-0001-001",
+    "Balance": 1,
+    "ClassCode": "LIST_GBA",
+    "ClientCode": "Иван",
+    "FirmId": "BROKER",
+    "Operation": "Купля",
+    "OrderNum": 26102912345,
+    "Price": 99.5,
+    "Qty": 1,
+    "RejectReason": null,
+    "SecCode": "GBA02270915",
+    "State": "Активна",
+    "id": "276d043c-6716-4ebd-a7b7-15904e760d40"
+  }
+}</pre>
+  <p class="caption">Пример ответа 422 (QUIK отклонил заявку):</p>
+<pre>{
+  "success": false,
+  "code": "ORDER_REJECTED",
+  "message": "Превышена позиция по деньгам",
+  "error_code": 8637226,
+  "data": {
+    "Account": "1-0001-001",
+    "Balance": 1,
+    "ClassCode": "LIST_GBA",
+    "ClientCode": "Иван",
+    "FirmId": "BROKER",
+    "Operation": "Купля",
+    "OrderNum": null,
+    "Price": 99.5,
+    "Qty": 1,
+    "RejectReason": "Превышена позиция по деньгам",
+    "SecCode": "GBA02270915",
+    "State": "Отклонена",
+    "id": "276d043c-6716-4ebd-a7b7-15904e760d40"
+  }
+}</pre>
+  <p>Текст причины от QUIK передаётся в message и в RejectReason, числовой код — в error_code.</p>
+  <p class="caption">Пример ответа 400 (ошибка в запросе):</p>
+<pre>{
+  "success": false,
+  "code": "VALIDATION_ERROR",
+  "message": "счёт \"1-0001-999\" не найден у фирмы \"BROKER\"; список счетов — GET /api/v1/accounts",
+  "error_code": null,
+  "data": null
+}</pre>
+  <p>Отказ на стороне шлюза (валидация, счёт, торговое ограничение): data — null, в QUIK заявка не передаётся.</p>
+  <p class="caption">Коды ответа:</p>
+  <table>
+    <thead><tr><th>Код HTTP</th><th>code</th><th>Комментарий</th></tr></thead>
+    <tbody>
+      <tr><td>201</td><td>OK</td><td>QUIK принял заявку</td></tr>
+      <tr><td>202</td><td>QUIK_ANSWER_PENDING</td><td>QUIK не ответил за 10 секунд. Заявка не отменена и может быть принята позже. В data — заявка с id. Итог проверяется через GET /api/v1/orders/{id}; повторно заявка не отправляется</td></tr>
+      <tr><td>202</td><td>QUIK_ANSWER_UNKNOWN</td><td>Заявка сохранена в шлюзе, состояние в QUIK прочитать не удалось. Действия — как при QUIK_ANSWER_PENDING</td></tr>
+      <tr><td>400</td><td>VALIDATION_ERROR</td><td>Ошибка в теле запроса: поле, значение, счёт, инструмент</td></tr>
+      <tr><td>422</td><td>ORDER_REJECTED</td><td>QUIK отклонил заявку. Причина — в message и error_code, заявка — в data</td></tr>
+      <tr><td>422</td><td class="wrap">TRADING_PAUSED, MAX_ORDER_QUANTITY, MAX_OPEN_ORDERS</td><td>Торговое ограничение оператора шлюза, см. п. <a href="#s8-4">8.3</a>. Заявка не создана</td></tr>
+      <tr><td>502</td><td>ORDER_FAILED</td><td>Заявку не удалось передать в QUIK. В data — заявка</td></tr>
+      <tr><td>503</td><td>SERVICE_UNAVAILABLE</td><td>Шлюз временно не принимает заявки. Перед повтором проверяется GET /api/v1/orders</td></tr>
+    </tbody>
+  </table>
+  <p>Замена заявки (cancel/replace) не поддерживается.</p>
+
+  <h3 id="s5-2"><span class="n">5.2</span>GET /api/v1/orders</h3>
+  <p>Строки Orders по FirmId токена за все даты, включая заявки, поданные вне шлюза. Порядок — по убыванию TradeDate, затем OrderNum. Фильтры применяются до пагинации.</p>
+  <p class="caption">Список поддерживаемых параметров:</p>
+  <table>
+    <thead><tr><th>Наименование</th><th>Тип</th><th>Комментарий</th></tr></thead>
+    <tbody>
+      <tr><td>date</td><td>строка</td><td>Дата торгов (TradeDate), «ДД.ММ.ГГГГ». Если не указана, возвращаются все даты</td></tr>
+      <tr><td>board</td><td>строка</td><td>Код класса (ClassCode)</td></tr>
+      <tr><td>symbol</td><td>строка</td><td>Код инструмента (SecCode)</td></tr>
+      <tr><td>limit</td><td>число</td><td>От 1 до 1000. По умолчанию 200</td></tr>
+      <tr><td>page</td><td>число</td><td>Номер страницы, с 1. По умолчанию 1</td></tr>
+    </tbody>
+  </table>
+  <p class="caption">Список основных полей строки:</p>
+  <table>
+    <thead><tr><th>Наименование</th><th>Тип</th><th>Комментарий</th></tr></thead>
+    <tbody>
+      <tr><td>OrderNum</td><td>число</td><td>Номер заявки в QUIK</td></tr>
+      <tr><td>TradeDate</td><td>строка</td><td>Дата торгов</td></tr>
+      <tr><td>ClassCode, SecCode</td><td>строка</td><td>Код класса и код инструмента</td></tr>
+      <tr><td>FirmId</td><td>строка</td><td>Код фирмы</td></tr>
+      <tr><td>Operation</td><td>строка</td><td>«Купля» или «Продажа»</td></tr>
+      <tr><td>State</td><td>строка</td><td>Состояние заявки</td></tr>
+      <tr><td>Qty</td><td>число</td><td>Количество</td></tr>
+      <tr><td>Balance</td><td>число</td><td>Неисполненный остаток</td></tr>
+      <tr><td>Price</td><td>число</td><td>Цена</td></tr>
+    </tbody>
+  </table>
+  <p class="caption">Пример ответа:</p>
+<pre>{
+  "success": true,
+  "code": "OK",
+  "message": null,
+  "error_code": null,
+  "data": [
+    {
+      "OrderNum": 9007199254740993123,
+      "TradeDate": "27.10.2026",
+      "ClassCode": "LIST_GBA",
+      "SecCode": "GBA02280810",
+      "FirmId": "BROKER",
+      "Operation": "Купля",
+      "State": "Активна",
+      "Qty": 10,
+      "Balance": 8,
+      "Price": 105.12345678
+    }
+  ],
+  "page": 1,
+  "limit": 200,
+  "total": 1
+}</pre>
+  <p>Неверный формат date — 400. Исчезновение строки из Orders не является признаком снятия или исполнения; исполнение подтверждается по Trades (раздел <a href="#s6">6</a>).</p>
+
+  <h3 id="s5-3"><span class="n">5.3</span>GET /api/v1/orders/active</h3>
+  <p>То же, что п. <a href="#s5-2">5.2</a>, но только сегодняшние заявки (TradeDate = сегодня по UTC+6) с State = «Активна». Поддерживаются параметры board, symbol, limit, page; date не применяется.</p>
+
+  <h3 id="s5-4"><span class="n">5.4</span>GET /api/v1/orders/{id}</h3>
+  <p>Строка Orders одной заявки.</p>
+  <p class="caption">Список поддерживаемых параметров:</p>
+  <table>
+    <thead><tr><th>Наименование</th><th>Тип</th><th>Комментарий</th></tr></thead>
+    <tbody>
+      <tr><td>id<sup class="req">*</sup></td><td>строка</td><td class="wrap">Часть пути. Возможные значения:
+        <ul class="vals"><li>id из ответа на создание заявки, например «276d043c-6716-4ebd-a7b7-15904e760d40». Действует, пока заявка активна, и 2 минуты после её закрытия; затем — только ключ QUIK;</li><li>ключ QUIK «quik-&lt;ГГГГММДД&gt;-&lt;ClassCode&gt;-&lt;OrderNum&gt;», например «quik-20261027-LIST_GBA-22455»</li></ul></td></tr>
+    </tbody>
+  </table>
+  <p>Ключ QUIK составляется из строки Orders: TradeDate в виде ГГГГММДД, ClassCode и OrderNum. Строка TradeDate «27.10.2026», ClassCode «LIST_GBA», OrderNum 22455 даёт ключ «quik-20261027-LIST_GBA-22455».</p>
+  <p>400 — неверный формат ключа. 404 — строки нет в Orders или она другой фирмы. Строка в Orders появляется асинхронно, поэтому 404 сразу после 201 возможен.</p>
+
+  <h3 id="s5-5"><span class="n">5.5</span>POST /api/v1/orders/{id}/cancel</h3>
+  <p>Снятие заявки. Без тела. Таймаут ожидания ответа QUIK — 10 с; data — в формате п. 5.1. Снимаются только активные заявки, выставленные через шлюз.</p>
+  <p class="caption">Список поддерживаемых параметров:</p>
+  <table>
+    <thead><tr><th>Наименование</th><th>Тип</th><th>Комментарий</th></tr></thead>
+    <tbody>
+      <tr><td>id<sup class="req">*</sup></td><td>строка</td><td>Часть пути. id шлюза или ключ QUIK, см. п. 5.4</td></tr>
+    </tbody>
+  </table>
+  <p class="caption">Пример запроса:</p>
+<pre>curl -X POST http://&lt;адрес-шлюза&gt;/api/v1/orders/276d043c-6716-4ebd-a7b7-15904e760d40/cancel \
+  -H "Authorization: Bearer &lt;API-токен&gt;"</pre>
+  <p class="caption">Коды ответа:</p>
+  <table>
+    <thead><tr><th>Код HTTP</th><th>code</th><th>Комментарий</th></tr></thead>
+    <tbody>
+      <tr><td>200</td><td>OK</td><td>QUIK снял заявку, State — «Снята». Если заявка была снята ранее, в data возвращается её строка Orders</td></tr>
+      <tr><td>202</td><td>QUIK_ANSWER_PENDING</td><td>QUIK ещё не ответил. Итог проверяется через GET /api/v1/orders/{id}</td></tr>
+      <tr><td>404</td><td>NOT_FOUND</td><td>Строки нет в Orders или она принадлежит другой фирме</td></tr>
+      <tr><td>409</td><td>CANCEL_REJECTED</td><td>QUIK не снял заявку: она осталась активной или исполнилась. Причина — в message и error_code, заявка — в data</td></tr>
+      <tr><td>409</td><td>CONFLICT</td><td>Заявка не активна в QUIK или выставлена не через шлюз. data — null</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- ================= 6. СДЕЛКИ ================= -->
+<section class="chapter" id="s6">
+  <h2><span class="n">6.</span>Сделки</h2>
+
+  <h3 id="s6-1"><span class="n">6.1</span>GET /api/v1/trades</h3>
+  <p>Строки Trades по FirmId токена за все даты; одна строка — одна сторона сделки. Включает сделки по заявкам, поданным вне шлюза. Порядок — по убыванию TradeDate, затем TradeNum. Фильтры применяются до пагинации; неверный формат date — 400.</p>
+  <p class="caption">Список поддерживаемых параметров:</p>
+  <table>
+    <thead><tr><th>Наименование</th><th>Тип</th><th>Комментарий</th></tr></thead>
+    <tbody>
+      <tr><td>date</td><td>строка</td><td>Дата торгов (TradeDate), «ДД.ММ.ГГГГ». Если не указана, возвращаются все даты</td></tr>
+      <tr><td>board</td><td>строка</td><td>Код класса (ClassCode)</td></tr>
+      <tr><td>symbol</td><td>строка</td><td>Код инструмента (SecCode)</td></tr>
+      <tr><td>limit</td><td>число</td><td>От 1 до 1000. По умолчанию 200</td></tr>
+      <tr><td>page</td><td>число</td><td>Номер страницы, с 1. По умолчанию 1</td></tr>
+    </tbody>
+  </table>
+  <p class="caption">Список основных полей строки:</p>
+  <table>
+    <thead><tr><th>Наименование</th><th>Тип</th><th>Комментарий</th></tr></thead>
+    <tbody>
+      <tr><td>TradeNum</td><td>число</td><td>Номер сделки в QUIK</td></tr>
+      <tr><td>TradeDate</td><td>строка</td><td>Дата торгов</td></tr>
+      <tr><td>ClassCode, SecCode</td><td>строка</td><td>Код класса и код инструмента</td></tr>
+      <tr><td>OrderNum</td><td>число</td><td>Номер заявки в QUIK. Связывает сделку со строкой Orders</td></tr>
+      <tr><td>Operation</td><td>строка</td><td>«Купля» или «Продажа»</td></tr>
+      <tr><td>Price</td><td>число</td><td>Цена</td></tr>
+      <tr><td>Qty</td><td>число</td><td>Количество</td></tr>
+      <tr><td>FirmId</td><td>строка</td><td>Код фирмы токена</td></tr>
+      <tr><td>Account</td><td>строка</td><td>Торговый счёт</td></tr>
+      <tr><td>ClientCode</td><td>строка</td><td>Код клиента</td></tr>
+      <tr><td>CPFirmId</td><td>строка</td><td>Код фирмы контрагента</td></tr>
+    </tbody>
+  </table>
+  <p class="caption">Пример ответа:</p>
+<pre>{
+  "success": true,
+  "code": "OK",
+  "message": null,
+  "error_code": null,
+  "data": [
+    {
+      "TradeNum": 11094,
+      "TradeDate": "06.10.2026",
+      "ClassCode": "LIST_GBA",
+      "SecCode": "GBA02280810",
+      "OrderNum": 22450,
+      "Operation": "Купля",
+      "Price": 99.00000000,
+      "Qty": 201,
+      "FirmId": "BROKER",
+      "Account": "1-0001-001",
+      "ClientCode": "Иван",
+      "CPFirmId": "PARTNER"
+    }
+  ],
+  "page": 1,
+  "limit": 200,
+  "total": 1350
+}</pre>
+</section>
+
+<!-- ================= 7. ПОЗИЦИИ ================= -->
+<section class="chapter" id="s7">
+  <h2><span class="n">7.</span>Позиции</h2>
+
+  <p>Денежные позиции и позиции по бумагам передаются отдельными методами. Лимиты очищаются в QUIK в конце дня и загружаются заново утром. До загрузки data — пустой массив; это штатный ответ.</p>
+
+  <h3 id="s7-1"><span class="n">7.1</span>GET /api/v1/positions/moneylimits</h3>
+  <p>Денежные лимиты фирмы токена: строки MoneyLimits за последнюю LoadDate.</p>
+  <p class="caption">Список полей строки:</p>
+  <table>
+    <thead><tr><th>Наименование</th><th>Тип</th><th>Комментарий</th></tr></thead>
+    <tbody>
+      <tr><td>LoadDate</td><td>строка</td><td>Дата загрузки</td></tr>
+      <tr><td>FirmId, ClientCode</td><td>строка</td><td>Код фирмы и код клиента</td></tr>
+      <tr><td>Tag</td><td>строка</td><td>Код позиции</td></tr>
+      <tr><td>CurrCode</td><td>строка</td><td>Валюта</td></tr>
+      <tr><td>LimitKind</td><td>строка</td><td>Срок расчётов</td></tr>
+      <tr><td>OpenBal, CurrentBal</td><td>число</td><td>Входящий и текущий остаток</td></tr>
+      <tr><td>Locked</td><td>число</td><td>Заблокировано</td></tr>
+    </tbody>
+  </table>
+  <p class="caption">Пример ответа:</p>
+<pre>{
+  "success": true,
+  "code": "OK",
+  "message": null,
+  "error_code": null,
+  "data": [
+    {
+      "LoadDate": "02.11.2026",
+      "FirmId": "BROKER",
+      "ClientCode": "Иван",
+      "Tag": "EQTV",
+      "CurrCode": "KGS",
+      "LimitKind": "T0",
+      "CurrentBal": 1518400.00000000,
+      "OpenBal": 1518400.00000000,
+      "Locked": 0.00000000
+    }
+  ]
+}</pre>
+
+  <h3 id="s7-2"><span class="n">7.2</span>GET /api/v1/positions/depolimits</h3>
+  <p>Лимиты фирмы токена по бумагам: строки DepoLimits за последнюю LoadDate.</p>
+  <p class="caption">Список полей строки:</p>
+  <table>
+    <thead><tr><th>Наименование</th><th>Тип</th><th>Комментарий</th></tr></thead>
+    <tbody>
+      <tr><td>LoadDate</td><td>строка</td><td>Дата загрузки</td></tr>
+      <tr><td>FirmId, ClientCode</td><td>строка</td><td>Код фирмы и код клиента</td></tr>
+      <tr><td>SecCode</td><td>строка</td><td>Код инструмента</td></tr>
+      <tr><td>Trdacc</td><td>строка</td><td>Торговый счёт</td></tr>
+      <tr><td>LimitKind</td><td>строка</td><td>Срок расчётов</td></tr>
+      <tr><td>OpenBal, CurrentBal</td><td>число</td><td>Входящий и текущий остаток</td></tr>
+      <tr><td>AwgPositionPrice</td><td>число</td><td>Средняя цена приобретения</td></tr>
+    </tbody>
+  </table>
+  <p class="caption">Пример ответа:</p>
+<pre>{
+  "success": true,
+  "code": "OK",
+  "message": null,
+  "error_code": null,
+  "data": [
+    {
+      "LoadDate": "02.11.2026",
+      "FirmId": "BROKER",
+      "ClientCode": "Иван",
+      "SecCode": "GBA02280810",
+      "Trdacc": "1-0001-001",
+      "LimitKind": "T0",
+      "CurrentBal": 17.00000000,
+      "OpenBal": 17.00000000,
+      "AwgPositionPrice": 0.00000000
+    }
+  ]
+}</pre>
+</section>
+
+<!-- ================= 8. ОШИБКИ ================= -->
+<section class="chapter" id="s8">
+  <h2><span class="n">8.</span>Ошибки и лимиты</h2>
+
+  <h3 id="s8-1"><span class="n">8.1</span>Коды ответа</h3>
+  <p>Общие для всех методов. Коды выставления и снятия заявки — в п. <a href="#s5">5.1</a> и <a href="#s5">5.5</a>.</p>
+  <table>
+    <thead><tr><th>Код HTTP</th><th>code</th><th>Комментарий</th></tr></thead>
+    <tbody>
+      <tr><td>400</td><td>VALIDATION_ERROR</td><td>Неверный JSON, поле, параметр, счёт или инструмент</td></tr>
+      <tr><td>401</td><td>UNAUTHORIZED</td><td>Токен не передан или недействителен</td></tr>
+      <tr><td>403</td><td>FORBIDDEN</td><td>Нет права, IP-адрес не разрешён или указана чужая фирма</td></tr>
+      <tr><td>404</td><td>NOT_FOUND</td><td>Объект не найден или принадлежит другой фирме</td></tr>
+      <tr><td>405</td><td>METHOD_NOT_ALLOWED</td><td>Метод не поддерживается для этого пути</td></tr>
+      <tr><td>413</td><td>PAYLOAD_TOO_LARGE</td><td>Слишком большое тело запроса</td></tr>
+      <tr><td>422</td><td>UNPROCESSABLE</td><td>Запрос корректен, но не может быть выполнен</td></tr>
+      <tr><td>429</td><td class="wrap">RATE_LIMITED, RESOURCE_EXHAUSTED</td><td>Превышен лимит запросов, см. п. <a href="#s8-5">8.4</a></td></tr>
+      <tr><td>500</td><td>INTERNAL_ERROR</td><td>Внутренняя ошибка шлюза</td></tr>
+      <tr><td>502</td><td>BAD_GATEWAY</td><td>Ошибка связи шлюза с QUIK</td></tr>
+      <tr><td>503</td><td>SERVICE_UNAVAILABLE</td><td>QUIK или шлюз временно недоступны. Пауза — в заголовке Retry-After</td></tr>
+      <tr><td>504</td><td>TIMEOUT</td><td>Истекло время ожидания ответа</td></tr>
+    </tbody>
+  </table>
+
+  <h3 id="s8-3"><span class="n">8.2</span>GET /api/v1/errors</h3>
+  <p>Справочник значений code и известных error_code. Коды заявки и снятия пересекаются («1» для заявки — неподходящий период сессии, для снятия — неизвестная заявка), поэтому error_code интерпретируется вместе с code: «ORDER_REJECTED» или «CANCEL_REJECTED».</p>
+  <p class="caption">Список полей ответа:</p>
+  <table>
+    <thead><tr><th>Наименование</th><th>Тип</th><th>Комментарий</th></tr></thead>
+    <tbody>
+      <tr><td>codes</td><td>массив</td><td>Значения поля code</td></tr>
+      <tr><td><span class="arrow">→</span>code</td><td>строка</td><td>Код ответа</td></tr>
+      <tr><td><span class="arrow">→</span>http_status</td><td>число</td><td>Код HTTP</td></tr>
+      <tr><td><span class="arrow">→</span>description</td><td>строка</td><td>Описание</td></tr>
+      <tr><td>error_codes</td><td>массив</td><td>Известные коды QUIK</td></tr>
+      <tr><td><span class="arrow">→</span>error_code</td><td>число</td><td>Код QUIK</td></tr>
+      <tr><td><span class="arrow">→</span>operation</td><td>строка</td><td class="wrap">Возможные значения:
+        <ul class="vals"><li>«order» – отказ в заявке;</li><li>«cancel» – отказ в снятии</li></ul></td></tr>
+      <tr><td><span class="arrow">→</span>source</td><td>строка</td><td>Компонент QUIK, отказавший в операции</td></tr>
+      <tr><td><span class="arrow">→</span>description</td><td>строка</td><td>Описание</td></tr>
+    </tbody>
+  </table>
+  <p class="caption">Пример ответа:</p>
+<pre>{
+  "success": true,
+  "code": "OK",
+  "message": null,
+  "error_code": null,
+  "data": {
+    "codes": [
+      {
+        "code": "ORDER_REJECTED",
+        "http_status": 422,
+        "description": "QUIK отклонил заявку; причина — message и error_code"
+      }
+    ],
+    "error_codes": [
+      {
+        "error_code": 8637225,
+        "operation": "order",
+        "source": "Дилерская библиотека QUIK (проверка лимитов и прав)",
+        "description": "Работа по данному торговому счёту запрещена"
+      }
+    ]
+  }
+}</pre>
+  <p>Справочник не исчерпывающий: QUIK может вернуть код вне его; message заполнен всегда.</p>
+
+  <h3 id="s8-4"><span class="n">8.3</span>Торговые ограничения</h3>
+  <p>Pre-trade ограничения шлюза, HTTP 422. Заявка не создаётся и в QUIK не передаётся.</p>
+  <table>
+    <thead><tr><th>code</th><th>Комментарий</th></tr></thead>
+    <tbody>
+      <tr><td>TRADING_PAUSED</td><td>Приём новых заявок приостановлен оператором шлюза</td></tr>
+      <tr><td>MAX_ORDER_QUANTITY</td><td>Количество больше лимита на одну заявку</td></tr>
+      <tr><td>MAX_OPEN_ORDERS</td><td>Достигнут лимит одновременно активных заявок</td></tr>
+    </tbody>
+  </table>
+  <p>В message указывается, чьё ограничение сработало: «общее ограничение» — для всех брокеров, «ограничение брокера» — только для фирмы токена.</p>
+  <p class="caption">Пример ответа:</p>
+<pre>{
+  "success": false,
+  "code": "TRADING_PAUSED",
+  "message": "Приём новых заявок приостановлен (общее ограничение)",
+  "error_code": null,
+  "data": null
+}</pre>
+
+  <h3 id="s8-5"><span class="n">8.4</span>Лимиты запросов</h3>
+  <p>По умолчанию — 100 запросов и 20 заявок в секунду на брокера; биржа может установить брокеру другие значения. При превышении — 429, пауза до повтора в секундах — в заголовке Retry-After.</p>
+
+  <h3 id="s8-6"><span class="n">8.5</span>Повтор запросов</h3>
+  <p class="end">POST /api/v1/orders не идемпотентен: повтор создаёт новую заявку. После таймаута, сетевой ошибки, 502 или 503 заявка сначала ищется в GET /api/v1/orders и отправляется повторно, только если её там нет.</p>
+</section>
+
+</body>
+</html>

@@ -1,5 +1,5 @@
 const assert=require('node:assert/strict');
-const {test}=require('node:test');
+const {test}=globalThis;
 const {readFileSync}=require('node:fs');
 const {resolve}=require('node:path');
 const vm=require('node:vm');
@@ -42,11 +42,11 @@ test('read-only cannot fetch gRPC client identities',()=>{
  const h=harness('READ_ONLY');assert.match(h.render(),/недоступен/);assert.equal(h.queries[0].enabled,false);
 });
 test('native external client using admin JWT is shown while frontend bridges are hidden',()=>{
- const external={...broker,id:'external',broker_id:undefined,broker_name:undefined,email:'external-system@example.test',role:'SUPER_ADMIN'};
- const bridge={...broker,id:'bridge',broker_id:undefined,broker_name:undefined,email:'frontend@example.test',transport:'Browser → gRPC'};
+ const external={...broker,id:'external',broker_id:undefined,broker_name:undefined,username:'external-system',role:'SUPER_ADMIN'};
+ const bridge={...broker,id:'bridge',broker_id:undefined,broker_name:undefined,username:'bridge-login',transport:'Browser → gRPC'};
  const h=harness('ADMIN',[external,bridge]);h.render();const html=h.render();
- assert.match(html,/external-system@example.test/);
- assert.doesNotMatch(html,/frontend@example.test/);
+ assert.match(html,/external-system/);
+ assert.doesNotMatch(html,/bridge-login/);
  assert.doesNotMatch(html,/Только брокеры/);
  assert.match(html,/Подключений внешних систем: 1/);
 });

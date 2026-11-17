@@ -2,18 +2,15 @@
 
 ## Prerequisites
 
-Dashboard business metrics are calculated by PostgreSQL function `gateway_dashboard_compute()`
-(migration 000021) and stored in `gateway_dashboard_cache` (migration 000022).
-`gateway_dashboard_snapshot()` reads that persisted snapshot immediately. The gateway triggers
-`gateway_refresh_dashboard_snapshot()` in the background at most once per minute; a database
-advisory lock prevents duplicate refreshes across gateway instances. The migration warms the
-cache once. Successful data survives gateway restarts; failed refreshes do not replace it with
-zeroes. A lifecycle-bound gateway worker checks refreshes every 15 seconds even without
-dashboard visitors. Persisted data older than five minutes remains available with `stale: true`,
-and the dashboard displays a warning and `generated_at`. An empty cache returns a retryable
-503 response instead of a JSON parsing error.
-The authenticated API also shares a 5-second memory cache between viewers (up to one minute
-of stale memory data during refresh). Live monitoring renders independently of daily statistics.
+Logs and the audit trail are kept in files, not in the database (поручение пользователя
+06.11.2026): `LOG_DIR` (default `<FIX_SESSION_DIR>/logs`, on the FIX volume) holds one file per
+Bishkek date, `2026-11-06.log`, one JSON event per line. Files older than 7 days (today and
+the six days before) are deleted at start-up and every hour. Migration 000042 dropped
+`obs_events`, `audit_logs` and the SQL dashboard snapshot; alerts (`obs_notifications`) and
+export jobs stay in the database. `OBS_*_RETENTION_DAYS` now only govern alerts.
+Dashboard and broker statistics are counted from these files (broker "month" covers the
+7 days on disk). The authenticated API shares a 5-second memory cache between viewers.
+Live monitoring renders independently of daily statistics.
 
 Set `PROMETHEUS_URL` for gateway access to Prometheus (`http://prometheus:9090` in Compose,
 `http://localhost:9090` for a local process). Monitoring history uses the
@@ -41,7 +38,7 @@ Services:
 | Service | URL |
 |---------|-----|
 | Gateway API | http://localhost:8080 |
-| Swagger UI | http://localhost:8080/swagger |
+| Swagger UI | http://localhost:8080/broker-swagger |
 | Admin UI | http://localhost:5173 |
 | Prometheus | http://localhost:9090 |
 | FIX simulators | localhost:5001, :5002 |
@@ -49,7 +46,7 @@ Services:
 Default admin:
 
 ```text
-email: admin@localhost
+login: admin
 password: admin123
 ```
 
@@ -58,7 +55,7 @@ password: admin123
 | Variable | Description |
 |----------|-------------|
 | `DATABASE_URL` | PostgreSQL DSN (local default: `postgres://postgres:123@localhost:5432/fix_gateway?sslmode=disable`) |
-| `QUIK_EXPORT_DATABASE_URL` | Optional PostgreSQL QUIK export DSN. Gateway opens read-only sessions for `emitents`, `Orders`, `Securities` and `Quotes(text)`; no migrations run against this source |
+| `QUIK_EXPORT_DATABASE_URL` | Optional PostgreSQL QUIK export DSN. Gateway opens read-only sessions for `emitents`, `Orders`, `Params`, `Trdaccs`, `Firms`, `Securities` and `Quotes(text)`; no migrations run against this source |
 | `JWT_SECRET` | Admin JWT HMAC secret |
 | `API_TOKEN_PEPPER` | Pepper for API token hashing |
 | `APP_ENV` | `development` or `production`; production validates strong secrets, verified database TLS and HTTPS |
@@ -72,16 +69,17 @@ password: admin123
 | `DOCS_PUBLIC` | Serve Swagger/OpenAPI. Defaults to off in production |
 | `DEFAULT_RATE_LIMIT_RPS` / `DEFAULT_ORDER_RATE_LIMIT` | Per-token request and order rate limits |
 | `AUTH_FAIL_MAX_PER_MINUTE` | Brute-force threshold for failed Bearer auth per IP |
-| `ADMIN_EMAIL` / `ADMIN_PASSWORD` | Bootstrap admin |
+| `ADMIN_USERNAME` / `ADMIN_PASSWORD` | Bootstrap admin (login; an older `ADMIN_EMAIL` is used as the part before `@`) |
 | `LB_STRATEGY` | `least_connections` (default), `round_robin`, `weighted_round_robin` |
 | `CORS_ORIGINS` | Comma-separated origins |
-| `QUIK_API_BASE_URL` | Default origin of the internal QUIK Module API (`http://192.168.0.89:5000`). Operators can override it from the admin UI |
+| `QUIK_EXPORT_DATABASE_URL` | Read-only QUIK database: `Orders`, `Params`, `Securities`, `Classes`, `Trdaccs`, `Firms`, `Trades`, `MoneyLimits` and `DepoLimits`. Without it no order can be accepted. The QUIK Module API is not used |
+| `FINISHED_ORDER_GRACE` | How long an order QUIK closed stays in `orders`; default and minimum `2m` |
 
 Adapter secrets (username/password) are referenced by env var **names** stored in DB (`username_env`, `password_env`), never returned to the frontend.
 
 For the local Compose stack, set `QUIK_EXPORT_DATABASE_URL` in the root `.env`
 (or `deploy/.env` when starting from `deploy/`). The QUIK export database on
-`192.168.0.89:5432` is `quik_export2`; the maintenance database `postgres` has no
+`172.23.10.84:5432` is `quik_export` (192.168.0.89 is no longer used); the maintenance database `postgres` has no
 QUIK tables. Apply a connection change with
 `docker compose up -d --no-deps gateway`, then check the startup message
 `quik export database connected` and authenticated
@@ -104,9 +102,9 @@ VPN-only broker access, strong secrets, and production certificates. Setting
 
 ### Сервер 172.23.10.96 и production QUIK
 
-Для существующего стенда на `172.23.10.96` используется пара `deploy/docker-compose.yml` + `deploy/docker-compose.override.yml`. Override задаёт `ADAPTER_HOST_OVERRIDE=172.23.10.84` для всех FIX-сессий, включая резервную, и `QUIK_API_BASE_URL=http://172.23.10.85:5000` для истории. Админка остаётся на `5173`, API — на `8081`. Локальный тестовый стенд без этого override использует `192.168.0.89`.
+Для существующего стенда на `172.23.10.96` используется пара `deploy/docker-compose.yml` + `deploy/docker-compose.override.yml`. Override задаёт `ADAPTER_HOST_OVERRIDE=172.23.10.84` для всех FIX-сессий, включая резервную. Админка остаётся на `5173`, API — на `8081`. БД QUIK для всех стендов — `172.23.10.84`; `192.168.0.89` не используется.
 
-В существующей БД `adapters.host=172.23.10.84` для QUIK-адаптеров, а `gateway_settings.quik_api_base_url=http://172.23.10.85:5000`: сохранённый origin API имеет приоритет над env. Источник текущих заявок — PostgreSQL `172.23.10.84:5432/quik_export`, таблица `public."Orders"`. Его DSN задаётся через `QUIK_EXPORT_DATABASE_URL` в приватном `deploy/.env` сервера; учётные данные не хранить в репозитории. Подключение работает только на чтение. Основная БД самого gateway остаётся отдельной.
+В существующей БД `adapters.host=172.23.10.84` для QUIK-адаптеров. Источник текущих заявок, текущих торгов и сделок — PostgreSQL `172.23.10.84:5432/quik_export`, таблицы `public."Orders"`, `public."Params"`, `public."Trdaccs"`, `public."Firms"` и `public."Trades"`. QUIK Module API (`172.23.10.85:5000`) не используется; миграция 37 удаляет `gateway_settings.quik_api_base_url`. Его DSN задаётся через `QUIK_EXPORT_DATABASE_URL` в приватном `deploy/.env` сервера; учётные данные не хранить в репозитории. Подключение работает только на чтение. Основная БД самого gateway остаётся отдельной.
 
 ```bash
 docker compose -p deploy -f deploy/docker-compose.yml -f deploy/docker-compose.override.yml up -d --build
